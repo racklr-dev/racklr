@@ -47,7 +47,7 @@
    "is" "is not" "in" "not in" "and" "or"
    ;; Python structural calls and comprehensions
    "not" "tuple" "set" "list" "assert" "raise" "del" "global" "nonlocal"
-   "list-comp" "dict-comp" "set-comp" "gen-comp" "kwarg"
+   "list-comp" "dict-comp" "set-comp" "gen-comp" "gen-exp" "kwarg"
    ;; Clojure special forms / data constructors
    "quote" "syntax-quote" "unquote" "unquote-splicing" "deref" "var"
    "vector" "hash-set" "fn*" "with-meta" "namespace" "host-expr"))

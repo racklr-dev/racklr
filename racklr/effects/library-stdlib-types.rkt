@@ -94,6 +94,14 @@
    "WSGIServer" (hash "__init__" 'pure "close_request" 'io
                       "process_request_thread" 'pure "get_request" 'io
                       "handle_error" 'io "serve_forever" 'process)
+   ;; builtin `object` base: every class without another base inherits these
+   ;; protocol dunders, so `super().__init__` on `object` is pure.
+   "object" (hash "__init__" 'pure "__new__" 'pure "__str__" 'pure "__repr__" 'pure
+                   "__eq__" 'pure "__hash__" 'pure "__ne__" 'pure "__lt__" 'pure
+                   "__le__" 'pure "__gt__" 'pure "__ge__" 'pure "__getattribute__" 'pure
+                   "__setattr__" 'pure "__delattr__" 'pure "__sizeof__" 'pure
+                   "__reduce__" 'pure "__reduce_ex__" 'pure "__subclasshook__" 'pure
+                   "__init_subclass__" 'pure)
    ;; exception protocol (constructing/setting an exception is pure)
    "BaseException" (hash "__init__" 'pure "__str__" 'pure "__repr__" 'pure)
    "Exception" (hash "__init__" 'pure "__str__" 'pure "__repr__" 'pure)

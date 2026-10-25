@@ -800,6 +800,42 @@
   (define rows (infer-effects p))
   (check-equal? (hash-ref rows 'Derived.run) (empty-row)))
 
+(define (test-super-init-object-base-pure)
+  ;; `class Foo(object): super().__init__()` resolves to object.__init__ via
+  ;; the stdlib type table (object protocol dunders are pure), not unknown.
+  (define p (prog (py-class/super "Foo" (v "object")
+                                  (list (py-method "__init__"
+                                                   (uir-call (uir-get (uir-call (v "super") '())
+                                                                      (uir-string "__init__"))
+                                                             '()))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'Foo.__init__)) (empty-row)))
+
+(define (test-super-init-baseless-pure)
+  ;; `class Foo:` (implicit object base): super().__init__() is pure — the
+  ;; empty parent chain falls back to the object protocol, not unknown.
+  (define p (prog (py-class/super "Foo" (uir-null)
+                                  (list (py-method "__init__"
+                                                   (uir-call (uir-get (uir-call (v "super") '())
+                                                                      (uir-string "__init__"))
+                                                             '()))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'Foo.__init__)) (empty-row)))
+
+(define (test-nested-class-does-not-leak)
+  ;; A nested class inside a function is its own call-graph scope: the nested
+  ;; method's effect stays on the method and must not leak into the enclosing
+  ;; function's row (walk-body must skip uir-class/uir-method boundaries).
+  (define p (prog
+             (fn "outer"
+                  (prog (py-class "Inner"
+                                  (list (py-method "m"
+                                                   (uir-call (dot (v "llm") "query") '()))))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'outer)) (empty-row))
+  (check-equal? (row-names (hash-ref rows (cons "app.rkt" 'Inner.m))) '(llm)
+                "nested method keeps its own effect"))
+
 (define (test-super-call-whole-program)
   ;; Base.__init__ (db) lives in another file; Derived.__init__ calls
   ;; super().__init__(). Per-file inference cannot see Base, so it stays
@@ -1924,6 +1960,9 @@
   (test-dotted-super-name-resolution)
   (test-super-call-resolution)
   (test-super-call-skips-self-override)
+  (test-super-init-object-base-pure)
+  (test-super-init-baseless-pure)
+  (test-nested-class-does-not-leak)
   (test-super-call-whole-program)
   (test-whole-program-cross-file-inheritance)
   (test-whole-program-collision-stays-distinct)

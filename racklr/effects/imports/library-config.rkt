@@ -23,11 +23,45 @@
                           (effect-rule "django.core.management.base" 'io)
                           (effect-rule "django.core.files" 'io)
                           (effect-rule "django.http" 'io)
-                          (effect-rule "django.db" 'db)))
+                          (effect-rule "django.db" 'db)
+                          ;; GIS: GEOS geometry is in-memory C math (pure); GDAL/OGR
+                          ;; read and write raster/vector files (io); measure classes
+                          ;; are pure arithmetic.
+                          (effect-rule "django.contrib.gis.geos" 'pure)
+                          (effect-rule "django.contrib.gis.gdal" 'io)
+                          (effect-rule "django.contrib.gis.measure" 'pure)
+                          ;; Utilities: formatting/translation/signing are in-memory
+                          ;; (fail-closed io for serializers, which write streams).
+                          (effect-rule "django.utils.formats" 'pure)
+                          (effect-rule "django.utils.translation" 'pure)
+                          ;; timezone.now/localtime read the clock; make_aware is pure
+                          ;; but fail-closed 'time is safe (spurious, never hidden).
+                          (effect-rule "django.utils.timezone" 'time)
+                          (effect-rule "django.template.loader" 'io)
+                          (effect-rule "django.template.loaders" 'io)
+                          (effect-rule "django.template.backends" 'io)
+                          ;; Template parsing/rendering is in-memory (pure); the
+                          ;; file-reading loader + engine backends are io above.
+                          (effect-rule "django.template" 'pure)
+                          (effect-rule "django.contrib.admindocs.utils" 'pure)
+                          (effect-rule "django.core.signals" 'pure)
+                          (effect-rule "django.core.signing" 'pure)
+                          (effect-rule "django.core.serializers" 'io)
+                          ;; auth.authenticate/login hit the DB; fail-closed db.
+                          (effect-rule "django.contrib.auth" 'db)))
    (effect-library "sqlparse"
                     (list (effect-rule "sqlparse.cli" 'io)
                           (effect-rule "sqlparse" 'pure)))
-   (effect-library "tzdata" (list (effect-rule "tzdata" 'pure)))))
+   (effect-library "tzdata" (list (effect-rule "tzdata" 'pure)))
+   ;; Stdlib top modules used bare in the corpus (fail-closed where mixed).
+   (effect-library "inspect" (list (effect-rule "inspect" 'pure)))
+   (effect-library "random" (list (effect-rule "random" 'pure)))
+   (effect-library "uuid" (list (effect-rule "uuid" 'pure)))
+   (effect-library "logging" (list (effect-rule "logging" 'io)))
+   (effect-library "zoneinfo" (list (effect-rule "zoneinfo" 'pure)))
+   (effect-library "mimetypes" (list (effect-rule "mimetypes" 'pure)))
+   (effect-library "getpass" (list (effect-rule "getpass" 'io)))
+   (effect-library "signal" (list (effect-rule "signal" 'process)))))
 
 ;; ── primitive-operation vocabulary (per domain) ─────────────────────
 ;; The db/io verb tables and the builtin-receiver seed environment. This is

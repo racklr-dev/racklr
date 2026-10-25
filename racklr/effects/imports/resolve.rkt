@@ -76,6 +76,8 @@
       (hash-set! e cname (handle 'class path cname)))
     (for ([fname (in-hash-keys (module-info-functions mi))])
       (hash-set! e fname (handle 'fn path fname)))
+    (for ([(vname cname) (in-hash (module-info-values mi))])
+      (hash-set! e vname (handle 'class path cname)))
     (hash-set! exports path e))
 
   (let loop ([changed #t])

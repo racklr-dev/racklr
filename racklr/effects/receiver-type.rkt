@@ -204,7 +204,12 @@
 ;; even when that attribute is declared at class level rather than in the
 ;; method body.
 (define (infer-receiver-types body class-defs [base-attrs (hash)]
-                              [import-env #f] [comp #f] [params '()] [owner #f])
+                              [import-env #f] [comp #f] [params '()] [owner #f]
+                              #:return-types [return-types #f]
+                              #:methods [methods #f]
+                              #:fn-defs [fn-defs #f]
+                              #:known [known #f]
+                              #:comp-supers [comp-supers #f])
   (define locals (make-hash))
   (define self-attrs (hash-copy base-attrs))
   ;; Seed parameter types from type annotations (`def f(x: QuerySet)`): the
@@ -219,8 +224,11 @@
                                      default-effect-tokens import-env comp))
       (when (and pname pcls) (hash-set! locals pname pcls))))
   (define (value-class value)
-    (value-class-of value (receiver-types locals self-attrs)
-                    class-defs default-effect-tokens import-env comp owner))
+    (or (and (uir-call? value) return-types methods fn-defs known comp-supers
+             (corpus-call-return-type (uir-call-callee value) comp class-defs owner
+                                      methods fn-defs known comp-supers return-types))
+        (value-class-of value (receiver-types locals self-attrs)
+                        class-defs default-effect-tokens import-env comp owner)))
   (define (process-set! n)
     (define cls (value-class (uir-set!-value n)))
     (when cls

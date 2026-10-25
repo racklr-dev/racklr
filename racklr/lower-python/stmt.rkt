@@ -329,21 +329,37 @@
   (define testlist (if (>= (length kids) 2) (second kids) #f))
   (define block (if (>= (length kids) 3) (third kids) #f))
   (define else-block (if (>= (length kids) 4) (fourth kids) #f))
-  ;; Extract loop variable name from exprlist
+  ;; Extract loop variable names from exprlist (destructuring binds several).
   (define var-toks (if exprlist (cst-tokens-deep exprlist tk-type tk-value) '()))
-  (define var-name (for/or ([t var-toks]
-                            #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
-                    (second t)))
+  (define var-names (for/list ([t var-toks]
+                               #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
+                      (second t)))
   ;; Lower iterable expression
   (define iterable (if testlist (lower-expr testlist tk-type tk-value) (uir-symbol "?iter")))
   ;; Lower body
   (define body (if block (lower-block-or-stmt block tk-type tk-value) (uir-null)))
   ;; Lower else body
   (define else-body (if else-block (lower-block-or-stmt else-block tk-type tk-value) (uir-null)))
-  (uir-for-each (uir-symbol (or var-name "?var"))
-                iterable
-                body
-                else-body))
+  (if (<= (length var-names) 1)
+      (uir-for-each (uir-symbol (if (pair? var-names) (car var-names) "?var"))
+                    iterable
+                    body
+                    else-body)
+      ;; Destructuring loop: `for a, b in iter` unpacks each element. Lower to
+      ;; `for <tmp> in iter: a = <tmp>[0]; b = <tmp>[1]; body` so every bound
+      ;; name survives in the UIR (effect inference and the census can then
+      ;; type `a`/`b` as element projections instead of treating them as
+      ;; unbound).
+      (let* ([tmp (uir-symbol (symbol->string (gensym 'unpacked)))]
+             [assigns
+              (for/list ([nm (in-list var-names)] [i (in-naturals)])
+                (uir-set! (uir-var (uir-symbol nm))
+                          (uir-get (uir-var tmp) (uir-number (number->string i)))))]
+             [body-stmts
+              (cond [(uir-null? body) '()]
+                    [(uir-block? body) (uir-block-stmts body)]
+                    [else (list body)])])
+        (uir-for-each tmp iterable (uir-block (append assigns body-stmts)) else-body))))
 
 ;; ── Yield ──────────────────────────────────────────────────────────
 

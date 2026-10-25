@@ -17,7 +17,7 @@
          racklr/effects/effect-roots
          racklr/effects/library-tokens)
 
-(provide classify-call-all method-cap)
+(provide classify-call-all method-cap receiver-shape)
 
 ;; Resolve an imported-name receiver through the import graph to an effect
 ;; capability (or 'pure). A `name.m(...)` call whose `name` was bound by an
@@ -377,6 +377,42 @@
                        [(and rkey (hash-has-key? known rkey)) (cons 'edge rkey)]
                        [else nn])]
                     [else nn])])])])])])])])]))
+
+;; Syntactic shape of a call's receiver, used by diagnostics to bucket `unknown`
+;; sites by the lever that resolves them. `param-names` (when given) is the
+;; enclosing function's parameter-name list, so a bare-variable receiver is
+;; reported as 'param (needs parameter dataflow) vs 'local (already tracked by
+;; local constructor assignments). Returns a symbol:
+;;   'bare-call    — foo(...)
+;;   'self-method  — self.m() / cls.m()
+;;   'self-attr    — self.attr.m() / cls.attr.m()
+;;   'call-result  — f(...).m()
+;;   'chained      — a.b.m() (non-self root)
+;;   'param        — x.m() where x is a parameter
+;;   'local        — x.m() where x is a local (not a parameter)
+;;   'symbol       — Name.m() (bare symbol receiver)
+;;   'other
+(define (receiver-shape callee [param-names #f])
+  (cond
+    [(not (uir-get? callee)) 'bare-call]
+    [else
+     (define base (uir-get-base callee))
+     (cond
+       [(and (uir-var? base)
+             (memq (string->symbol (uir-symbol-name (uir-var-name base))) '(self cls)))
+        'self-method]
+       [(uir-call? base) 'call-result]
+       [(uir-get? base)
+        (define root (dotted-root base))
+        (if (and root (memq root '(self cls))) 'self-attr 'chained)]
+       [(uir-var? base)
+        (define vname (string->symbol (uir-symbol-name (uir-var-name base))))
+        (cond
+          [(and param-names (memq vname param-names)) 'param]
+          [param-names 'local]
+          [else 'var])]
+       [(uir-symbol? base) 'symbol]
+       [else 'other])]))
 
 ;; The derived capability for a call-graph method key `(component . Class.method)`,
 ;; resolved COMPONENT-AWARE: the component's own module path supplies the domain,

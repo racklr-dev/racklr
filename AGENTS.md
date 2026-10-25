@@ -45,7 +45,7 @@ code.
   `effervesce/`).
 - Shared baseline:
   `racket effervesce/tools/type-graph.rkt django/django/core` must print
-  `112 parsed, 0 failed, db 52 files, network 2, unknown 83, inherits 126`.
+  `112 parsed, 0 failed, db 51 files, network 2, unknown 80, inherits 126`.
   Drift from these numbers is a regression until proven otherwise.
 
 ## Working rules

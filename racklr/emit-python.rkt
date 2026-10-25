@@ -486,7 +486,12 @@
   (define iterable (if (>= (length args) 3) (caddr args) (uir-null)))
   (define filter (if (>= (length args) 4) (cadddr args) (uir-null)))
   (define result-str (emit-expr result))
-  (define var-str (if (uir-symbol? loop-var) (uir-symbol-name loop-var) (emit-expr loop-var)))
+  (define var-str
+    (cond
+      [(uir-symbol? loop-var) (uir-symbol-name loop-var)]
+      [(uir-list? loop-var)
+       (string-join (map (λ (v) (emit-expr v)) (uir-list-items loop-var)) ", ")]
+      [else (emit-expr loop-var)]))
   (define iter-str (emit-expr iterable))
   (define body-str
     (string-append result-str " for " var-str " in " iter-str
@@ -496,6 +501,7 @@
         [(equal? callee-name "dict-comp")
          ;; For dict comp, result-expr should be a key:value pair representation
          (string-append "{" body-str "}")]
+        [(equal? callee-name "gen-exp") (string-append "(" body-str ")")]
         [else (string-append "[" body-str "]")]))
 
 ;; ── Decorated emitter ──────────────────────────────────────────────
@@ -582,7 +588,7 @@
         [(uir-call? uir)
           (let ([callee (uir-call-callee uir)])
             (if (and (uir-symbol? callee)
-                     (regexp-match #rx"-comp$" (uir-symbol-name callee)))
+                     (regexp-match #rx"(?:-comp|-exp)$" (uir-symbol-name callee)))
                 (emit-comp uir)
                 (let ([args (uir-call-args uir)]
                       [name (and (uir-symbol? callee) (uir-symbol-name callee))])
