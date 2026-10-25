@@ -16,6 +16,12 @@
   path->module-path
   import-env? import-env import-env-comp-modpath import-env-exports import-env-caps)
 
+;; PEP 8 class-name convention for a binding name from an unscanned module:
+;; `MigrationLoader` is a class, `connections` / `get_migration` are not.
+(define (capitalized-name? s)
+  (and (positive? (string-length s))
+       (char-upper-case? (string-ref s 0))))
+
 ;; Filesystem path → dotted module path, relative to a package root. `root-name`
 ;; is the top-level package name (e.g. "django"); `root-dir` is the package
 ;; directory on disk; `p` is the file. A package's `__init__.py` maps to its
@@ -85,18 +91,51 @@
             [(eq? (import-record-form rec) 'from)
              (for ([b (in-list (import-record-bindings rec))])
                (define local (car b))
-               (define member (last-component (cdr b)))
-               (define h (and te (hash-ref te member #f)))
-               (when (and h (not (hash-has-key? e local)))
-                 (hash-set! e local h)
-                 (set! next-changed #t)))]
+               (define full-target (cdr b))
+               ;; `from pkg import submod`: the target `pkg.submod` is itself a
+               ;; module, so bind the local name to a module handle (the export
+               ;; table has no entry for it unless `pkg/__init__.py` re-exports
+               ;; it). Otherwise fall back to the member-export lookup
+               ;; (`from x import C`, including aliased class names). Star
+               ;; imports bind no name.
+               (unless (string=? local "*")
+                 (define h
+                   (or (and (hash-has-key? mods full-target)
+                            (handle 'module full-target #f))
+                       (let ([member (last-component full-target)])
+                         (and te (hash-ref te member #f)))
+                       ;; The target module is outside the scanned corpus, so
+                       ;; there is no export table for it. Synthesize a handle
+                       ;; for the binding so it stays resolvable: a class handle
+                       ;; for a Capitalized binding (PEP 8 class convention),
+                       ;; which keeps `from django.db.migrations.loader import
+                       ;; MigrationLoader` reachable through imported-class-ref
+                       ;; / imported-class-cap; and an fn handle for a lowercase
+                       ;; binding, which lets a bare call to an external function
+                       ;; (`from django.db.migrations.utils import
+                       ;; get_migration_name_timestamp`) resolve to the module's
+                       ;; effect domain rather than `unknown`. The fn handle is
+                       ;; never a receiver TYPE (imported-class-ref requires kind
+                       ;; 'class), so it only widens effect classification.
+                       (let ([member (last-component full-target)])
+                         (and (not te)
+                              (handle (if (capitalized-name? member) 'class 'fn)
+                                      src member)))))
+                 (when (and h (not (hash-has-key? e local)))
+                   (hash-set! e local h)
+                   (set! next-changed #t))))]
             [else
              ;; 'import: binding target is already a module path
              (for ([b (in-list (import-record-bindings rec))])
                (define local (car b))
                (define modpath (cdr b))
-               (when (and (hash-has-key? mods modpath) (not (hash-has-key? e local)))
-                 (hash-set! e local (handle 'module modpath #f))
+               ;; A scanned module resolves to its own handle; an external one
+               ;; (`import httpx`) still binds a module handle on its dotted
+               ;; path, so imported-module-result-type and imported-effect can
+               ;; consult the library config / result-type tables.
+               (define h (handle 'module modpath #f))
+               (when (not (hash-has-key? e local))
+                 (hash-set! e local h)
                  (set! next-changed #t)))])))
       (loop next-changed)))
   exports)

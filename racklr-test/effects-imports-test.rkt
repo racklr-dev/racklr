@@ -156,6 +156,32 @@
   (define h (hash-ref (hash-ref ex "a") "Thing"))
   (check-equal? (handle-path h) "c"))
 
+(define (test-resolve-exports-external-class)
+  ;; `from django.db.migrations.loader import MigrationLoader` where that
+  ;; module is OUTSIDE the scanned corpus: synthesize a class handle from the
+  ;; PEP 8 Capitalized binding so imported-class-ref / imported-class-cap can
+  ;; still resolve it through the library config (django.db → db). A lowercase
+  ;; external binding (`connections`) synthesizes an fn handle so a bare call
+  ;; resolves to the module's effect domain — never a receiver TYPE, since
+  ;; imported-class-ref requires kind 'class.
+  (define mods
+    (hash "app"
+          (harvest-module "app" (prog)
+                          (list (import-record 'from "django.db.migrations.loader"
+                                               (list (cons "MigrationLoader" "django.db.migrations.loader.MigrationLoader")))
+                                (import-record 'from "django.db"
+                                               (list (cons "connections" "django.db.connections")))))))
+  (define ex (resolve-exports mods (set "app")))
+  (define e (hash-ref ex "app"))
+  (define h (hash-ref e "MigrationLoader"))
+  (check-equal? (handle-kind h) 'class)
+  (check-equal? (handle-path h) "django.db.migrations.loader")
+  (check-equal? (handle-name h) "MigrationLoader")
+  (define c (hash-ref e "connections"))
+  (check-equal? (handle-kind c) 'fn)
+  (check-equal? (handle-path c) "django.db")
+  (check-equal? (handle-name c) "connections"))
+
 (define (test-path-to-module-path)
   (define root (string->path "/r/django"))
   (check-equal? (path->module-path "django" root (string->path "/r/django/__init__.py"))
@@ -277,6 +303,7 @@
   (test-resolve-relative-parent)
   (test-resolve-exports-import-class)
   (test-resolve-exports-transitive)
+  (test-resolve-exports-external-class)
   (test-path-to-module-path)
   (test-module-effect-tag)
   (test-effect-tag-config)

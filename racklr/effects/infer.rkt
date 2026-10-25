@@ -40,6 +40,8 @@
   annotate-effects
   collect-functions
   collect-methods
+  collect-function-params
+  collect-method-params
   classify-call
   direct-effect-of-callee
   effect-op-of-callee

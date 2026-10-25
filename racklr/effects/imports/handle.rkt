@@ -52,6 +52,19 @@
 (define (harvest-module path uir imports)
   (define classes (make-hash))
   (define functions (make-hash))
+  ;; A class method-list node → its uir-method, unwrapping (uir-decorated decos
+  ;; inner) and (call "async-fn"/"gen-fn" (list method)) wrappers that the Python
+  ;; lowerer now keeps on decorated / async def methods.
+  (define (unwrap-method m)
+    (cond
+      [(uir-method? m) m]
+      [(uir-decorated? m) (unwrap-method (uir-decorated-inner m))]
+      [(and (uir-call? m)
+            (uir-symbol? (uir-call-callee m))
+            (member (uir-symbol-name (uir-call-callee m)) '("async-fn" "gen-fn"))
+            (= (length (uir-call-args m)) 1))
+       (unwrap-method (first (uir-call-args m)))]
+      [else #f]))
   (define (walk-stmt s)
     (cond
       [(uir-class? s)
@@ -59,9 +72,10 @@
                           (uir-symbol-name (uir-class-name s))))
        (define methods (make-hash))
        (for ([m (in-list (uir-class-methods s))])
-         (define mn (and (uir-symbol? (uir-method-name m))
-                         (uir-symbol-name (uir-method-name m))))
-         (when mn (hash-set! methods mn m)))
+         (define mm (unwrap-method m))
+         (define mn (and mm (uir-symbol? (uir-method-name mm))
+                         (uir-symbol-name (uir-method-name mm))))
+         (when mn (hash-set! methods mn mm)))
         (when cname
           (hash-set! classes cname
                      (class-info cname (class-super-names (uir-class-super s)) methods)))]

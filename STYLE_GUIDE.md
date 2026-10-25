@@ -54,7 +54,7 @@ The gate. Run it from the right working directory.
 - `raco setup racklr` then `raco setup effervesce`, both exit 0.
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`.
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt`. These must run from `effervesce/`; `check/verify-test.rkt` opens its fixture relative to the current directory.
-- The shared baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 49 files, network 2, unknown 95, inherits 126`. A drift from these numbers is a regression until proven otherwise.
+- The shared baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 52 files, network 2, unknown 83, inherits 126`. A drift from these numbers is a regression until proven otherwise.
 - Two Python3 front-end suites are known to fail at the parse stage (`gen-python3-test.rkt`, `lower-python-test.rkt`) because of the `single_input` compound-statement limitation. Documented, not to be "fixed" as part of unrelated work.
 - No false greens. Never suppress a failing check to manufacture green.
 - No silent skips. A test that skips most of its assertions is a bug in the test, not a pass.
@@ -112,7 +112,7 @@ Test gate:
 - `raco setup effervesce`
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt` (must run from `effervesce/`)
-- Baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 49 files, network 2, unknown 95, inherits 126`.
+- Baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 52 files, network 2, unknown 83, inherits 126`.
 - `raco test` is unreliable. Zero exit is not success. Grep output for FAILURE and ERROR and read the real exit code.
 
 Coding style:
