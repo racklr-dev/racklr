@@ -341,6 +341,12 @@
                                 (imported-class-ref nm comp import-env)))))
      (cond
        [ctor (cons 'pure #f)]
+       ;; `cls(...)` in a classmethod constructs the enclosing class — the same
+       ;; pure construction as `KnownClass(...)`, but `cls` names the class
+       ;; dynamically (its value is the first parameter), so the constructor
+       ;; heuristic above cannot see it. `self(...)` is deliberately not
+       ;; included: calling an instance dispatches to its __call__.
+       [(and owner (memq nm '(cls))) (cons 'pure #f)]
        ;; A tracked class-valued callee (`loader_class()` / `qs_class()` where
        ;; the local was bound to a class): construction is pure, mirroring
        ;; `KnownClass(...)`.
