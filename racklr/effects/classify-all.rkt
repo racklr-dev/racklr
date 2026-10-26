@@ -32,13 +32,15 @@
               [exports (import-env-exports import-env)]
               [caps (import-env-caps import-env)]
               [mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee)))]
-              [base (and (uir-get? callee) (uir-get-base callee))]
-              [base-name (and base (uir-var? base)
-                              (string->symbol (uir-symbol-name (uir-var-name base))))])
-         (and modpath mname base-name
-              (not (memq base-name '(self cls)))
+              ;; Root of the chain (`connection` in
+              ;; `connection.introspection.table_names`), not just the immediate
+              ;; base: a deeper imported-singleton chain classifies by the same
+              ;; module-domain fallback as `connection.table_names`.
+              [root (and (member-access-callee? callee) (dotted-root callee))])
+         (and modpath mname root
+              (not (memq root '(self cls)))
               (let* ([e (hash-ref exports modpath #f)]
-                     [h (and e (hash-ref e (symbol->string base-name) #f))])
+                     [h (and e (hash-ref e (symbol->string root) #f))])
                 (and (handle? h)
                      (case (handle-kind h)
                        [(class)
