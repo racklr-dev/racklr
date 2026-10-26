@@ -115,6 +115,23 @@
                                          mod #f)))])
          (and domain (effect-cap domain '())))))
 
+;; Effect domain of a module-PATH marker — a dotted symbol like `django.db`
+;; tracked for a local assigned from a subscript into an imported singleton
+;; (`connection = connections[database]`). The marker is not a class name (a
+;; class symbol never carries a dot) and not a module-receiver token
+;; (`pylibmc.Client`, handled earlier by module-receiver-effect): its domain is
+;; the module's effect tag, the same coarse fallback as an imported-singleton
+;; method call. Returns an effect-cap, 'pure, or #f.
+(define (module-path-marker-effect rcls mname import-env)
+  (and rcls mname import-env
+       (let ([s (symbol->string rcls)])
+         (and (string-contains? s ".")
+              (let ([dom (handle-effect-domain s "" (symbol->string mname))])
+                (cond
+                  [(eq? dom 'pure) 'pure]
+                  [dom (effect-cap dom '())]
+                  [else #f]))))))
+
 (define (receiver-effect comp class-name mname class-defs import-env)
   (and import-env
        (or (let ([c (resolve-class-component class-name comp class-defs)])
@@ -224,7 +241,14 @@
        [else
         (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
                                         owner return-types methods fn-defs known import-env))
-        (and c (class-attr-lookup comp c attr class-defs class-attrs comp-supers))])]
+        (and c
+             (or (class-attr-lookup comp c attr class-defs class-attrs comp-supers)
+                 ;; Bottom out at a module marker (`django.db` from
+                 ;; `connection = connections[database]`, or `pylibmc.Client`):
+                 ;; it has no corpus attribute graph to walk, but the marker
+                 ;; still carries its module's domain to the caller. A class
+                 ;; symbol never contains a dot, so the dotted test disambiguates.
+                 (and (string-contains? (symbol->string c) ".") c)))])]
     [(uir-call? base)
      ;; A `.attr` chain rooted at a call result (`Path(...).is_absolute`,
      ;; `md5(...).hexdigest`, `open(...).close`): the result type is the class
@@ -359,6 +383,7 @@
        [else
         (define re (and rcls mname
                         (or (module-receiver-effect rcls)
+                            (module-path-marker-effect rcls mname import-env)
                             (receiver-effect comp rcls mname class-defs import-env))))
         (cond
           [(eq? re 'pure) (cons 'pure #f)]

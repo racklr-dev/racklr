@@ -153,6 +153,21 @@
                               (equal? (symbol->string rtn) (handle-name h))))
                      rtn))))))
 
+;; Module path of an imported module/fn singleton binding (`connections` from
+;; `from django.db import connections`): the export resolves to a module or fn
+;; handle whose path is the source module. A subscript into that singleton
+;; (`connections[database]`) yields an element of the same module's domain, so
+;; `x = connections[alias]` tracks `x` as the module-path marker
+;; (`django.db`) and a later `x.ops.sql_flush` chain classifies by that domain.
+(define (imported-singleton-path name comp import-env)
+  (and import-env name
+       (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+              [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+              [h (and e (hash-ref e (symbol->string name) #f))])
+         (and (handle? h)
+              (memq (handle-kind h) '(module fn))
+              (handle-path h)))))
+
 ;; Result TYPE of a call expression: the class named by its callee when that
 ;; class is known, or the class a class-valued callee expression resolves to.
 ;; Covers corpus classes, pure stdlib value constructors, and any stdlib type
@@ -225,8 +240,22 @@
         ;; resolve to the module-qualified class marker (pylibmc.Client), whose
         ;; domain is the module's domain in classify-all.
         (define bm (receiver-class-of rt (uir-get-base value)))
-        (and attr bm (module-receiver? bm tokens)
-             (string->symbol (format "~a.~a" bm attr)))])]
+        (cond
+          [(and attr bm (module-receiver? bm tokens))
+           (string->symbol (format "~a.~a" bm attr))]
+          ;; A subscript into an imported module/fn singleton
+          ;; (`connections[database]`): the field is the index expression (not
+          ;; an attribute name), and the base resolves through the import graph
+          ;; to a module/fn handle. Track the module path so a later chain
+          ;; (`connection.ops.sql_flush`) classifies by the module's domain.
+          [(and (not (uir-string? (uir-get-field value)))
+                (uir-var? (uir-get-base value))
+                import-env comp)
+           (define bname (string->symbol (uir-symbol-name
+                                         (uir-var-name (uir-get-base value)))))
+           (define p (imported-singleton-path bname comp import-env))
+           (and p (string->symbol p))]
+          [else #f])])]
     [else #f]))
 
 ;; Return type of a function/method body, projected through its receiver-type
