@@ -275,6 +275,10 @@
         ;; alias to CheckRegistry.register (in-memory registration), so bare
         ;; `register(...)` / `@register(...)` performs no domain effect.
         "register"
+        ;; namedtuple class factories assigned to module-level names
+        ;; (`EmailAlternative = namedtuple(...)`, `URLPattern = ...`):
+        ;; constructing one is pure value construction.
+        "EmailAlternative" "EmailAttachment" "URLPattern"
         ;; bare pure helpers imported from math / ctypes
         "ceil" "sizeof" "OVERLAPPED")
    ;; gettext translation-lookup aliases (pure string mapping, no effect)

@@ -73,7 +73,10 @@
    "open" (hash "close" 'io "read" 'io "write" 'io "seek" 'io "tell" 'io
                 "flush" 'io "fileno" 'io "readline" 'io "readlines" 'io
                 "writelines" 'io "truncate" 'io "readable" 'io "writable" 'io
-                "seekable" 'io "isatty" 'io)
+                "seekable" 'io "isatty" 'io
+                ;; context-manager protocol on a tracked file object:
+                ;; __enter__ returns self (pure), __exit__ closes it (io)
+                "__enter__" 'pure "__exit__" 'io)
    ;; zipfile (constructing one reads the archive header -> io)
    "ZipFile" (hash "__init__" 'io "read" 'io "open" 'io "extract" 'io
                    "extractall" 'io "close" 'io "namelist" 'io "infolist" 'io
