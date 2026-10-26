@@ -64,6 +64,15 @@
    ;; hmac (pure keyed-hash value object)
    "hmac" (hash "hexdigest" 'pure "digest" 'pure "update" 'pure "copy" 'pure
                 "digest_size" 'pure "block_size" 'pure "name" 'pure)
+   ;; datetime (pure value: formatting and arithmetic are pure; clock reads are
+   ;; the module's `now`/`utcnow`/`today`, not methods on the result instance)
+   "datetime" (hash "strftime" 'pure "strptime" 'pure "date" 'pure "time" 'pure
+                    "timetz" 'pure "replace" 'pure "astimezone" 'pure
+                    "isoformat" 'pure "ctime" 'pure "timetuple" 'pure
+                    "utctimetuple" 'pure "weekday" 'pure "isoweekday" 'pure
+                    "isocalendar" 'pure "timestamp" 'pure "toordinal" 'pure
+                    "utcoffset" 'pure "dst" 'pure "tzname" 'pure
+                    "fromtimestamp" 'pure "fromordinal" 'pure "combine" 'pure)
    ;; inspect (pure introspection)
    "signature" (hash "bind" 'pure "bind_partial" 'pure "parameters" 'pure
                      "return_annotation" 'pure "replace" 'pure)
@@ -199,4 +208,9 @@
    "urllib.request" (hash "urlopen" "HTTPResponse")
    ;; os.fdopen wraps a raw fd into a text file object (io-capable receiver).
    "os" (hash "fdopen" "open")
+   ;; datetime.now()/today()/... construct a datetime whose methods are pure
+   ;; (strftime etc.); the result flows through the stdlib-type-methods table.
+   "datetime" (hash "now" "datetime" "utcnow" "datetime" "today" "datetime"
+                    "fromtimestamp" "datetime" "fromordinal" "datetime"
+                    "combine" "datetime" "strptime" "datetime")
    "hmac" (hash "new" "hmac")))

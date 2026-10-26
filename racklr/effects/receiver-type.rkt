@@ -124,8 +124,11 @@
 ;; = requests.post(...)`): the callee is a member access `mod.func(...)` whose
 ;; root resolves through the import graph to a module handle, and the module's
 ;; function table maps `func` to a result-type name (`httpx.get` → Response).
-;; This is the receiver-TYPE half of call-result projection: `r` then tracks
-;; Response, and `r.json()` classifies through stdlib-type-methods-data.
+;; The same table serves an imported CLASS's classmethod constructors
+;; (`from datetime import datetime` → `datetime.now()` → datetime), guarded to
+;; the case where the entry names that very class. This is the receiver-TYPE
+;; half of call-result projection: `r` then tracks Response, and `r.json()`
+;; classifies through stdlib-type-methods-data.
 (define (imported-module-result-type callee comp import-env tokens)
   (and import-env comp (member-access-callee? callee)
        (let* ([root (dotted-root callee)]
@@ -133,12 +136,22 @@
               [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
               [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
               [h (and e root (hash-ref e (symbol->string root) #f))])
-         (and root func (handle? h) (eq? (handle-kind h) 'module) (handle-path h)
-              (let ([table (hash-ref (effect-tokens-module-result-types tokens)
-                                     (handle-path h) #f)])
-                (and table
-                     (let ([t (hash-ref table (symbol->string func) #f)])
-                       (and t (string->symbol t)))))))))
+         (and root func (handle? h) (handle-path h)
+              (let* ([path (handle-path h)]
+                     [table (hash-ref (effect-tokens-module-result-types tokens) path #f)]
+                     [t (and table (hash-ref table (symbol->string func) #f))]
+                     [rtn (and t (string->symbol t))])
+                (and rtn
+                     (or (eq? (handle-kind h) 'module)
+                         ;; A non-module handle (`from datetime import datetime`,
+                         ;; which the lowercase class name synthesizes as an fn
+                         ;; handle) may borrow the module's table entry only when
+                         ;; it maps to that same binding — a classmethod
+                         ;; constructor returning an instance of the class, so
+                         ;; `Client.get(...)` cannot borrow `httpx.get`.
+                         (and (memq (handle-kind h) '(class fn))
+                              (equal? (symbol->string rtn) (handle-name h))))
+                     rtn))))))
 
 ;; Result TYPE of a call expression: the class named by its callee when that
 ;; class is known, or the class a class-valued callee expression resolves to.

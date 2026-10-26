@@ -197,7 +197,8 @@
 ;; objects instead of falling to `unknown`.
 (define (receiver-chain-class rt base comp class-defs class-attrs comp-supers
                               [owner #f] [return-types #f]
-                              [methods #f] [fn-defs #f] [known #f])
+                              [methods #f] [fn-defs #f] [known #f]
+                              [import-env #f])
   (cond
     [(uir-var? base)
      (hash-ref (receiver-types-locals rt)
@@ -220,7 +221,7 @@
                            (cons comp (qualified-name-symbol owner attr)) #f)))]
        [else
         (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
-                                        owner return-types methods fn-defs known))
+                                        owner return-types methods fn-defs known import-env))
         (and c (class-attr-lookup comp c attr class-defs class-attrs comp-supers))])]
     [(uir-call? base)
      ;; A `.attr` chain rooted at a call result (`Path(...).is_absolute`,
@@ -228,7 +229,8 @@
      ;; its callee names, or — for a corpus function/method call — the class
      ;; its callee's projected return type names.
      (or (corpus-call-return-type (uir-call-callee base) comp class-defs owner methods fn-defs known comp-supers return-types)
-         (call-result-type (uir-call-callee base) class-defs))]
+         (call-result-type (uir-call-callee base) class-defs
+                           default-effect-tokens rt import-env comp))]
     [else #f]))
 
 ;; A pure protocol dunder (`__init__`, `__str__`, ...) — the object protocol.
@@ -327,7 +329,8 @@
      (define rcls (and rt (uir-get? callee)
                         (receiver-chain-class rt (uir-get-base callee)
                                               comp class-defs class-attrs comp-supers
-                                              owner return-types methods fn-defs known)))
+                                              owner return-types methods fn-defs known
+                                              import-env)))
      (define mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee))))
      ;; A call to a known class name is a constructor (pure instantiation), not
      ;; an effectful call — this also seeds the receiver-type dataflow without
