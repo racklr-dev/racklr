@@ -19,7 +19,8 @@
   effect-tokens-llm-roots effect-tokens-db-roots
   effect-tokens-network-roots effect-tokens-network-names
   effect-tokens-cache-roots effect-tokens-cache-names
-  effect-tokens-orm-methods
+  effect-tokens-orm-methods effect-tokens-orm-generic-methods
+  effect-tokens-orm-generic-by-name?
   effect-tokens-builtin-type-roots effect-tokens-stdlib-module-roots
   effect-tokens-io-builtins effect-tokens-stdlib-root-effects
   effect-tokens-io-methods effect-tokens-email-methods
@@ -31,7 +32,7 @@
   effect-tokens-pure-config-method-names
   effect-tokens-python-builtins effect-tokens-pure-dunder-names
   effect-tokens-str-method-names effect-tokens-pure-container-method-names
-  effect-tokens-module-result-types
+  effect-tokens-module-result-types effect-tokens-receiver-modules
   default-effect-tokens)
 
 (require racklr/effects/library-stdlib-types)
@@ -40,7 +41,7 @@
 ;; symbol→effect hash for root-qualified stdlib effects / per-root method sets).
 (struct effect-tokens
   (llm-roots db-roots network-roots network-names cache-roots cache-names
-   orm-methods
+   orm-methods orm-generic-methods orm-generic-by-name?
    builtin-type-roots stdlib-module-roots
    io-builtins stdlib-root-effects io-methods email-methods
    time-methods root-method-effects stdlib-type-methods
@@ -48,7 +49,7 @@
    framework-exception-names declarative-names
    pure-stdlib-bare-names gettext-names pure-config-method-names
    python-builtins pure-dunder-names str-method-names pure-container-method-names
-   module-result-types)
+   module-result-types receiver-modules)
   #:transparent)
 
 (define default-effect-tokens
@@ -65,28 +66,33 @@
    ;; library roots / bare names whose every call is a cache effect
    (set "redis" "memcache" "cache")
    (set "revalidatePath" "revalidate_path" "invalidate" "clearCache" "purgeCache")
-   ;; ORM method names: a dotted call whose final field is one of these is a
-   ;; QuerySet / Manager / Model DB operation even when the receiver is an
-   ;; arbitrary object (`self.queryset.filter`, `obj.save`, `qs.values_list`)
-   ;; and therefore cannot be resolved as an intra-program method edge. This is
-   ;; a name-based heuristic, so it runs last in `direct-effect-of-callee`.
-   (set
-    ;; QuerySet / Manager read API
-    "all" "annotate" "aggregate" "alias" "as_manager" "count" "dates"
-    "datetimes" "db_manager" "defer" "difference" "distinct" "earliest"
-    "exclude" "exists" "explain" "extra" "filter" "first" "get" "in_bulk"
-    "intersection" "iterator" "last" "latest" "none" "only" "order_by"
-    "prefetch_related" "raw" "reverse" "select_related" "union" "using"
-    "values" "values_list"
-    ;; QuerySet / Manager write API
-    "bulk_create" "bulk_update" "create" "delete" "get_or_create" "update"
-    "update_or_create"
-    ;; Model instance DB methods
-    "save" "refresh_from_db"
-    ;; SQL cursor / connection / router methods
-    "execute" "executemany" "fetchone" "fetchall" "fetchmany" "commit"
-    "rollback" "cursor" "create_function" "create_aggregate"
-    "create_deterministic_function" "db_for_read" "db_for_write")
+   ;; Strongly-ORM method names: unambiguous QuerySet / Manager / Model DB
+   ;; operations that classify name-only even when the receiver cannot be
+   ;; resolved (`obj.prefetch_related`, `qs.values_list`). The generic-English
+   ;; ORM verbs (get, update, filter, save, create, delete, count, exists,
+   ;; first, last, all, none, only, values, execute, commit, defer, distinct,
+   ;; difference, intersection, union, reverse, using, extra, dates, datetimes,
+   ;; earliest, latest, raw, explain, alias, annotate, aggregate, exclude,
+   ;; order_by, iterator, plus the SQL-cursor verbs fetchone/fetchall/... )
+   ;; are DELIBERATELY absent: they collide with non-DB receivers, so they
+   ;; classify only with receiver evidence (receiver-type dataflow resolving
+   ;; the receiver to a db-domain class/module), never by name alone.
+   (set "prefetch_related" "select_related" "values_list" "get_or_create"
+        "bulk_create" "refresh_from_db" "in_bulk" "db_for_read"
+        "db_for_write" "create_deterministic_function")
+   ;; Generic-English ORM verbs: `get`/`update`/`filter`/`save`/... collide
+   ;; with non-DB receivers, so they classify as db ONLY under the django-orm
+   ;; dialect flag (default #t) or with receiver evidence, never name-only in
+   ;; a non-django corpus.
+   (set "all" "annotate" "aggregate" "alias" "as_manager" "count" "dates"
+        "datetimes" "db_manager" "defer" "difference" "distinct" "earliest"
+        "exclude" "exists" "explain" "extra" "filter" "first" "get"
+        "intersection" "iterator" "last" "latest" "none" "only" "order_by"
+        "raw" "reverse" "union" "using" "values" "bulk_update" "create"
+        "delete" "update" "update_or_create" "save" "execute" "executemany"
+        "fetchone" "fetchall" "fetchmany" "commit" "rollback" "cursor"
+        "create_function" "create_aggregate")
+   #t
    ;; builtin type roots whose method namespace collides with the ORM heuristic
    (set "dict" "list" "set" "str" "int" "float" "complex" "bool" "bytes"
         "bytearray" "tuple" "frozenset" "type" "object" "range" "slice"
@@ -352,4 +358,12 @@
         ;; pure regex / email / ordered-collection methods on arbitrary receivers
         "match" "search" "fullmatch" "findall" "finditer" "escape"
         "as_string" "as_bytes" "move_to_end" "quote_name")
-   stdlib-module-result-types-data))
+   stdlib-module-result-types-data
+   ;; External module receivers tracked by receiver-type dataflow: a local /
+   ;; param / self-attr bound to one of these modules resolves its method calls
+   ;; to the module's effect domain (the memcache client libraries: pylibmc,
+   ;; pymemcache, memcache, redis). Mirrors `cache-roots`, but as a
+   ;; name->domain table so `self._lib = library` (library=pylibmc) tracks
+   ;; `pylibmc` and `self._lib.get(...)` classifies as cache instead of the
+   ;; ORM-name `get`->db bias.
+   (hash "pylibmc" 'cache "pymemcache" 'cache "memcache" 'cache "redis" 'cache)))

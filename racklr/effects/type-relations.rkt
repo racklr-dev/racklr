@@ -222,33 +222,73 @@
       (define owner (owner-of k))
       (define rt (rt-of k))
       (define (arg-class a) (value-class-of a rt class-defs default-effect-tokens import-env comp owner))
+      ;; Split a call's argument list into positional values and keyword
+      ;; bindings (name-symbol . value). A keyword argument is lowered as
+      ;; (call "kwarg" (list (var name) value)); anything else is positional
+      ;; (`*`/`**` spread included, matching the previous index-based walk).
+      (define (split-args args)
+        (define positional '())
+        (define kwargs '())
+        (for ([a (in-list args)])
+          (if (and (uir-call? a)
+                   (uir-symbol? (uir-call-callee a))
+                   (string=? (uir-symbol-name (uir-call-callee a)) "kwarg")
+                   (= (length (uir-call-args a)) 2)
+                   (uir-var? (first (uir-call-args a))))
+              (set! kwargs
+                    (cons (cons (string->symbol
+                                 (uir-symbol-name
+                                  (uir-var-name (first (uir-call-args a)))))
+                                (second (uir-call-args a)))
+                          kwargs))
+              (set! positional (cons a positional))))
+        (values (reverse positional) (reverse kwargs)))
+      (define (param-name p)
+        (cond
+          [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
+          [(uir-typed-param? p)
+           (and (uir-symbol? (uir-typed-param-name p))
+                (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
+          [else #f]))
+      (define (param-index ps name)
+        (for/first ([i (in-naturals)] [p (in-list ps)])
+          (and (eq? (param-name p) name) i)))
+      ;; Record a param binding; `self-offset` skips `self`/`cls` for methods.
+      (define (note-positional! key self-offset positional)
+        (for ([i (in-naturals)] [a (in-list positional)])
+          (define idx (+ i self-offset))
+          (when (< idx (length (params-of key)))
+            (note! key idx (arg-class a)))))
+      (define (note-kwargs! key kwargs)
+        (define ps (params-of key))
+        (for ([kw (in-list kwargs)])
+          (define idx (param-index ps (car kw)))
+          (when (and idx (< idx (length ps)))
+            (note! key idx (arg-class (cdr kw))))))
       (define (visit! node)
         (when (uir-call? node)
           (define callee (uir-call-callee node))
-          (define args (uir-call-args node))
+          (define-values (positional kwargs) (split-args (uir-call-args node)))
           (define nm (callee-name callee))
           (define fk (and nm (bare-function-key nm comp fn-defs known)))
           (cond
             [fk
-             (for ([i (in-naturals)] [a (in-list args)])
-               (when (< i (length (params-of fk)))
-                 (note! fk i (arg-class a))))]
+             (note-positional! fk 0 positional)
+             (note-kwargs! fk kwargs)]
             [else
              (define mks (method-callee-keys callee comp owner methods class-defs comp-supers))
              (cond
                [(pair? mks)
-                (for ([i (in-naturals)] [a (in-list args)])
-                  (when (< (+ i 1) (length (params-of (car mks))))
-                    (for ([mk (in-list mks)])
-                      (note! mk (+ i 1) (arg-class a)))))]
+                (for ([mk (in-list mks)])
+                  (note-positional! mk 1 positional)
+                  (note-kwargs! mk kwargs))]
                [else
                 (define cname (constructor-class callee class-defs))
                 (define c (and cname (resolve-class-component cname comp class-defs)))
                 (define ik (and c (cons c (qualified-name-symbol cname '__init__))))
                 (when (and ik (hash-has-key? methods ik))
-                  (for ([i (in-naturals)] [a (in-list args)])
-                    (when (< (+ i 1) (length (params-of ik)))
-                      (note! ik (+ i 1) (arg-class a)))))])])))
+                  (note-positional! ik 1 positional)
+                  (note-kwargs! ik kwargs))])])))
       (walk-body (body-of k) visit!))
     (define out (make-hash))
     (for ([(kk cls-list) (in-hash cands)])

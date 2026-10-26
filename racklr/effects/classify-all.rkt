@@ -46,7 +46,9 @@
                         (cond
                           [cap cap]
                           [else
-                           (define dom (module-effect-tag (handle-path h)))
+                           (define dom (handle-effect-domain (handle-path h)
+                                                             (handle-name h)
+                                                             (and mname (symbol->string mname))))
                            (cond [(eq? dom 'pure) 'pure]
                                  [dom (effect-cap dom (method-ops dom (handle-path h)
                                                                   (handle-name h)
@@ -59,7 +61,9 @@
                        ;; resolves to the module's domain (django.db -> db), the
                        ;; same coarse library fallback as a module handle.
                        [(module fn)
-                        (define dom (module-effect-tag (handle-path h)))
+                        (define dom (handle-effect-domain (handle-path h)
+                                                          (handle-name h)
+                                                          (and mname (symbol->string mname))))
                         (cond [(eq? dom 'pure) 'pure]
                               [dom (effect-cap dom '())]
                               [else #f])]
@@ -84,11 +88,30 @@
          (and (handle? h)
               (eq? (handle-kind h) 'fn)
               (handle-path h)
-              (let ([dom (module-effect-tag (handle-path h))])
+              (let ([dom (handle-effect-domain (handle-path h)
+                                               (handle-name h)
+                                               (symbol->string nm))])
                 (cond
                   [(eq? dom 'pure) 'pure]
                   [dom (effect-cap dom '())]
                   [else #f]))))))
+
+;; Effect domain of a tracked MODULE receiver (`pylibmc`) or a module-qualified
+;; class marker (`pylibmc.Client`): the module's receiver-modules domain. This
+;; resolves `self._lib.get(...)` (self._lib = pylibmc) and `self._cache.set(...)`
+;; (self._cache = pylibmc.Client(...)) to the memcache client's cache domain
+;; BEFORE the ORM-name heuristic would tag `get`/`delete` as db. Returns an
+;; effect-cap or #f (not a module receiver).
+(define (module-receiver-effect rcls)
+  (and rcls
+       (let* ([s (symbol->string rcls)]
+              [m (regexp-match #rx"^([^.]+)" s)]
+              [mod (and m (cadr m))]
+              [domain (or (hash-ref (effect-tokens-receiver-modules default-effect-tokens) s #f)
+                          (and mod
+                               (hash-ref (effect-tokens-receiver-modules default-effect-tokens)
+                                         mod #f)))])
+         (and domain (effect-cap domain '())))))
 
 (define (receiver-effect comp class-name mname class-defs import-env)
   (and import-env
@@ -96,7 +119,9 @@
              (and c
                   (let ([modpath (hash-ref (import-env-comp-modpath import-env) c #f)])
                     (and modpath
-                         (let ([domain (module-effect-tag modpath)])
+                         (let ([domain (handle-effect-domain modpath
+                                                           (symbol->string class-name)
+                                                           (symbol->string mname))])
                            (cond
                              [(eq? domain 'pure) 'pure]
                              [domain (effect-cap domain (method-ops domain modpath
@@ -118,7 +143,9 @@
          (and (handle? h)
               (eq? (handle-kind h) 'class)
               (handle-path h)
-              (let ([dom (module-effect-tag (handle-path h))])
+              (let ([dom (handle-effect-domain (handle-path h)
+                                               (handle-name h)
+                                               (symbol->string mname))])
                 (cond
                   [(eq? dom 'pure) 'pure]
                   [dom (effect-cap dom (method-ops dom (handle-path h)
@@ -233,7 +260,9 @@
          (and (handle? h)
               (eq? (handle-kind h) 'class)
               (handle-path h)
-              (let ([dom (module-effect-tag (handle-path h))])
+              (let ([dom (handle-effect-domain (handle-path h)
+                                               (handle-name h)
+                                               (symbol->string mname))])
                 (cond
                   [(eq? dom 'pure) 'pure]
                   [dom (effect-cap dom (method-ops dom (handle-path h)
@@ -317,7 +346,9 @@
        ;; `KnownClass(...)`.
        [(and rt (receiver-class-of rt callee)) (cons 'pure #f)]
        [else
-        (define re (and rcls mname (receiver-effect comp rcls mname class-defs import-env)))
+        (define re (and rcls mname
+                        (or (module-receiver-effect rcls)
+                            (receiver-effect comp rcls mname class-defs import-env))))
         (cond
           [(eq? re 'pure) (cons 'pure #f)]
           [(effect-cap? re) (cons 'effect re)]
@@ -430,7 +461,7 @@
                      [cls-str (regexp-replace #rx"[.].*$" s "")]
                      [m-str (regexp-replace #rx"^[^.]*[.]" s "")])
                 (and (not (string=? cls-str s))
-                     (let ([domain (module-effect-tag modpath)])
+                     (let ([domain (handle-effect-domain modpath cls-str m-str)])
                        (and domain
                             (not (eq? domain 'pure))
                             (effect-cap domain (method-ops domain modpath cls-str m-str))))))))))

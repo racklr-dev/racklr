@@ -46,6 +46,14 @@
          (or (set-member? (effect-tokens-pure-stdlib-bare-names tokens) s)
              (set-member? (effect-tokens-builtin-type-roots tokens) s)))))
 
+;; A receiver value is a MODULE (not a class) when its name names an external
+;; module in the receiver-modules token table (pylibmc / pymemcache / memcache /
+;; redis). Module receivers resolve their method calls to the module's effect
+;; domain in classify-all, keeping engine code free of library names.
+(define (module-receiver? nm [tokens default-effect-tokens])
+  (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
+                         (symbol->string nm))))
+
 ;; Name symbol bound by a `set!` left-hand side. The Python lowerer emits a
 ;; uir-var target; the JS/TS lowerer emits a uir-symbol target. Returns #f for
 ;; a compound target (a uir-get attribute assignment is handled by the caller).
@@ -89,7 +97,8 @@
   (and nm
        (or (hash-has-key? class-defs nm)
            (pure-stdlib-type? nm tokens)
-           (imported-class-ref nm comp import-env))
+           (imported-class-ref nm comp import-env)
+           (module-receiver? nm tokens))
        nm))
 
 ;; Class name the constructor callee names, when it is a known class: a bare
@@ -160,6 +169,27 @@
   (cond
     [(uir-await? value) (value-class-of (uir-await-expr value) rt class-defs
                                         tokens import-env comp owner)]
+    ;; Conditional expression (`x if c else y`): sound only when every branch
+    ;; projects to the SAME class; a mixed or unresolvable branch yields #f.
+    [(uir-if? value)
+     (let ([t (value-class-of (uir-if-then value) rt class-defs
+                              tokens import-env comp owner)]
+           [e (value-class-of (uir-if-else value) rt class-defs
+                              tokens import-env comp owner)])
+       (and t e (eq? t e) t))]
+    ;; Boolean expression (`x or y` / `x and y`, lowered as (call "or"/"and"
+    ;; (list lhs rhs))): same-class fold, sound for the same reason.
+    [(and (uir-call? value)
+          (let ([c (uir-call-callee value)])
+            (and (uir-symbol? c)
+                 (memq (string->symbol (uir-symbol-name c)) '(or and)))))
+     (let ([args (uir-call-args value)])
+       (and (= (length args) 2)
+            (let ([a (value-class-of (first args) rt class-defs
+                                     tokens import-env comp owner)]
+                  [b (value-class-of (second args) rt class-defs
+                                     tokens import-env comp owner)])
+              (and a b (eq? a b) a))))]
     [(uir-call? value)
      (call-result-type (uir-call-callee value) class-defs tokens rt import-env comp)]
     [(uir-var? value)
@@ -174,8 +204,16 @@
          (bare-class-value value class-defs tokens import-env comp))]
     [(uir-get? value)
      (define attr (get-field-symbol (uir-get-field value)))
-     (and attr (self-or-cls-var? (uir-get-base value))
-          (hash-ref (receiver-types-self-attrs rt) attr #f))]
+     (cond
+       [(and attr (self-or-cls-var? (uir-get-base value)))
+        (hash-ref (receiver-types-self-attrs rt) attr #f)]
+       [else
+        ;; `module.Class` where `module` is a tracked module receiver:
+        ;; resolve to the module-qualified class marker (pylibmc.Client), whose
+        ;; domain is the module's domain in classify-all.
+        (define bm (receiver-class-of rt (uir-get-base value)))
+        (and attr bm (module-receiver? bm tokens)
+             (string->symbol (format "~a.~a" bm attr)))])]
     [else #f]))
 
 ;; Return type of a function/method body, projected through its receiver-type

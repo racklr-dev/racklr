@@ -17,7 +17,25 @@
 (define effect-tag-config
   (list
    (effect-library "django"
-                    (list (effect-rule "django.test.client" 'network)
+                    (list
+                          ;; Per-object / per-member rules (most-specific-first):
+                          ;; the dotted prefix names the imported object or the
+                          ;; called member, so a mixed module resolves without a
+                          ;; coarse whole-module guess. `settings` is a lazy
+                          ;; registry whose queries are in-memory except the
+                          ;; initial env/module read; `apps` queries the loaded
+                          ;; model registry (pure); `run_checks` executes
+                          ;; registered checks that inspect the codebase (io).
+                          (effect-rule "django.conf.settings._setup" 'io)
+                          (effect-rule "django.conf.settings" 'pure)
+                          (effect-rule "django.apps.apps.check_models_ready" 'pure)
+                          (effect-rule "django.core.checks.run_checks" 'io)
+                          (effect-rule "django.core.checks.tag_exists" 'pure)
+                          (effect-rule "django.core.management.color.supports_color" 'io)
+                          (effect-rule "django.middleware.csrf._get_failure_view" 'io)
+                          (effect-rule "django.utils.archive" 'io)
+                          (effect-rule "django.views.debug" 'io)
+                          (effect-rule "django.test.client" 'network)
                           (effect-rule "django.core.mail" 'email)
                           (effect-rule "django.core.cache" 'cache)
                           (effect-rule "django.core.management.base" 'io)
@@ -47,6 +65,26 @@
                           (effect-rule "django.core.signals" 'pure)
                           (effect-rule "django.core.signing" 'pure)
                           (effect-rule "django.core.serializers" 'io)
+                          ;; Utils: in-memory helpers (string/url/introspection).
+                          (effect-rule "django.utils.crypto" 'pure)
+                          (effect-rule "django.utils.encoding" 'pure)
+                          (effect-rule "django.utils.inspect" 'pure)
+                          (effect-rule "django.utils.http" 'pure)
+                          (effect-rule "django.utils.ipv6" 'pure)
+                          (effect-rule "django.utils.text" 'pure)
+                          (effect-rule "django.utils.duration" 'pure)
+                          (effect-rule "django.utils.csp" 'pure)
+                          (effect-rule "django.utils.asyncio" 'pure)
+                          (effect-rule "django.utils.termcolors" 'pure)
+                          ;; Utils that touch the filesystem / console / logging.
+                          (effect-rule "django.utils._os" 'io)
+                          (effect-rule "django.utils.log" 'io)
+                          (effect-rule "django.utils.module_loading" 'io)
+                          (effect-rule "django.utils.autoreload" 'io)
+                          ;; URL resolution is in-memory.
+                          (effect-rule "django.urls" 'pure)
+                          (effect-rule "django.core.checks.registry" 'pure)
+                          (effect-rule "django.test.runner" 'process)
                           ;; auth.authenticate/login hit the DB; fail-closed db.
                           (effect-rule "django.contrib.auth" 'db)))
    (effect-library "sqlparse"
@@ -61,7 +99,50 @@
    (effect-library "zoneinfo" (list (effect-rule "zoneinfo" 'pure)))
    (effect-library "mimetypes" (list (effect-rule "mimetypes" 'pure)))
    (effect-library "getpass" (list (effect-rule "getpass" 'io)))
-   (effect-library "signal" (list (effect-rule "signal" 'process)))))
+   (effect-library "signal" (list (effect-rule "signal" 'process)))
+   ;; stdlib / third-party modules used bare in the corpus. Fail-closed where a
+   ;; module mixes in-memory and stream operations: io is the safe direction
+   ;; (spurious, never hidden).
+   (effect-library "json" (list (effect-rule "json" 'io)))
+   (effect-library "pickle" (list (effect-rule "pickle" 'io)))
+   (effect-library "yaml" (list (effect-rule "yaml" 'io)))
+   (effect-library "ssl" (list (effect-rule "ssl" 'network)))
+   (effect-library "stat" (list (effect-rule "stat" 'pure)))
+   (effect-library "fnmatch" (list (effect-rule "fnmatch" 'pure)))
+   (effect-library "code" (list (effect-rule "code" 'io)))
+   (effect-library "pkgutil" (list (effect-rule "pkgutil" 'io)))
+   (effect-library "fcntl" (list (effect-rule "fcntl" 'io)))
+   (effect-library "winreg" (list (effect-rule "winreg" 'io)))
+   (effect-library "select" (list (effect-rule "select" 'io)))
+   (effect-library "traceback" (list (effect-rule "traceback" 'pure)))
+   (effect-library "difflib" (list (effect-rule "difflib" 'pure)))
+   (effect-library "itertools" (list (effect-rule "itertools" 'pure)))
+   (effect-library "shutil" (list (effect-rule "shutil" 'io)))
+   (effect-library "email" (list (effect-rule "email" 'pure)))
+   (effect-library "pathlib" (list (effect-rule "pathlib" 'io)))
+   (effect-library "importlib" (list (effect-rule "importlib.util" 'io)))
+   (effect-library "urllib" (list (effect-rule "urllib.request" 'network)))
+   (effect-library "xml" (list (effect-rule "xml.dom" 'io)
+                                (effect-rule "xml.sax" 'io)))
+   (effect-library "readline" (list (effect-rule "readline" 'io)))
+   (effect-library "rlcompleter" (list (effect-rule "rlcompleter" 'pure)))
+   (effect-library "bpython" (list (effect-rule "bpython" 'io)))
+   (effect-library "IPython" (list (effect-rule "IPython" 'io)))
+   ;; contextlib's exports are in-memory context-manager helpers.
+   (effect-library "contextlib" (list (effect-rule "contextlib" 'pure)))
+   ;; asgiref.sync's async_to_sync / sync_to_async are WRAPPER CONSTRUCTORS:
+   ;; the direct call builds a closure without running it, so the wrapped
+   ;; function's effect materializes at the separate wrapper-invocation site.
+   (effect-library "asgiref" (list (effect-rule "asgiref.sync" 'pure)))
+   ;; Pillow: Parser parses an in-memory buffer; Image.init imports plugin
+   ;; modules from disk (io). Tagged at member granularity so Image.open/
+   ;; ImageFile.load stay unclassified rather than being hidden as pure.
+   (effect-library "PIL" (list (effect-rule "PIL.Image.init" 'io)
+                                (effect-rule "PIL.ImageFile.Parser" 'pure)))
+   ;; asyncio.TaskGroup construction is in-memory; the module is otherwise mixed.
+   (effect-library "asyncio" (list (effect-rule "asyncio.TaskGroup" 'pure)))
+   ;; isort.code sorts imports in a string (pure); isort.file writes files.
+   (effect-library "isort" (list (effect-rule "isort.code" 'pure)))))
 
 ;; ── primitive-operation vocabulary (per domain) ─────────────────────
 ;; The db/io verb tables and the builtin-receiver seed environment. This is

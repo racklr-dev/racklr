@@ -18,6 +18,7 @@
   effect-tag-config
   resolve-effect-tag
   module-effect-tag
+  handle-effect-domain
   clear-effect-tag-cache!
   class-effect-tag
   method-ops
@@ -69,6 +70,26 @@
 (define (class-effect-tag path cname [config effect-tag-config])
   ;; Seam for per-class overrides; the default is the module's domain.
   (module-effect-tag path config))
+
+;; Dotted candidates for a call resolved through an import handle, most-specific
+;; first: the imported object's own path (package.obj), the called member's path
+;; (package.member — for module handles), and the bare package path. This is the
+;; re-export follow: `from django.utils import autoreload` synthesizes a handle
+;; whose path is the package (`django.utils`) but whose object actually lives in
+;; `django.utils.autoreload`; trying each candidate against the ordered DATA
+;; rules lets a specific submodule rule win without the engine knowing any name.
+(define (dotted-candidates path name mname)
+  (filter (λ (s) (and s (not (string=? s ""))))
+          (list (and path name mname (string-append path "." name "." mname))
+                (and path name (string-append path "." name))
+                (and path mname (string-append path "." mname))
+                path)))
+
+;; Resolve a handle-shaped call to an effect domain (or 'pure / #f) by trying
+;; the candidate dotted paths in order against the config rules.
+(define (handle-effect-domain path name mname [config effect-tag-config])
+  (for/or ([cand (in-list (dotted-candidates path name mname))])
+    (module-effect-tag cand config)))
 
 ;; The db/io verb vocabulary lives in library-config.rkt (DATA); this engine
 ;; module consumes it only through the bindings required from that module.

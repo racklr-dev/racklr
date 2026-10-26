@@ -288,6 +288,29 @@
                                               (prog (cls "QuerySet" "BaseQuerySet" (list (mth "get")))) '())))
   (check-equal? (hash-ref (derive-class-supers mods) "QuerySet") '("BaseQuerySet")))
 
+(define (test-handle-effect-domain)
+  ;; Re-export follow: `from django.utils import autoreload` synthesizes an fn
+  ;; handle whose path is the package, but the object lives in the submodule
+  ;; that already carries the domain rule.
+  (check-equal? (handle-effect-domain "django.utils" "autoreload" "run_with_reloader") 'io)
+  (check-equal? (handle-effect-domain "django.utils" "termcolors" "make_style") 'pure)
+  (check-equal? (handle-effect-domain "django.utils" "archive" "extract") 'io)
+  ;; Per-object method rules: `settings` is a lazy registry (pure queries, io
+  ;; setup); the most-specific `_setup` rule wins over the general `settings`.
+  (check-equal? (handle-effect-domain "django.conf" "settings" "configure") 'pure)
+  (check-equal? (handle-effect-domain "django.conf" "settings" "is_overridden") 'pure)
+  (check-equal? (handle-effect-domain "django.conf" "settings" "_setup") 'io)
+  ;; Module-handle member rules (name is #f): `from django.core import checks`.
+  (check-equal? (handle-effect-domain "django.core.checks" #f "run_checks") 'io)
+  (check-equal? (handle-effect-domain "django.core.checks" #f "tag_exists") 'pure)
+  ;; External package granularity: Parser is in-memory, Image.init loads
+  ;; plugins; asgiref.sync wrapper constructors are pure.
+  (check-equal? (handle-effect-domain "PIL" "ImageFile" "Parser") 'pure)
+  (check-equal? (handle-effect-domain "PIL" "Image" "init") 'io)
+  (check-equal? (handle-effect-domain "asgiref.sync" "async_to_sync" "async_to_sync") 'pure)
+  ;; The coarse module domain is still the fallback when no member rule fires.
+  (check-equal? (handle-effect-domain "django.db" "connections" "cursor") 'db))
+
 (module+ main
   (test-extract-import-name)
   (test-extract-import-alias)
@@ -313,4 +336,5 @@
   (test-collision-resolves-by-class)
   (test-typed-op-parts)
   (test-derive-class-supers)
+  (test-handle-effect-domain)
   (displayln "All imports tests passed."))

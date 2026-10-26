@@ -61,6 +61,9 @@
                   "digest_size" 'pure "block_size" 'pure "name" 'pure)
    "sha512" (hash "hexdigest" 'pure "digest" 'pure "update" 'pure "copy" 'pure
                   "digest_size" 'pure "block_size" 'pure "name" 'pure)
+   ;; hmac (pure keyed-hash value object)
+   "hmac" (hash "hexdigest" 'pure "digest" 'pure "update" 'pure "copy" 'pure
+                "digest_size" 'pure "block_size" 'pure "name" 'pure)
    ;; inspect (pure introspection)
    "signature" (hash "bind" 'pure "bind_partial" 'pure "parameters" 'pure
                      "return_annotation" 'pure "replace" 'pure)
@@ -88,12 +91,29 @@
    ;; pyexpat (constructing is pure; parsing a file is io)
    "_ExpatParser" (hash "__init__" 'pure "Parse" 'pure "ParseFile" 'io
                         "SetBase" 'pure "GetBase" 'pure)
+   ;; xml.sax.saxutils / django.utils.xmlutils SimplerXMLGenerator: the
+   ;; writer wraps a destination stream, so its callbacks emit to it.
+   "SimplerXMLGenerator" (hash "startDocument" 'io "endDocument" 'io
+                               "startElement" 'io "endElement" 'io
+                               "characters" 'io "ignorableWhitespace" 'io
+                               "processingInstruction" 'io "skippedEntity" 'io
+                               "startPrefixMapping" 'io "endPrefixMapping" 'io
+                               "startDTD" 'io "endDTD" 'io
+                               "startCDATA" 'io "endCDATA" 'io)
    ;; socketserver / wsgiref (thread and socket bookkeeping)
    "ThreadingMixIn" (hash "__init__" 'pure "process_request" 'pure
                           "process_request_thread" 'pure "server_close" 'io)
    "WSGIServer" (hash "__init__" 'pure "close_request" 'io
                       "process_request_thread" 'pure "get_request" 'io
                       "handle_error" 'io "serve_forever" 'process)
+   ;; wsgiref request/server handlers Django's basehttp subclasses; their
+   ;; methods live outside the scanned corpus, so self/super calls resolve
+   ;; here by the external parent's bare class name.
+   "WSGIRequestHandler" (hash "log_date_time_string" 'pure "get_stderr" 'pure
+                              "parse_request" 'io "send_error" 'io
+                              "get_environ" 'pure "get_app" 'pure)
+   "ServerHandler" (hash "__init__" 'pure "cleanup_headers" 'io "get_stdin" 'pure
+                         "send_headers" 'io "finish_response" 'io "close" 'io)
    ;; builtin `object` base: every class without another base inherits these
    ;; protocol dunders, so `super().__init__` on `object` is pure.
    "object" (hash "__init__" 'pure "__new__" 'pure "__str__" 'pure "__repr__" 'pure
@@ -173,4 +193,7 @@
    "requests" (hash "get" "Response" "post" "Response" "put" "Response"
                      "patch" "Response" "delete" "Response" "head" "Response"
                      "options" "Response" "request" "Response")
-   "urllib.request" (hash "urlopen" "HTTPResponse")))
+   "urllib.request" (hash "urlopen" "HTTPResponse")
+   ;; os.fdopen wraps a raw fd into a text file object (io-capable receiver).
+   "os" (hash "fdopen" "open")
+   "hmac" (hash "new" "hmac")))

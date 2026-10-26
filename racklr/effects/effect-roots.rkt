@@ -29,8 +29,11 @@
        (let* ([op (effect-op-of-callee c)]
               [root (dotted-root c)])
          (and op
-              (set-member? (effect-tokens-orm-methods tokens) (symbol->string op))
-              (not (non-orm-root? tokens root))))))
+              (not (non-orm-root? tokens root))
+              (or (set-member? (effect-tokens-orm-methods tokens) (symbol->string op))
+                  (and (effect-tokens-orm-generic-by-name? tokens)
+                       (set-member? (effect-tokens-orm-generic-methods tokens)
+                                    (symbol->string op))))))))
 
 ;; ── stdlib effect roots ─────────────────────────────────────────────
 ;;
