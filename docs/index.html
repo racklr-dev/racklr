@@ -312,6 +312,17 @@
     flex-wrap: wrap;
   }
 
+  nav.webring {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin: 0.75rem 0 0;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+  }
+
   /* ── Dark mode ────────────────────────────────────────── */
 
   @media (prefers-color-scheme: dark) {
@@ -566,6 +577,12 @@ raco test racklr-test/*.rkt   <span class="c"># run the suites</span></pre>
 <footer class="wrap">
   <span>racklr is a Racket project, open source under GPL-3.0-or-later.</span>
   <span>Grammars vendored from the <a href="https://github.com/antlr/grammars-v4">ANTLR grammars-v4</a> collection. Thank you to the ANTLR project and everyone who maintains it.</span>
+  <nav class="webring" aria-label="webring.social">
+    <a href="https://webring.social/previous?from=racklr-dev">← Previous</a>
+    <a href="https://webring.social">webring.social</a>
+    <a href="https://webring.social/random?from=racklr-dev">Random</a>
+    <a href="https://webring.social/next?from=racklr-dev">Next →</a>
+  </nav>
 </footer>
 
 <script>
