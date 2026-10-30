@@ -156,6 +156,32 @@
   (define h (hash-ref (hash-ref ex "a") "Thing"))
   (check-equal? (handle-path h) "c"))
 
+(define (test-resolve-exports-external-class)
+  ;; `from django.db.migrations.loader import MigrationLoader` where that
+  ;; module is OUTSIDE the scanned corpus: synthesize a class handle from the
+  ;; PEP 8 Capitalized binding so imported-class-ref / imported-class-cap can
+  ;; still resolve it through the library config (django.db → db). A lowercase
+  ;; external binding (`connections`) synthesizes an fn handle so a bare call
+  ;; resolves to the module's effect domain — never a receiver TYPE, since
+  ;; imported-class-ref requires kind 'class.
+  (define mods
+    (hash "app"
+          (harvest-module "app" (prog)
+                          (list (import-record 'from "django.db.migrations.loader"
+                                               (list (cons "MigrationLoader" "django.db.migrations.loader.MigrationLoader")))
+                                (import-record 'from "django.db"
+                                               (list (cons "connections" "django.db.connections")))))))
+  (define ex (resolve-exports mods (set "app")))
+  (define e (hash-ref ex "app"))
+  (define h (hash-ref e "MigrationLoader"))
+  (check-equal? (handle-kind h) 'class)
+  (check-equal? (handle-path h) "django.db.migrations.loader")
+  (check-equal? (handle-name h) "MigrationLoader")
+  (define c (hash-ref e "connections"))
+  (check-equal? (handle-kind c) 'fn)
+  (check-equal? (handle-path c) "django.db")
+  (check-equal? (handle-name c) "connections"))
+
 (define (test-path-to-module-path)
   (define root (string->path "/r/django"))
   (check-equal? (path->module-path "django" root (string->path "/r/django/__init__.py"))
@@ -262,6 +288,29 @@
                                               (prog (cls "QuerySet" "BaseQuerySet" (list (mth "get")))) '())))
   (check-equal? (hash-ref (derive-class-supers mods) "QuerySet") '("BaseQuerySet")))
 
+(define (test-handle-effect-domain)
+  ;; Re-export follow: `from django.utils import autoreload` synthesizes an fn
+  ;; handle whose path is the package, but the object lives in the submodule
+  ;; that already carries the domain rule.
+  (check-equal? (handle-effect-domain "django.utils" "autoreload" "run_with_reloader") 'io)
+  (check-equal? (handle-effect-domain "django.utils" "termcolors" "make_style") 'pure)
+  (check-equal? (handle-effect-domain "django.utils" "archive" "extract") 'io)
+  ;; Per-object method rules: `settings` is a lazy registry (pure queries, io
+  ;; setup); the most-specific `_setup` rule wins over the general `settings`.
+  (check-equal? (handle-effect-domain "django.conf" "settings" "configure") 'pure)
+  (check-equal? (handle-effect-domain "django.conf" "settings" "is_overridden") 'pure)
+  (check-equal? (handle-effect-domain "django.conf" "settings" "_setup") 'io)
+  ;; Module-handle member rules (name is #f): `from django.core import checks`.
+  (check-equal? (handle-effect-domain "django.core.checks" #f "run_checks") 'io)
+  (check-equal? (handle-effect-domain "django.core.checks" #f "tag_exists") 'pure)
+  ;; External package granularity: Parser is in-memory, Image.init loads
+  ;; plugins; asgiref.sync wrapper constructors are pure.
+  (check-equal? (handle-effect-domain "PIL" "ImageFile" "Parser") 'pure)
+  (check-equal? (handle-effect-domain "PIL" "Image" "init") 'io)
+  (check-equal? (handle-effect-domain "asgiref.sync" "async_to_sync" "async_to_sync") 'pure)
+  ;; The coarse module domain is still the fallback when no member rule fires.
+  (check-equal? (handle-effect-domain "django.db" "connections" "cursor") 'db))
+
 (module+ main
   (test-extract-import-name)
   (test-extract-import-alias)
@@ -277,6 +326,7 @@
   (test-resolve-relative-parent)
   (test-resolve-exports-import-class)
   (test-resolve-exports-transitive)
+  (test-resolve-exports-external-class)
   (test-path-to-module-path)
   (test-module-effect-tag)
   (test-effect-tag-config)
@@ -286,4 +336,5 @@
   (test-collision-resolves-by-class)
   (test-typed-op-parts)
   (test-derive-class-supers)
+  (test-handle-effect-domain)
   (displayln "All imports tests passed."))

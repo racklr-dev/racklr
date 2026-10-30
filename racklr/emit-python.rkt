@@ -410,13 +410,13 @@
              (string-append spc1 fn type-part init-part)))
          fields))
   (define method-lines
-    (map (λ (m) (emit-method m name indent1)) methods))
+    (map (λ (m) (emit-method-node m name indent1)) methods))
   (define body-lines (append field-lines method-lines))
   (string-append
    spc "class " name super-str ":\n"
    (if (null? body-lines) (string-append spc1 "pass") (string-join body-lines "\n"))))
 
-(define (emit-method uir class-name indent)
+(define (emit-method uir class-name indent [async? #f])
   (define spc (make-string (* indent 4) #\space))
   (define name (uir-symbol-name (uir-method-name uir)))
   (define self-param (car (uir-method-params uir)))
@@ -435,8 +435,21 @@
                       rest-params)
                  ", "))
   (string-append
-   spc "def " name "(self" (if (string=? params-str "") "" (string-append ", " params-str)) "):\n"
+   spc (if async? "async def " "def ") name "(self"
+   (if (string=? params-str "") "" (string-append ", " params-str)) "):\n"
    (emit-body (uir-method-body uir) (+ indent 1))))
+
+;; Render one class method-list node: a plain uir-method, a decorated method
+;; ((uir-decorated decos method)), or an async def method ((call "async-fn"
+;; (list method))). Anything else falls back to the generic stmt emitter.
+(define (emit-method-node m class-name indent)
+  (cond
+    [(uir-method? m) (emit-method m class-name indent)]
+    [(uir-decorated? m) (emit-decorated-method m class-name indent)]
+    [(async-fn-call? m)
+     (define inner (first (uir-call-args m)))
+     (and (uir-method? inner) (emit-method inner class-name indent #t))]
+    [else (emit-stmt m indent)]))
 
 (define (emit-import uir spc)
   (define source (uir-symbol-name (uir-import-source uir)))
@@ -473,7 +486,12 @@
   (define iterable (if (>= (length args) 3) (caddr args) (uir-null)))
   (define filter (if (>= (length args) 4) (cadddr args) (uir-null)))
   (define result-str (emit-expr result))
-  (define var-str (if (uir-symbol? loop-var) (uir-symbol-name loop-var) (emit-expr loop-var)))
+  (define var-str
+    (cond
+      [(uir-symbol? loop-var) (uir-symbol-name loop-var)]
+      [(uir-list? loop-var)
+       (string-join (map (λ (v) (emit-expr v)) (uir-list-items loop-var)) ", ")]
+      [else (emit-expr loop-var)]))
   (define iter-str (emit-expr iterable))
   (define body-str
     (string-append result-str " for " var-str " in " iter-str
@@ -483,6 +501,7 @@
         [(equal? callee-name "dict-comp")
          ;; For dict comp, result-expr should be a key:value pair representation
          (string-append "{" body-str "}")]
+        [(equal? callee-name "gen-exp") (string-append "(" body-str ")")]
         [else (string-append "[" body-str "]")]))
 
 ;; ── Decorated emitter ──────────────────────────────────────────────
@@ -511,6 +530,30 @@
              (emit-funcdef (first (uir-call-args inner)) indent #t)]
             [(uir-class? inner) (emit-classdef inner indent)]
             [else (emit-stmt inner indent)])))
+  (string-append deco-lines "\n" inner-str))
+
+;; A decorated method inside a class ((uir-decorated decos method)): render the
+;; decorator lines and then the inner uir-method (async when wrapped).
+(define (emit-decorated-method uir class-name indent)
+  (define spc (make-string (* indent 4) #\space))
+  (define decos (filter (λ (d) (not (effects-decorator? d)))
+                        (uir-decorated-decorators uir)))
+  (define deco-lines
+    (string-join
+     (map (lambda (d)
+            (if (null? (uir-call-args d))
+                (string-append spc "@" (emit-expr (uir-call-callee d)))
+                (string-append spc "@" (emit-expr d))))
+          decos)
+     "\n"))
+  (define inner (uir-decorated-inner uir))
+  (define inner-str
+    (cond
+      [(uir-method? inner) (emit-method inner class-name indent)]
+      [(async-fn-call? inner)
+       (define m (first (uir-call-args inner)))
+       (and (uir-method? m) (emit-method m class-name indent #t))]
+      [else (emit-stmt inner indent)]))
   (string-append deco-lines "\n" inner-str))
 
 ;; ── Expression emitter ─────────────────────────────────────────────
@@ -545,7 +588,7 @@
         [(uir-call? uir)
           (let ([callee (uir-call-callee uir)])
             (if (and (uir-symbol? callee)
-                     (regexp-match #rx"-comp$" (uir-symbol-name callee)))
+                     (regexp-match #rx"(?:-comp|-exp)$" (uir-symbol-name callee)))
                 (emit-comp uir)
                 (let ([args (uir-call-args uir)]
                       [name (and (uir-symbol? callee) (uir-symbol-name callee))])

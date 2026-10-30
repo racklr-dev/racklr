@@ -18,6 +18,7 @@
   effect-tag-config
   resolve-effect-tag
   module-effect-tag
+  handle-effect-domain
   clear-effect-tag-cache!
   class-effect-tag
   method-ops
@@ -70,32 +71,28 @@
   ;; Seam for per-class overrides; the default is the module's domain.
   (module-effect-tag path config))
 
-;; ── primitive-operation vocabulary (per domain) ─────────────────────
-;;
-;; db: the operation is the SQL access kind.
-;;   db.read  = SELECT (get/filter/count/exists/fetch*/...)
-;;   db.write = DML/DDL (update/delete/create/save/execute/commit/...)
-;; io: the operation names a RESOURCE (stdio/file/socket/http) and a verb
-;;   (read/write/close/...), e.g. file.read, stdio.write, http.write. Resource
-;;   is derived from the class's module path; verb from the method name.
-;; Methods whose verb is not classified keep () — sound: the domain is known,
-;; the specific operation is not.
+;; Dotted candidates for a call resolved through an import handle, most-specific
+;; first: the imported object's own path (package.obj), the called member's path
+;; (package.member — for module handles), and the bare package path. This is the
+;; re-export follow: `from django.utils import autoreload` synthesizes a handle
+;; whose path is the package (`django.utils`) but whose object actually lives in
+;; `django.utils.autoreload`; trying each candidate against the ordered DATA
+;; rules lets a specific submodule rule win without the engine knowing any name.
+(define (dotted-candidates path name mname)
+  (filter (λ (s) (and s (not (string=? s ""))))
+          (list (and path name mname (string-append path "." name "." mname))
+                (and path name (string-append path "." name))
+                (and path mname (string-append path "." mname))
+                path)))
 
-(define db-read-methods
-  (set "get" "filter" "all" "count" "exists" "first" "last" "iterator"
-       "values" "values_list" "dates" "datetimes" "in_bulk" "distinct"
-       "order_by" "defer" "only" "select_related" "prefetch_related" "using"
-       "alias" "annotate" "aggregate" "fetchone" "fetchall" "fetchmany"
-       "latest" "earliest" "none" "explain" "raw" "resolve_expression"))
+;; Resolve a handle-shaped call to an effect domain (or 'pure / #f) by trying
+;; the candidate dotted paths in order against the config rules.
+(define (handle-effect-domain path name mname [config effect-tag-config])
+  (for/or ([cand (in-list (dotted-candidates path name mname))])
+    (module-effect-tag cand config)))
 
-(define db-write-methods
-  (set "create" "update" "delete" "save" "bulk_create" "bulk_update"
-       "get_or_create" "update_or_create" "execute" "executemany" "commit"
-       "rollback" "insert" "raw_delete" "set" "add" "remove" "clear"
-       "create_function" "create_aggregate" "create_deterministic_function"))
-
-(define io-read-verbs  (set "read" "readline" "readlines" "recv" "recvfrom" "readinto" "peek" "readable"))
-(define io-write-verbs (set "write" "writelines" "send" "sendall" "sendto"))
+;; The db/io verb vocabulary lives in library-config.rkt (DATA); this engine
+;; module consumes it only through the bindings required from that module.
 
 ;; A typed operation symbol: domain<ReceiverType>.verb (e.g. db<QuerySet>.read,
 ;; io<File>.write). The receiver TYPE is the concrete class that performs the
@@ -118,24 +115,12 @@
     [(io) (cond
             [(set-member? io-write-verbs mname) (list (typed-op domain cname "write"))]
             [(set-member? io-read-verbs mname)  (list (typed-op domain cname "read"))]
-            [(member mname '("close" "seek" "tell" "truncate" "fileno" "flush" "readable" "writable" "seekable"))
-             (list (typed-op domain cname mname))]
+            [(set-member? io-other-verbs mname) (list (typed-op domain cname mname))]
             [else '()])]
     [else '()]))
 
-;; Builtin receiver classes (the seed environment): method names tagged pure.
-;; This is what resolves `dict.get` vs `QuerySet.get` by class identity.
-(define builtin-class-methods
-  (hash "dict"  (set "get" "keys" "values" "items" "update" "pop" "popitem"
-                     "setdefault" "clear" "copy" "fromkeys")
-        "list"  (set "append" "extend" "insert" "pop" "remove" "clear" "index"
-                     "count" "sort" "reverse" "copy")
-        "set"   (set "add" "remove" "discard" "pop" "clear" "union"
-                     "intersection" "difference" "symmetric_difference" "update"
-                     "issubset" "issuperset" "isdisjoint" "copy")
-        "str"   (set "join" "format" "format_map" "split" "rsplit" "strip"
-                     "lstrip" "rstrip" "lower" "upper" "replace" "startswith"
-                     "endswith" "find" "index" "count")))
+;; Builtin receiver classes (the seed environment) live in library-config.rkt
+;; (DATA) as `builtin-class-methods`; re-exported for the public contract.
 
 ;; Derive Class.method → effect-cap for every class in a tagged module. Pure
 ;; modules (domain 'pure) and untagged modules contribute nothing; methods

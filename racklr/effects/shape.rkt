@@ -19,6 +19,7 @@
   callee-name
   effect-op-of-callee
   member-access-callee?
+  callee-site-string
   member-access-base
   super-call?
   qualified-name-symbol
@@ -91,6 +92,28 @@
       [(uir-var? c) (string->symbol (uir-symbol-name (uir-var-name c)))]
       [(uir-symbol? c) (string->symbol (uir-symbol-name c))]
       [else #f])))
+
+;; Compact human-readable rendering of a callee expression, for provenance
+;; strings: `obj.filter`, `self._lib.get`, `super().__init__`, `fetch`. This is
+;; the classifying call site — the expression the classifier saw — not a source
+;; location (UIR carries none). Best-effort: unknown bases render as `?`.
+(define (callee-site-string c)
+  (let loop ([c c] [fields '()])
+    (cond
+      [(uir-get? c)
+       (define f (get-field-symbol (uir-get-field c)))
+       (loop (uir-get-base c) (cons (and f (symbol->string f)) fields))]
+      [(dot-call? c)
+       (define f (get-field-symbol (second (uir-call-args c))))
+       (loop (first (uir-call-args c)) (cons (and f (symbol->string f)) fields))]
+      [(uir-var? c)
+       (string-join (cons (uir-symbol-name (uir-var-name c)) (filter values fields)) ".")]
+      [(uir-symbol? c)
+       (string-join (cons (uir-symbol-name c) (filter values fields)) ".")]
+      [(uir-call? c)
+       (string-join (cons (format "(~a)" (callee-site-string (uir-call-callee c)))
+                          (filter values fields)) ".")]
+      [else (string-join (filter values (cons "?" fields)) ".")])))
 
 ;; A Python member access (uir-get) or JS/TS/JSX (call "dot" ...) callee: a
 ;; dotted-through-object chain, as opposed to a bare var/symbol callee. Used to

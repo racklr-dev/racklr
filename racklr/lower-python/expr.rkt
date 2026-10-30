@@ -346,6 +346,10 @@
   ;; second kid the value `test` (the `=` token is filtered out by
   ;; node-children). Emit it as (call "kwarg" (list name value)) so the value
   ;; is preserved for the type-graph search and emit round-trips.
+  ;; A generator expression (`f(x for x in items)`) has a comp_for as the
+  ;; second kid: lower it to (call "gen-exp" (list result loop-var iter
+  ;; filter)) so the loop variable is preserved for receiver-type dataflow
+  ;; instead of being dropped.
   (define kids (node-children cst))
   (cond
     [(and (= (length kids) 2)
@@ -356,6 +360,23 @@
                      (lower-expr (second kids) tk-type tk-value)))]
     [(null? kids)
      (uir-null)]
+    [(and (pair? (cdr kids))
+          (has-comp-for? (second kids)))
+     (let* ([result (lower-expr (first kids) tk-type tk-value)]
+            [comp-for-node
+             (let find ([n (second kids)])
+               (cond [(any-tree? n)
+                      (if (eq? (any-tree-tag n) 'comp_for)
+                          n
+                          (for/or ([c (any-tree-children n)])
+                            (cond [(any-tree? c) (find c)]
+                                  [(and (list? c) (pair? c))
+                                   (for/or ([cc c]) (find cc))]
+                                  [else #f])))]
+                     [else #f]))]
+            [parts (lower-comp-for comp-for-node tk-type tk-value)])
+       (uir-call (uir-symbol "gen-exp")
+                 (list result (car parts) (cadr parts) (caddr parts))))]
     [else
      (lower-expr (first kids) tk-type tk-value)]))
 
@@ -557,7 +578,14 @@
                 [t (cst-tokens-deep c tk-type tk-value)]
                 #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
       (second t)))
-  (define loop-var (if (pair? var-names) (uir-symbol (car var-names)) (uir-symbol "?var")))
+  ;; One loop name is a plain symbol; a destructuring loop (`for a, b in it`)
+  ;; carries every bound name as a uir-list so the census can type each element
+  ;; projection instead of dropping the second name and reporting it unbound.
+  (define loop-var
+    (cond
+      [(null? var-names) (uir-symbol "?var")]
+      [(= (length var-names) 1) (uir-symbol (car var-names))]
+      [else (uir-list (map (λ (nm) (uir-symbol nm)) var-names))]))
   (define iterable
     (for/or ([c raw-kids])
       (and (cst-node? c) (eq? (any-tree-tag c) 'or_test)

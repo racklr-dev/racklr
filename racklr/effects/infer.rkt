@@ -40,6 +40,8 @@
   annotate-effects
   collect-functions
   collect-methods
+  collect-function-params
+  collect-method-params
   classify-call
   direct-effect-of-callee
   effect-op-of-callee
@@ -49,9 +51,16 @@
 ;; over the call graph. Every callee named by an `edge` classification must be
 ;; present in `known` (the intra-program name table); a name missing from
 ;; `known` falls back to an empty row.
-(define (compute-effect-rows fns methods class-names supers known)
+(define (compute-effect-rows fns methods class-names supers known
+                             #:provenance-table [prov-box #f])
   (define direct-rows (make-hash))  ;; name → uir-effect-row (direct only)
   (define edges (make-hash))        ;; name → (listof name-symbol)
+  (define direct-prov (make-hash))  ;; name → (hash effect-name → (listof site))
+
+  ;; Merge a classifying call-site string into an effect→sites hash, dropping
+  ;; duplicates and preserving first-seen order.
+  (define (sites-add! h eff site)
+    (hash-update! h eff (λ (l) (if (member site l) l (cons site l))) '()))
 
   (define all-names (append (hash-keys fns) (hash-keys methods)))
   (for ([n (in-list all-names)])
@@ -63,20 +72,36 @@
     (define callees '())
     (define (visit! node)
       (if (uir-call? node)
-          (let ([cls (classify-call (uir-call-callee node) known owner class-names supers)])
+          (let* ([callee (uir-call-callee node)]
+                 [cls (classify-call callee known owner class-names supers)])
             (case (car cls)
               [(edge) (set! callees (cons (cdr cls) callees))]
-              [(effect) (set! effects (cons (cdr cls) effects))]
+              [(effect)
+               ;; (cdr cls) is the effect-name symbol (effects->row builds the
+               ;; entry), so it keys the provenance table directly.
+               (define e (cdr cls))
+               (set! effects (cons e effects))
+               (when prov-box
+                 (sites-add! (hash-ref! direct-prov n make-hash)
+                             e
+                             (callee-site-string callee)))]
               [(pure) (void)]
-              [(unknown) (set! effects (cons 'unknown effects))]))
+              [(unknown)
+               (set! effects (cons 'unknown effects))
+               (when prov-box
+                 (sites-add! (hash-ref! direct-prov n make-hash)
+                             'unknown
+                             (callee-site-string callee)))]))
           (void)))
     (walk-body body visit!)
     (hash-set! direct-rows n (effects->row effects))
     (hash-set! edges n (sort (remove-duplicates callees) symbol<?)))
 
   (define rows (make-hash))
+  (define prov (and prov-box (make-hash)))
   (for ([n (in-list all-names)])
-    (hash-set! rows n (hash-ref direct-rows n)))
+    (hash-set! rows n (hash-ref direct-rows n))
+    (when prov (hash-set! prov n (hash-copy (hash-ref direct-prov n (make-hash))))))
 
   (let loop ()
     (define changed? #f)
@@ -86,20 +111,31 @@
         (map (λ (g) (hash-ref rows g (empty-row))) (hash-ref edges n)))
       (define new-row
         (foldl infer-row-union (hash-ref direct-rows n) callee-rows))
-      (if (equal? current new-row)
-          (void)
-          (begin
-            (set! changed? #t)
-            (hash-set! rows n new-row))))
+      (unless (equal? current new-row)
+        (set! changed? #t)
+        (hash-set! rows n new-row))
+      ;; Provenance propagates alongside the row: an effect n inherits from a
+      ;; callee g keeps g's classifying call sites, prefixed with g (the call
+      ;; chain), so a finding reads as the chain that produced the effect.
+      (when prov
+        (define np (hash-copy (hash-ref direct-prov n (make-hash))))
+        (for ([g (in-list (hash-ref edges n))])
+          (for ([(e sites) (in-hash (hash-ref prov g (make-hash)))])
+            (for ([s (in-list sites)])
+              (sites-add! np e (format "~a::~a" g s)))))
+        (unless (equal? np (hash-ref prov n))
+          (set! changed? #t)
+          (hash-set! prov n np))))
     (if changed? (loop) (void)))
 
+  (when prov-box (set-box! prov-box prov))
   rows)
 
 ;; Compute the fixpoint effect rows for a single program: name-symbol →
 ;; uir-effect-row. Only calls into functions/methods defined in `program` (or a
 ;; program passed together with it) resolve as edges; anything else falls to
 ;; `unknown`.
-(define (infer-effects program)
+(define (infer-effects program #:provenance-table [prov-box #f])
   (define fns (collect-functions program))
   (define methods (collect-methods program))
   (define class-names (collect-class-names program))
@@ -107,7 +143,8 @@
   (define known (make-hash))
   (for ([(n _) (in-hash fns)]) (hash-set! known n #t))
   (for ([(n _) (in-hash methods)]) (hash-set! known n #t))
-  (compute-effect-rows fns methods class-names supers known))
+  (compute-effect-rows fns methods class-names supers known
+                       #:provenance-table prov-box))
 
 ;; ── write-back ──────────────────────────────────────────────────────
 

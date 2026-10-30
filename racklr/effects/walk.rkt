@@ -30,6 +30,8 @@
 (define (walk-body n visit!)
   (cond
     [(uir-fn? n) (void)]
+    [(uir-method? n) (void)]
+    [(uir-class? n) (void)]
     [(arrow-call? n) (void)]
     [(function-expr-call? n) (void)]
     [(struct? n)

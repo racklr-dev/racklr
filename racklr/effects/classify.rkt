@@ -72,6 +72,17 @@
 ;; direct effect roots and pure stdlib).
 (define (classify-nonedge callee)
   (cond
+    [(and (uir-call? callee)
+          (not (synthetic-callee? (uir-call-callee callee))))
+     ;; Higher-order application `(sync_to_async(fn))(...)`: calling a call
+     ;; result inherits the inner call's classification (the wrapper's effect).
+     ;; The inner `sync_to_async(fn)` call is itself a separate uir-call node,
+     ;; so its effect is also counted there; this clause only stops the outer
+     ;; application from falling to `unknown`. Synthetic call encodings
+     ;; (`(dot a b)`, `(=> ...)`, `(function ...)`) must NOT recurse here:
+     ;; they are member accesses / lambdas whose own classification is what
+     ;; the following clauses (and direct-effect-of-callee) compute.
+     (classify-nonedge (uir-call-callee callee))]
     [(synthetic-callee? callee) (cons 'pure #f)]
     [(pure-builtin-callee? callee) (cons 'pure #f)]
     [(pure-stdlib-bare-callee? callee) (cons 'pure #f)]

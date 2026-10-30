@@ -4,323 +4,216 @@
 ;;
 ;; Whole-program (cross-file) effect inference: a single monotone fixpoint over
 ;; the union of every component's call graph, with component-qualified node
-;; identity and cross-file superclass resolution.
+;; identity and cross-file superclass resolution. The cross-file callee
+;; classifier lives in classify-all.rkt; the type/effect relation
+;; materialization and its deterministic join live in type-relations.rkt; this
+;; module is the fixpoint driver that collects the tables, joins the relations,
+;; and folds the call graph.
 
 (require racklr/uir
-         racklr/effects/imports
-         racklr/effects/shape
+         racklr/effects/class-resolve
          racklr/effects/collect
          racklr/effects/walk
          racklr/effects/rows
-         racklr/effects/classify
-         racklr/effects/receiver-type)
+         racklr/effects/shape
+         racklr/effects/receiver-type
+         racklr/effects/classify-all
+         racklr/effects/type-relations
+         racklr/effects/library-tokens)
 
-(provide infer-effects-all)
+(provide infer-effects-all classify-call-all)
 
-;; Component defining a class named `class-name`, from the point of view of
-;; `comp` (the file making the reference). A local definition wins; a
-;; globally-unique definition resolves; anything else is ambiguous → #f.
-(define (resolve-class-component class-name comp class-defs)
-  (define defs (remove-duplicates (hash-ref class-defs class-name '())))
+;; Binding-kind helpers for the `#:unknown-tally` diagnostic: what kind of
+;; value a local variable was bound from, so the census can attribute a
+;; `local` receiver to the lever that would resolve it (call-result
+;; projection, attribute copy, alias, loop variable, function value, or
+;; literal). `unbound` means the name is not assigned in the body (a global,
+;; import, closure capture, or class-level name).
+
+(define (var-symbol v)
   (cond
-    [(null? defs) #f]
-    [(member comp defs) comp]
-    [(= (length defs) 1) (car defs)]
+    [(uir-var? v) (string->symbol (uir-symbol-name (uir-var-name v)))]
+    [(uir-symbol? v) (string->symbol (uir-symbol-name v))]
     [else #f]))
 
-;; Ordered list of `(component . Class.method)` keys a `self.m()`/`cls.m()`/
-;; `KnownClass.m()` call could target, most-derived first, following the
-;; superclass chain across files. Stops at a superclass whose name is ambiguous
-;; or unknown (such calls stay `unknown` rather than resolving to the wrong
-;; file's class).
-(define (mro-method-keys comp class-name mname methods class-defs comp-supers)
-  (define seen (make-hash))
-  (define out '())
-  (let loop ([c comp] [cls class-name])
-    (when (and c cls (not (hash-has-key? seen (cons c cls))))
-      (hash-set! seen (cons c cls) #t)
-      (define key (cons c (qualified-name-symbol cls mname)))
-      (when (hash-has-key? methods key) (set! out (cons key out)))
-      (for ([s (in-list (hash-ref comp-supers (cons c cls) '()))])
-        (define c2 (resolve-class-component s c class-defs))
-        (when c2 (loop c2 s)))))
-  (reverse out))
-
-;; `(component . name)` keys a method callee could resolve to (the whole-program
-;; counterpart of `method-callee-qualified-names`).
-(define (method-callee-keys callee comp owner methods class-defs comp-supers)
+(define (binding-value-kind v)
   (cond
-    [(not (uir-get? callee)) '()]
-    [else
-     (let* ([mname (get-field-symbol (uir-get-field callee))]
-            [base (uir-get-base callee)])
-       (cond
-         [(and mname (super-call? base))
-          ;; super().m() → each parent of the enclosing class, resolved to the
-          ;; file that defines it (most-derived first).
-          (if owner
-              (append-map
-               (λ (s)
-                 (let ([c2 (resolve-class-component s comp class-defs)])
-                   (if c2 (mro-method-keys c2 s mname methods class-defs comp-supers) '())))
-               (hash-ref comp-supers (cons comp owner) '()))
-              '())]
-         [(and mname (uir-var? base))
-          (let ([base-name (string->symbol (uir-symbol-name (uir-var-name base)))])
-            (cond
-              [(memq base-name '(self cls))
-               (or (and owner (mro-method-keys comp owner mname methods class-defs comp-supers)) '())]
-              [else
-               (define c (resolve-class-component base-name comp class-defs))
-               (or (and c (mro-method-keys c base-name mname methods class-defs comp-supers)) '())]))]
-         [else '()]))]))
+    [(wrapped-fn v) 'fn]
+    [(uir-call? v) 'call-result]
+    [(uir-get? v) 'attr]
+    [(uir-var? v) 'alias]
+    [(uir-symbol? v) 'alias]
+    [(uir-fn? v) 'fn]
+    [else 'literal]))
 
-;; `(component . name)` key for a bare function call `f(...)`: the local
-;; definition wins, else a globally-unique definition, else #f (ambiguous).
-(define (bare-function-key nm comp fn-defs known)
-  (cond
-    [(not nm) #f]
-    [else
-     (define local (cons comp nm))
-     (define defs (remove-duplicates (hash-ref fn-defs nm '())))
-     (cond
-       [(hash-has-key? known local) local]
-       [(and (= (length defs) 1) (pair? defs))
-        (define k (cons (car defs) nm))
-        (and (hash-has-key? known k) k)]
-       [else #f])]))
-
-;; Resolve an imported-name receiver through the import graph to an effect
-;; capability (or 'pure). A `name.m(...)` call whose `name` was bound by an
-;; import to a module or class resolves structurally instead of by name
-;; heuristics:
-;;   module handle → the module's effect domain (coarse), or 'pure if tagged so
-;;   class  handle → Class.method's derived cap, else the class's module domain
-;; Returns an effect-cap, 'pure, or #f (not an imported-name call).
-(define (imported-effect callee comp import-env)
-  (and import-env
-       (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
-              [exports (import-env-exports import-env)]
-              [caps (import-env-caps import-env)]
-              [mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee)))]
-              [base (and (uir-get? callee) (uir-get-base callee))]
-              [base-name (and base (uir-var? base)
-                              (string->symbol (uir-symbol-name (uir-var-name base))))])
-         (and modpath mname base-name
-              (not (memq base-name '(self cls)))
-              (let* ([e (hash-ref exports modpath #f)]
-                     [h (and e (hash-ref e (symbol->string base-name) #f))])
-                (and (handle? h)
-                     (case (handle-kind h)
-                       [(class)
-                        (define cap (hash-ref caps (format "~a.~a" (handle-name h) mname) #f))
-                        (cond
-                          [cap cap]
-                          [else
-                           (define dom (module-effect-tag (handle-path h)))
-                           (cond [(eq? dom 'pure) 'pure]
-                                 [dom (effect-cap dom '())]
-                                 [else #f])])]
-                       [(module)
-                        (define dom (module-effect-tag (handle-path h)))
-                        (cond [(eq? dom 'pure) 'pure]
-                              [dom (effect-cap dom '())]
-                              [else #f])]
-                       [else #f])))))))
-
-;; Effect of a `Class.method` call whose receiver's class was tracked by
-;; receiver-type dataflow (`x = KnownClass(...)` / `self.attr = KnownClass(...)`):
-;; resolve the class to its defining component and derive the typed capability
-;; from that component's module domain. 'pure when the class's module is tagged
-;; pure (a pure receiver's method cannot be effectful); #f when the class is
-;; unresolvable or its module untagged (falls through to the name heuristics).
-(define (receiver-effect comp class-name mname class-defs import-env)
-  (and import-env
-       (let ([c (resolve-class-component class-name comp class-defs)])
-         (and c
-              (let ([modpath (hash-ref (import-env-comp-modpath import-env) c #f)])
-                (and modpath
-                     (let ([domain (module-effect-tag modpath)])
-                       (cond
-                         [(eq? domain 'pure) 'pure]
-                         [domain (effect-cap domain (method-ops domain modpath
-                                                                (symbol->string class-name)
-                                                                (symbol->string mname)))]
-                         [else #f]))))))))
-
-;; A dotted call rooted at a known class name (`X.objects.Y`): the manager /
-;; related attribute is installed by a framework metaclass, not by any
-;; assignment in a method body, so the receiver-type env cannot see it. Resolve
-;; the class name to its defining module's domain — the same class→module→domain
-;; resolution used for tracked receivers — so the capability is derived from the
-;; call chain rather than from a `objects` name table.
-(define (manager-effect callee comp class-defs import-env)
-  (and import-env
-       (member-access-callee? callee)
-       (let* ([base (member-access-base callee)]
-              [root (dotted-root callee)]
-              [mname (effect-op-of-callee callee)])
-         (and base root mname
-              (member-access-callee? base)          ; X.attr.m, not X.m
-              (not (memq root '(self cls)))
-              (hash-has-key? class-defs root)
-              (receiver-effect comp root mname class-defs import-env)))))
-
-(define (classify-call-all callee known methods class-defs fn-defs comp-supers comp owner [import-env #f] [rt #f])
-  (define nm (callee-name callee))
-  (define keys (method-callee-keys callee comp owner methods class-defs comp-supers))
-  (define key (for/or ([k (in-list keys)] #:when (hash-has-key? known k)) k))
-  (cond
-    [(and key (hash-has-key? known key)) (cons 'edge key)]
-    [(bare-function-key nm comp fn-defs known) => (λ (k) (cons 'edge k))]
-    [else
-     ;; A call to a known class name is a constructor (pure instantiation), not
-     ;; an effectful call — this also seeds the receiver-type dataflow without
-     ;; polluting the enclosing function with `unknown`.
-     (define ctor (constructor-class callee class-defs))
-     (cond
-       [ctor (cons 'pure #f)]
-       [else
-        ;; A locally-tracked receiver (x = KnownClass(...)) shadows any import
-        ;; of the same name, so it is resolved before the import graph.
-        (define rcls (and rt (uir-get? callee)
-                           (receiver-class-of rt (uir-get-base callee))))
-        (define mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee))))
-        (define re (and rcls mname (receiver-effect comp rcls mname class-defs import-env)))
-        (cond
-          [(eq? re 'pure) (cons 'pure #f)]
-          [(effect-cap? re) (cons 'effect re)]
-           [else
-            (define me (manager-effect callee comp class-defs import-env))
-            (cond
-              [(eq? me 'pure) (cons 'pure #f)]
-              [(effect-cap? me) (cons 'effect me)]
-              [else
-               (define ie (imported-effect callee comp import-env))
-               (cond
-                 [(eq? ie 'pure) (cons 'pure #f)]
-                 [(effect-cap? ie) (cons 'effect ie)]
-                 [else (classify-nonedge callee)])])])])]))
-
-;; The derived capability for a call-graph method key `(component . Class.method)`,
-;; resolved COMPONENT-AWARE: the component's own module path supplies the domain,
-;; so same-named classes in different modules do not collide (unlike the bare-key
-;; caps table). Returns an effect-cap or #f. This is the "blessed summary" from
-;; the per-library config — a typed op like `db<Model>.write` is asserted at the
-;; method's own definition site, so it flows through the fixpoint to every
-;; caller even when the method body descends into unclassified plumbing.
-(define (method-cap k import-env)
-  (and import-env
-       (let* ([comp (car k)]
-              [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)])
-         (and modpath
-              (let* ([s (symbol->string (cdr k))]
-                     [cls-str (regexp-replace #rx"[.].*$" s "")]
-                     [m-str (regexp-replace #rx"^[^.]*[.]" s "")])
-                (and (not (string=? cls-str s))
-                     (let ([domain (module-effect-tag modpath)])
-                       (and domain
-                            (not (eq? domain 'pure))
-                            (effect-cap domain (method-ops domain modpath cls-str m-str))))))))))
-
-;; Self-attribute assignments (`self.attr = KnownClass(...)`) collected across
-;; every method of a class, keyed by (cons comp class). This is the per-CLASS
-;; counterpart of the per-function receiver env: attributes set in __init__ (or
-;; any method) flow to every other method, so `self.attr.m(...)` resolves even
-;; when the assignment is not in the method body itself.
-(define (class-self-attrs comp-programs class-defs)
-  (define h (make-hash))
-  (for ([cp (in-list comp-programs)])
-    (define comp (car cp))
-    (for ([(n body) (in-hash (collect-methods (cdr cp)))])
-      (define owner (class-name-of-name n))
-      (define sa (receiver-types-self-attrs (infer-receiver-types body class-defs)))
-      (define key (cons comp owner))
-      (define cur (hash-ref h key #f))
-      (cond
-        [(not cur) (unless (zero? (hash-count sa)) (hash-set! h key (hash-copy sa)))]
-        [else (for ([(attr kls) (in-hash sa)]) (hash-set! cur attr kls))])))
-  h)
-
-;; Inherited self-attribute environment for a class, following the MRO across
-;; files with the most-derived class first: each attribute keeps the first
-;; (most-derived) assignment, so a subclass's `self.attr = ...` shadows a
-;; base's. Returns a receiver-types with no locals (locals are per-function).
-(define (class-attr-env comp class-name class-attrs class-defs comp-supers)
-  (define seen (make-hash))
-  (define acc (make-hash))
-  (let loop ([c comp] [cls class-name])
-    (when (and c cls (not (hash-has-key? seen (cons c cls))))
-      (hash-set! seen (cons c cls) #t)
-      (for ([(attr kls) (in-hash (hash-ref class-attrs (cons c cls) (hash)))])
-        (unless (hash-has-key? acc attr) (hash-set! acc attr kls)))
-      (for ([s (in-list (hash-ref comp-supers (cons c cls) '()))])
-        (define c2 (resolve-class-component s c class-defs))
-        (when c2 (loop c2 s)))))
-  (receiver-types (hash) acc))
-
-(define (key<? a b)
-  (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
+;; Comprehension loop variable: `(call "TYPE-comp" (list result loop-var iter
+;; filter))` binds `loop-var` over the iterable, so an element method call
+;; inside the result expression is a comp-var (needs element-type dataflow),
+;; not an unbound name. Returns the loop-var uir-symbol, or #f.
+(define (comp-loop-var node)
+  (and (uir-call? node)
+       (let ([callee (uir-call-callee node)])
+         (and (uir-symbol? callee)
+              (memq (string->symbol (uir-symbol-name callee))
+                    '(list-comp dict-comp set-comp gen-exp))
+              (pair? (cdr (uir-call-args node)))
+              (second (uir-call-args node))))))
 
 ;; Whole-program effect rows: (component . name) → uir-effect-row, computed by
 ;; a single fixpoint over the union of every program's call graph. Takes a list
 ;; of `(component . program)` pairs.
-(define (infer-effects-all comp-programs #:import-env [import-env #f])
+(define (infer-effects-all comp-programs #:import-env [import-env #f] #:unknown-tally [unknown-tally #f])
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
-  (define comp-supers (make-hash))   ;; (cons comp class) → (listof super-symbol)
+  (define comp-supers (make-hash))   ;; (cons comp class) → (listof super-ref: symbol | (first . full-dotted))
   (define class-defs (make-hash))    ;; class-name → (listof comp)
   (define fn-defs (make-hash))       ;; fn-name → (listof comp)
+  (define fn-params (make-hash))     ;; (cons comp name) → params
+  (define method-params (make-hash)) ;; (cons comp name) → params
   (for ([cp (in-list comp-programs)])
     (define comp (car cp))
     (define program (cdr cp))
     (for ([(n body) (in-hash (collect-functions program))])
       (hash-set! fns (cons comp n) body)
       (hash-update! fn-defs n (λ (l) (cons comp l)) '()))
+    (for ([(n ps) (in-hash (collect-function-params program))])
+      (hash-set! fn-params (cons comp n) ps))
     (for ([(n body) (in-hash (collect-methods program))])
       (hash-set! methods (cons comp n) body))
+    (for ([(n ps) (in-hash (collect-method-params program))])
+      (hash-set! method-params (cons comp n) ps))
     (for ([(n _) (in-hash (collect-class-names program))])
       (hash-update! class-defs n (λ (l) (cons comp l)) '()))
     (for ([(n chain) (in-hash (collect-supers program))])
       (hash-set! comp-supers (cons comp n) chain)))
 
-  (define class-attrs (class-self-attrs comp-programs class-defs))
+  ;; Resolve every super reference to its (component . real-class-name) pair: a
+  ;; bare name resolves via class-defs or an import alias (`from x import C as
+  ;; Alias`); a qualified name (`base.Serializer`) follows the module alias
+  ;; through the import graph to the class it names. Pairs (not bare symbols)
+  ;; are what every super-chain consumer now reads.
+  (define mp->comp (modpath-index import-env))
+  (for ([(k chain) (in-hash comp-supers)])
+    (hash-set! comp-supers k
+               (for/list ([s (in-list chain)])
+                 (resolve-super-ref s (car k) class-defs import-env mp->comp))))
+
+  ;; Materialize the type relations and close them with the deterministic join:
+  ;; assign (locals), self-attr (per-class attrs), param (concrete call-chain
+  ;; param types), and return (projected return class).
+  (define tr (materialize-type-relations comp-programs class-defs import-env))
+  (close-type-relations! tr
+                         #:comp-programs comp-programs
+                         #:class-defs class-defs
+                         #:import-env import-env
+                         #:fns fns
+                         #:methods methods
+                         #:fn-params fn-params
+                         #:method-params method-params
+                         #:fn-defs fn-defs
+                         #:comp-supers comp-supers)
+  (define assign (type-relations-assign tr))
+  (define self-attr (type-relations-self-attr tr))
+  (define return-types (type-relations-return tr))
 
   (define known (make-hash))
   (for ([(k _) (in-hash fns)]) (hash-set! known k #t))
   (for ([(k _) (in-hash methods)]) (hash-set! known k #t))
 
   (define all-keys (append (hash-keys fns) (hash-keys methods)))
+
+  ;; Per-key receiver env: locals from the closed assign relation, self-attrs
+  ;; from the class's MRO-closed self-attr relation.
+  (define (rt-of k)
+    (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
+    (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
+    (receiver-types (hash-ref assign k (hash))
+                    (or (and class-env (receiver-types-self-attrs class-env)) (hash))))
+
+  ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))
   (define edges (make-hash))
   (for ([k (in-list all-keys)])
     (define body (if (hash-has-key? fns k) (hash-ref fns k) (hash-ref methods k)))
     (define comp (car k))
     (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
-    (define own-rt (infer-receiver-types body class-defs))
-    (define rt
-      (if owner
-          (receiver-types-merge (class-attr-env comp owner class-attrs class-defs comp-supers)
-                                own-rt)
-          own-rt))
+    (define rt (rt-of k))
     (define effects
       (let ([cap (and (hash-has-key? methods k) (method-cap k import-env))])
         (if cap (list cap) '())))
     (define callees '())
+    (define param-names
+      (let ([ps (or (hash-ref fn-params k #f) (hash-ref method-params k #f))])
+        (and ps
+             (for/list ([p (in-list ps)]
+                        #:when (and (uir-typed-param? p)
+                                    (uir-symbol? (uir-typed-param-name p))))
+               (string->symbol (uir-symbol-name (uir-typed-param-name p)))))))
+    (define local-kinds (make-hash))   ;; var -> binding-kind, maintained in walk order
     (define (visit! node)
+      ;; Track what each local was bound from, so an unknown `local` receiver
+      ;; can be attributed to its binding kind (dominant assignment).
+      (cond
+        [(and (uir-set!? node) (var-symbol (uir-set!-name node)))
+         => (λ (lhs) (hash-set! local-kinds lhs (binding-value-kind (uir-set!-value node))))]
+        [(and (uir-ann-set!? node) (uir-ann-set!-value node)
+              (var-symbol (uir-ann-set!-lhs node)))
+         => (λ (lhs) (hash-set! local-kinds lhs (binding-value-kind (uir-ann-set!-value node))))]
+        [(and (uir-for-each? node) (var-symbol (uir-for-each-var node)))
+         => (λ (v) (hash-set! local-kinds v 'loop-var))]
+        [(comp-loop-var node)
+         => (λ (lv)
+              (cond
+                [(uir-list? lv)
+                 (for ([v (in-list (uir-list-items lv))])
+                   (define vs (var-symbol v))
+                   (when vs (hash-set! local-kinds vs 'comp-var)))]
+                [else
+                 (define vs (var-symbol lv))
+                 (when vs (hash-set! local-kinds vs 'comp-var))]))]
+        [(and (uir-let? node) (uir-symbol? (uir-let-name node)))
+         (hash-set! local-kinds
+                    (string->symbol (uir-symbol-name (uir-let-name node)))
+                    (binding-value-kind (uir-let-value node)))]
+        [(uir-with? node)
+         (for ([item (in-list (uir-with-items node))])
+           (define v (and (pair? item) (var-symbol (second item))))
+           (when v
+             (hash-set! local-kinds v
+                        (binding-value-kind (and (pair? item) (first item))))))]
+        [(uir-try? node)
+         (for ([c (in-list (uir-try-catches node))])
+           (define v (and (pair? c) (var-symbol (second c))))
+           (when v (hash-set! local-kinds v 'exception)))]
+        [else (void)])
       (if (uir-call? node)
-          (let ([cls (classify-call-all (uir-call-callee node) known methods
-                                        class-defs fn-defs comp-supers comp owner
-                                        import-env rt)])
+            (let ([cls (classify-call-all (uir-call-callee node) known methods
+                                        class-defs fn-defs comp-supers self-attr comp owner
+                                        import-env rt return-types)])
             (case (car cls)
               [(edge) (set! callees (cons (cdr cls) callees))]
               [(effect) (set! effects (cons (cdr cls) effects))]
               [(pure) (void)]
-              [(unknown) (set! effects (cons 'unknown effects))]))
+              [(unknown)
+               (set! effects (cons 'unknown effects))
+               (when unknown-tally
+                 (define callee (uir-call-callee node))
+                 (define rx
+                   (and (uir-get? callee)
+                        (var-symbol (uir-get-base callee))))
+                 (set-box! unknown-tally
+                           (cons (list (car k) (cdr k)
+                                       (receiver-shape callee param-names)
+                                       (effect-op-of-callee callee)
+                                       rx
+                                       (and rx (hash-ref local-kinds rx 'unbound)))
+                                 (unbox unknown-tally))))]))
           (void)))
     (walk-body body visit!)
     (hash-set! direct-rows k (effects->row effects))
-    (hash-set! edges k (sort (remove-duplicates callees) key<?)))
+    (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
+                                                            (string<? (format "~a.~a" (car a) (cdr a))
+                                                                      (format "~a.~a" (car b) (cdr b)))))))
 
   (define rows (make-hash))
   (for ([k (in-list all-keys)]) (hash-set! rows k (hash-ref direct-rows k)))

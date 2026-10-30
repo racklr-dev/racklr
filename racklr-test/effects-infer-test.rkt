@@ -591,18 +591,22 @@
                                     (list (uir-number "1.5"))))))
   (check-equal? (hash-ref (infer-effects p) 'f) (empty-row)))
 
-(define (test-datetime-now-pure)
-  ;; datetime is a whole-module-pure root.
+(define (test-datetime-now-is-time)
+  ;; datetime is a whole-module-pure root, but `now()` reads the clock: the
+  ;; op-level time check runs before whole-module purity, so it is `time`.
   (define p (prog (fn "f" (uir-call (dot (v "datetime") "now") '()))))
-  (check-equal? (hash-ref (infer-effects p) 'f) (empty-row)))
+  (define r (hash-ref (infer-effects p) 'f))
+  (check-equal? (modality r 'time) 'may)
+  (check-false (row-lookup r 'unknown)))
 
-(define (test-os-path-getsize-stays-unknown)
-  ;; os.path.getsize is a filesystem/metadata probe, not a pure path op; it must
-  ;; not be swept into the pure table (or into io).
+(define (test-os-path-getsize-is-io)
+  ;; os.path.getsize is a filesystem metadata read (stat(2) observes external
+  ;; state), so it classifies as `io`, not `pure` and not `unknown`.
   (define p (prog (fn "f" (uir-call (dot (dot (v "os") "path") "getsize")
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'unknown) 'unknown))
+  (check-equal? (modality r 'io) 'may)
+  (check-false (row-lookup r 'unknown)))
 
 ;; ── root-aware ORM heuristic ─────────────────────────────────────────
 ;; The name-based ORM fallback must not claim dotted calls on builtin-type or
@@ -611,12 +615,12 @@
 
 (define (test-os-path-exists-not-db)
   ;; os.path.exists has the ORM read-op name `exists` but a stdlib root; it must
-  ;; not classify as `db`. It is a metadata probe, so it stays `unknown`.
+  ;; not classify as `db`. It is a filesystem metadata read → `io`.
   (define p (prog (fn "f" (uir-call (dot (dot (v "os") "path") "exists")
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
   (check-false (row-lookup r 'db))
-  (check-equal? (modality r 'unknown) 'unknown))
+  (check-equal? (modality r 'io) 'may))
 
 (define (test-dict-get-not-db)
   ;; dict.get collides with the QuerySet `get` op; the builtin-type root must win.
@@ -796,6 +800,42 @@
   (define rows (infer-effects p))
   (check-equal? (hash-ref rows 'Derived.run) (empty-row)))
 
+(define (test-super-init-object-base-pure)
+  ;; `class Foo(object): super().__init__()` resolves to object.__init__ via
+  ;; the stdlib type table (object protocol dunders are pure), not unknown.
+  (define p (prog (py-class/super "Foo" (v "object")
+                                  (list (py-method "__init__"
+                                                   (uir-call (uir-get (uir-call (v "super") '())
+                                                                      (uir-string "__init__"))
+                                                             '()))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'Foo.__init__)) (empty-row)))
+
+(define (test-super-init-baseless-pure)
+  ;; `class Foo:` (implicit object base): super().__init__() is pure — the
+  ;; empty parent chain falls back to the object protocol, not unknown.
+  (define p (prog (py-class/super "Foo" (uir-null)
+                                  (list (py-method "__init__"
+                                                   (uir-call (uir-get (uir-call (v "super") '())
+                                                                      (uir-string "__init__"))
+                                                             '()))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'Foo.__init__)) (empty-row)))
+
+(define (test-nested-class-does-not-leak)
+  ;; A nested class inside a function is its own call-graph scope: the nested
+  ;; method's effect stays on the method and must not leak into the enclosing
+  ;; function's row (walk-body must skip uir-class/uir-method boundaries).
+  (define p (prog
+             (fn "outer"
+                  (prog (py-class "Inner"
+                                  (list (py-method "m"
+                                                   (uir-call (dot (v "llm") "query") '()))))))))
+  (define rows (infer-effects-all (list (cons "app.rkt" p))))
+  (check-equal? (hash-ref rows (cons "app.rkt" 'outer)) (empty-row))
+  (check-equal? (row-names (hash-ref rows (cons "app.rkt" 'Inner.m))) '(llm)
+                "nested method keeps its own effect"))
+
 (define (test-super-call-whole-program)
   ;; Base.__init__ (db) lives in another file; Derived.__init__ calls
   ;; super().__init__(). Per-file inference cannot see Base, so it stays
@@ -840,6 +880,57 @@
   (check-equal? (modality (hash-ref rows (cons "a.rkt" 'Command.run)) 'db) 'may)
   (check-equal? (modality (hash-ref rows (cons "b.rkt" 'Command.handle)) 'llm) 'may))
 
+(define (test-constructor-init-param-flows-to-sibling-method)
+  ;; Wrapper.__init__(self, inner) stores self.inner = inner. A caller that
+  ;; constructs Wrapper(Inner(...)) propagates inner=Inner through the
+  ;; constructor args, so Wrapper.run's self.inner.do() resolves to Inner.do
+  ;; (db) — cross-method self-attr dataflow grounded in the concrete call
+  ;; chain rather than a method-name table.
+  (define app
+    (prog
+     (py-class "Inner"
+               (list (py-method "do" (uir-call (dot (v "db") "commit") '()))))
+     (uir-class (uir-symbol "Wrapper") '() '()
+                (list
+                 (uir-method (uir-symbol "__init__")
+                             (list (uir-typed-param (uir-symbol "self") #f #f)
+                                   (uir-typed-param (uir-symbol "inner") #f #f))
+                             (uir-set! (uir-get (v "self") (sym "inner")) (v "inner"))
+                             'public)
+                 (uir-method (uir-symbol "run") '()
+                             (uir-call (dot (uir-get (v "self") (sym "inner")) "do") '())
+                             'public)))
+     (fn "make"
+         (uir-block
+          (list (uir-set! (v "w")
+                          (uir-call (v "Wrapper")
+                                    (list (uir-call (v "Inner") '()))))
+                (uir-call (dot (v "w") "run") '()))))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'Wrapper.run)) 'db) 'may)
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'make)) 'db) 'may))
+
+(define (test-self-arg-resolves-to-owner-class)
+  ;; Coord.copy_from(self, other) calls other.value(); Coord.dup passes self as
+  ;; other. self resolves to the enclosing class Coord, so other.value() is an
+  ;; edge to Coord.value (db), not unknown.
+  (define app
+    (prog
+     (py-class "Coord"
+               (list
+                (py-method "value" (uir-call (dot (v "db") "commit") '()))
+                (uir-method (uir-symbol "copy_from")
+                            (list (uir-typed-param (uir-symbol "self") #f #f)
+                                  (uir-typed-param (uir-symbol "other") #f #f))
+                            (uir-call (dot (v "other") "value") '())
+                            'public)
+                (py-method "dup"
+                           (uir-call (dot (v "self") "copy_from")
+                                     (list (v "self"))))))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'Coord.copy_from)) 'db) 'may)
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'Coord.dup)) 'db) 'may))
+
 (define (test-imported-class-cap-effect)
   ;; `conn.execute(...)` where `conn` was imported to a class whose `execute`
   ;; is tagged db.write: resolves through the import graph to a typed db.write.
@@ -856,6 +947,146 @@
   (check-equal? (modality r 'db) 'may)
   (check-equal? (entry-ops (row-lookup r 'db)) '(db<Connection>.write)))
 
+(define (test-imported-receiver-dataflow)
+  ;; `qs.filter(...)` where `qs` was imported as a CLASS from a db-tagged module
+  ;; (no blessed caps entry): resolves class→module→domain and derives the typed
+  ;; read op from the method name, the same as a locally-tracked receiver.
+  (define p (prog (fn "run"
+                      (uir-call (dot (v "qs") "filter")
+                                (list (uir-record '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "qs" (handle 'class "django.db.models" "QuerySet")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'may)
+  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+
+(define (test-imported-class-ctor-pure)
+  ;; `MigrationLoader(...)` — a class imported bare from an unscanned module —
+  ;; is a pure constructor, not `unknown`.
+  (define p (prog (fn "run" (uir-call (v "MigrationLoader") '()))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '()))
+
+(define (test-imported-fn-effect)
+  ;; `get_migration_name_timestamp()` — a bare function imported from an
+  ;; unscanned db-tagged module — resolves to the module's effect domain (db),
+  ;; not `unknown`. The fn handle is never a receiver TYPE, only an effect.
+  (define p (prog (fn "run" (uir-call (v "get_migration_name_timestamp") '()))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "get_migration_name_timestamp"
+                                  (handle 'fn "django.db.migrations.utils"
+                                          "get_migration_name_timestamp")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'may))
+
+(define (test-external-singleton-method-domain)
+  ;; `router.allow_migrate_model(...)` where `router` is a lowercase external
+  ;; binding (a django.db singleton, fn handle): the method call resolves
+  ;; through the singleton's source module domain (django.db -> db), the same
+  ;; coarse library fallback as a module handle — not `unknown`.
+  (define p (prog (fn "run" (uir-call (dot (v "router") "allow_migrate_model") '()))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "router" (handle 'fn "django.db" "router")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'may))
+
+(define (test-external-class-receiver-dataflow)
+  ;; `loader = MigrationLoader(...)` then `loader.get_migration(...)`: the
+  ;; assignment seeds receiver-type dataflow from the imported class handle,
+  ;; and the call resolves class→module→domain (django.db → db) even though
+  ;; `django.db.migrations.loader` is outside the scanned corpus.
+  (define p (prog (fn "run"
+                      (prog (uir-set! (v "loader") (uir-call (v "MigrationLoader") '()))
+                            (uir-call (dot (v "loader") "get_migration")
+                                      (list (uir-string "app")))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'may))
+
+(define (test-param-type-propagation-unannotated-method)
+  ;; `handle(self)` passes its tracked `loader` to `self.handle_merge(loader)`;
+  ;; `handle_merge(self, loader)` (UNANNOTATED — the Python lowerer encodes
+  ;; unannotated params as typed-params with a #f type) then resolves
+  ;; `loader.get_migration(...)` to db through the propagated param type. This
+  ;; is the interprocedural half of receiver-type dataflow: the concrete call
+  ;; chain grounds the callee's param type.
+  (define app
+    (prog
+     (py-class "Command"
+               (list
+                (uir-method (uir-symbol "handle")
+                            (list (uir-typed-param (uir-symbol "self") #f #f))
+                            (prog (uir-set! (v "loader") (uir-call (v "MigrationLoader") '()))
+                                  (uir-call (dot (v "self") "handle_merge")
+                                            (list (v "loader"))))
+                            'public)
+                (uir-method (uir-symbol "handle_merge")
+                            (list (uir-typed-param (uir-symbol "self") #f #f)
+                                  (uir-typed-param (uir-symbol "loader") #f #f))
+                            (uir-call (dot (v "loader") "get_migration")
+                                      (list (uir-string "app")))
+                            'public)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'Command.handle_merge)))
+  (check-equal? (row-names r) '(db)))
+
+(define (test-method-name-collides-with-pure-bare-name)
+  ;; `get_migration_by_prefix` is a pure BARE helper name, but as a METHOD on a
+  ;; tracked MigrationLoader it must classify through the receiver's module
+  ;; domain (django.db → db), not as a pure constructor of that name. Guards
+  ;; the constructor heuristic against method-name collisions.
+  (define app
+    (prog
+     (py-class "Command"
+               (list
+                (uir-method (uir-symbol "find_migration")
+                            (list (uir-typed-param (uir-symbol "self") #f #f)
+                                  (uir-typed-param (uir-symbol "loader") (v "MigrationLoader") #f))
+                            (uir-call (dot (v "loader") "get_migration_by_prefix")
+                                      (list (uir-string "app") (uir-string "0001")))
+                            'public)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'Command.find_migration)))
+  (check-equal? (row-names r) '(db)))
+
 (define (test-imported-module-pure)
   ;; `sqlmod.parse(...)` where `sqlmod` resolves to module `sqlparse` (tagged
   ;; pure): classified pure (no entry), not `unknown`.
@@ -869,6 +1100,23 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'fmt)))
   (check-equal? (row-names r) '()))
+
+(define (test-os-stdlib-lexicon)
+  ;; `os.*` filesystem-stat/fd functions, `os.path` alias modules, and bare
+  ;; stdlib value constructors classify from the injected lexicon (DATA), not
+  ;; `unknown`: metadata reads/fd ops → io, `_exit` → process, `getenv` and
+  ;; `posixpath` path munging → pure, bare constructors → pure or io.
+  (define (row-of stmt)
+    (hash-ref (infer-effects (prog (fn "f" stmt))) 'f))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "exists") '()))) '(io))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "close") '()))) '(io))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "getcwd") '()))) '(io))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "_exit") '()))) '(process))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "getenv") '()))) '())
+  (check-equal? (row-names (row-of (uir-call (dot (v "posixpath") "splitext") '()))) '())
+  (check-equal? (row-names (row-of (uir-call (v "md5") '()))) '())
+  (check-equal? (row-names (row-of (uir-call (v "Lock") '()))) '())
+  (check-equal? (row-names (row-of (uir-call (v "NamedTemporaryFile") '()))) '(io)))
 
 ;; ── receiver-type dataflow ──────────────────────────────────────────
 ;; `x = KnownClass(...)` / `self.attr = KnownClass(...)` tracks the receiver's
@@ -1025,6 +1273,274 @@
                                          #:import-env env)
                       (cons "app.py" 'q)))
   (check-equal? (row-names r) '()))
+
+(define (test-receiver-type-nested-attr)
+  ;; `self.stream = OutputWrapper(); self.stream.file.write(...)`: the receiver
+  ;; chain crosses two object boundaries (self.stream → OutputWrapper → its
+  ;; `file` attr → File), so it must resolve through the class attribute graph
+  ;; to typed io<File>.write instead of falling to `unknown`.
+  (define io
+    (prog (py-class "OutputWrapper"
+                    (list (py-method "__init__"
+                                     (uir-set! (uir-get (v "self") (sym "file"))
+                                               (uir-call (v "File") '())))))
+          (py-class "File" (list (py-method "write" (uir-null))))))
+  (define app
+    (prog (py-class "Command"
+                    (list (py-method "__init__"
+                                     (uir-set! (uir-get (v "self") (sym "stream"))
+                                               (uir-call (v "OutputWrapper") '())))
+                          (py-method "handle"
+                                     (uir-call (dot (uir-get (uir-get (v "self") (sym "stream"))
+                                                             (sym "file"))
+                                                    "write")
+                                               (list (uir-string "x"))))))))
+  (define env
+    (import-env (hash "io.py" "django.core.files"
+                      "app.py" "app")
+                (hash) (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "io.py" io)
+                                               (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'Command.handle)))
+  (check-equal? (row-names r) '(io))
+  (check-equal? (entry-ops (row-lookup r 'io)) '(io<File>.write)))
+
+(define (py-class/field name fields methods)
+  (uir-class (uir-symbol name) '() fields methods))
+
+(define (test-receiver-type-bare-class-ref)
+  ;; `qs_class = QuerySet; qs = qs_class(); qs.filter(...)` — a bare class
+  ;; reference is a tracked receiver type, and a call through a class-valued
+  ;; local produces a tracked instance.
+  (define models (prog (py-class "QuerySet" (list (py-method "filter" (uir-null))))))
+  (define app
+    (prog (fn "run"
+              (uir-block
+               (list (uir-set! (v "qs_class") (v "QuerySet"))
+                     (uir-set! (v "qs") (uir-call (v "qs_class") '()))
+                     (uir-call (dot (v "qs") "filter") '()))))))
+  (define env
+    (import-env (hash "models.py" "django.db.models"
+                      "app.py" "app")
+                (hash) (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "models.py" models)
+                                               (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+
+(define (test-receiver-type-class-field-initializer)
+  ;; Class-level `build_file_class = BuildFile` flows to methods: a call
+  ;; through `self.build_file_class(...)` tracks the result as BuildFile, and
+  ;; `build_file.cleanup()` becomes an intra-program edge to BuildFile.cleanup
+  ;; (the arbitrary-receiver counterpart of self/cls resolution).
+  (define app
+    (prog (py-class "BuildFile"
+                    (list (py-method "cleanup" (uir-call (dot (v "db") "commit") '()))))
+          (py-class/field "Command"
+                          (list (uir-field (sym "build_file_class") (uir-null) (v "BuildFile")))
+                          (list (py-method "run"
+                                           (uir-block
+                                            (list (uir-set! (v "build_file")
+                                                            (uir-call (uir-get (v "self") (sym "build_file_class"))
+                                                                      '()))
+                                                  (uir-call (dot (v "build_file") "cleanup") '()))))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash) (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'Command.run)))
+  (check-equal? (row-names r) '(db)))
+
+(define (test-imported-constructor-receiver)
+  ;; `x = MigrationLoader(...)` where MigrationLoader is imported from a module
+  ;; OUTSIDE the scanned corpus (django.db): the receiver-type env tracks the
+  ;; imported class, and `x.get_migration(...)` classifies through the import
+  ;; namespace's module domain (db) instead of falling to `unknown`.
+  (define app
+    (prog (fn "run"
+              (uir-block
+               (list (uir-set! (v "loader")
+                               (uir-call (v "MigrationLoader") '()))
+                     (uir-call (dot (v "loader") "get_migration")
+                               (list (uir-string "0001"))))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-imported-class-bare-ref-receiver)
+  ;; A bare imported class reference (`x = MigrationLoader`) is a tracked
+  ;; receiver type, and calling through it (`x()`) produces a tracked instance
+  ;; whose method classifies through the import namespace (db).
+  (define app
+    (prog (fn "run"
+              (uir-block
+               (list (uir-set! (v "loader_class") (v "MigrationLoader"))
+                     (uir-set! (v "loader") (uir-call (v "loader_class") '()))
+                     (uir-call (dot (v "loader") "get_migration") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "MigrationLoader"
+                                  (handle 'class "django.db.migrations.loader"
+                                          "MigrationLoader")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db)))
+
+(define (test-param-annotation-receiver)
+  ;; A typed parameter annotation (`def f(qs: QuerySet)`) seeds the receiver-type
+  ;; env from the annotation, so `qs.filter(...)` resolves through the
+  ;; parameter's class (db) instead of falling to `unknown`.
+  (define models (prog (py-class "QuerySet" (list (py-method "filter" (uir-null))))))
+  (define app
+    (prog (uir-fn (uir-symbol "run")
+                  (list (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f))
+                  (uir-call (dot (v "qs") "filter") '())
+                  #f #f)))
+  (define env
+    (import-env (hash "models.py" "django.db.models"
+                      "app.py" "app")
+                (hash) (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "models.py" models)
+                                               (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown))
+  ;; The same seeding must reach METHODS, not only bare functions: a typed
+  ;; `self`-less method param (`def handle(self, qs: QuerySet)`) resolves the
+  ;; same way through collect-method-params.
+  (define app2
+    (prog (py-class "Command"
+                    (list (uir-method (uir-symbol "handle")
+                                      (list (uir-symbol "self")
+                                            (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f))
+                                      (uir-call (dot (v "qs") "filter") '())
+                                      'public)))))
+  (define r2 (hash-ref (infer-effects-all (list (cons "models.py" models)
+                                                (cons "app2.py" app2))
+                                          #:import-env (import-env (hash "models.py" "django.db.models"
+                                                                        "app2.py" "app2")
+                                                                  (hash) (hash)))
+                       (cons "app2.py" 'Command.handle)))
+  (check-equal? (row-names r2) '(db)))
+
+(define (test-imported-module-result-type)
+  ;; `r = httpx.get(...)` then `r.json()`: the imported module function's result
+  ;; type (Response) flows through the receiver-type env, so r.json() is pure —
+  ;; the row is network only, not network+unknown.
+  (define app
+    (prog (fn "lookup"
+              (uir-block
+               (list (uir-set! (v "r")
+                               (uir-call (dot (v "httpx") "get") '()))
+                     (uir-call (dot (v "r") "json") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "httpx" (handle 'module "httpx" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'lookup)))
+  (check-equal? (row-names r) '(network))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-return-type-projection-cached-property)
+  ;; `self._class = Client` in __init__ + `@cached_property _cache` returning
+  ;; `self._class()`: `self._cache.set(...)` resolves `_cache` through its
+  ;; projected return type (Client) to the cache domain, not `unknown`.
+  (define client (prog (py-class "Client" (list (py-method "set" (uir-null))))))
+  (define app
+    (prog (py-class "CacheBackend"
+                    (list (py-method "__init__"
+                                     (uir-set! (uir-get (v "self") (sym "_class"))
+                                               (v "Client")))
+                          (uir-decorated (list (uir-call (v "cached_property") '()))
+                                         (py-method "_cache"
+                                                    (uir-return
+                                                     (uir-call (uir-get (v "self") (sym "_class")) '()))))
+                          (py-method "handle"
+                                     (uir-call (uir-get (uir-get (v "self") (sym "_cache"))
+                                                        (sym "set"))
+                                               '()))))))
+  (define env
+    (import-env (hash "client.py" "django.core.cache"
+                      "app.py" "app")
+                (hash) (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "client.py" client)
+                                               (cons "app.py" app))
+                                         #:import-env env)
+                      (cons "app.py" 'CacheBackend.handle)))
+  (check-equal? (row-names r) '(cache))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-decorated-method-collected)
+  ;; A decorated method ((uir-decorated decos method)) must be collected as a
+  ;; method, not dropped from the class surface.
+  (define p (prog (py-class "A"
+                            (list (uir-decorated (list (uir-call (v "staticmethod") '()))
+                                                 (py-method "m" (uir-null)))))))
+  (check-true (hash-has-key? (collect-methods p) 'A.m))
+  (check-true (hash-has-key? (collect-method-params p) 'A.m)))
+
+(define (test-async-method-collected)
+  ;; An async def method ((call "async-fn" (list method))) must be collected as
+  ;; a method so self.m() / await self.m() resolves through it.
+  (define p (prog (py-class "A"
+                            (list (uir-call (sym "async-fn")
+                                            (list (py-method "m" (uir-null))))))))
+  (check-true (hash-has-key? (collect-methods p) 'A.m)))
+
+(define (test-sync-to-async-bridge)
+  ;; `await sync_to_async(fn, thread_sensitive=True)(args)` is the Django async
+  ;; bridge: the inner `sync_to_async(fn)` call schedules on a thread pool (io),
+  ;; and the outer `(...)(args)` application of its result inherits that io
+  ;; classification instead of falling to `unknown`.
+  (define inner (uir-call (v "sync_to_async")
+                          (list (uir-get (v "self") (sym "get")))))
+  (define outer (uir-call inner (list (v "key"))))
+  (define app
+    (prog (fn "aget" (uir-block (list outer)))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env #f)
+                      (cons "app.py" 'aget)))
+  (check-equal? (row-names r) '(io))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-bare-lexicon-pure-roots)
+  ;; Django pure helpers imported bare from modules outside the scanned tree
+  ;; (_lazy_re_compile, register, deprecate_posargs) and bare pure stdlib
+  ;; helpers (ceil, sizeof, aiter) classify pure, not unknown.
+  (for ([nm '("_lazy_re_compile" "register" "deprecate_posargs" "ceil"
+              "sizeof" "aiter" "OVERLAPPED")])
+    (check-equal? (classify-call (v nm) (hash)) '(pure . #f)
+                  (format "~a is pure" nm))))
+
+(define (test-dotted-lexicon-pure-methods)
+  ;; Dotted pure methods on framework / stdlib receivers outside a
+  ;; django/core-only scan (or on untracked params): value conversion, graph
+  ;; queries, container mutation, runtime predicates.
+  (for ([pr '(("field" "to_python") ("e" "is_silenced") ("g" "leaf_nodes")
+              ("asyncio" "iscoroutine") ("inspect" "isbuiltin")
+              ("s" "isidentifier"))])
+    (define callee (uir-get (v (car pr)) (sym (cadr pr))))
+    (check-equal? (classify-call callee (hash)) '(pure . #f)
+                  (format "~a.~a is pure" (car pr) (cadr pr))))
+  ;; os.remove stays io: the effectful root wins over any pure container name
+  (check-equal? (classify-call (uir-get (v "os") (sym "remove")) (hash))
+                '(effect . io)))
 
 (define (test-annotate-writes-back)
   (define p (prog (fn "summarize"
@@ -1242,6 +1758,113 @@
                    (string=? (uir-symbol-name (uir-call-callee wrapped)) "=>"))
               "pure const arrow is left unwrapped"))
 
+(define (test-call-result-receiver-typing)
+  ;; A call result whose callee is a known stdlib constructor carries its class
+  ;; through a `.attr` chain: Path(...).is_absolute() and md5(...).hexdigest()
+  ;; are pure, open(...).close() is io, and dict(...).get() is pure — NOT db,
+  ;; because receiver-type disambiguation beats the ORM name heuristic.
+  (define p (prog
+             (fn "f" (uir-call (uir-get (uir-call (v "Path") '()) (sym "is_absolute")) '()))
+             (fn "g" (uir-call (uir-get (uir-call (v "md5") '()) (sym "hexdigest")) '()))
+             (fn "h" (uir-call (uir-get (uir-call (v "open") '()) (sym "close")) '()))
+             (fn "i" (uir-call (uir-get (uir-call (v "dict") '()) (sym "get"))
+                               (list (sym "k"))))))
+  (define rows (infer-effects-all (list (cons "m.rkt" p))))
+  (check-equal? (hash-ref rows (cons "m.rkt" 'f)) (empty-row))
+  (check-equal? (hash-ref rows (cons "m.rkt" 'g)) (empty-row))
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'h)) 'io) 'may)
+  (check-equal? (hash-ref rows (cons "m.rkt" 'i)) (empty-row)))
+
+(define (test-self-stdlib-parent-fallback)
+  ;; `self.fail()` where the enclosing class inherits a NON-corpus parent
+  ;; (`unittest.TestCase`): the method lives in the stdlib receiver-type table,
+  ;; so it resolves through the external parent to `pure` instead of `unknown`.
+  (define p (prog
+             (py-class/super "SimpleTestCase" (v "TestCase")
+                             (list (py-method "test_it"
+                                              (uir-call (dot (v "self") "fail")
+                                                        (list (uir-string "boom"))))))))
+  (define rows (infer-effects-all (list (cons "m.rkt" p))))
+  (check-equal? (hash-ref rows (cons "m.rkt" 'SimpleTestCase.test_it)) (empty-row)))
+
+(define (test-self-external-parent-fallback)
+  ;; `self._load_post_and_files()` where the enclosing class inherits a
+  ;; NON-corpus parent imported from a framework module (ASGIRequest ->
+  ;; HttpRequest from django.http.request): resolves through the imported
+  ;; class handle to the module's domain (django.http -> io), not `unknown`.
+  (define app
+    (prog (py-class/super "ASGIRequest" (v "HttpRequest")
+                          (list (py-method "_get_post"
+                                           (uir-call (dot (v "self") "_load_post_and_files")
+                                                     '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "HttpRequest"
+                                  (handle 'class "django.http.request" "HttpRequest")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'ASGIRequest._get_post)))
+  (check-equal? (row-names r) '(io))
+  (check-equal? (modality r 'io) 'may))
+
+(define (test-super-stdlib-parent-typing)
+  ;; super().__init__() with no corpus parent: the stdlib exception protocol is
+  ;; pure (BadHeader -> Exception), while ZipFile.__init__ reads the archive (io).
+  (define p (prog
+             (py-class/super "BadHeader" (v "Exception")
+                             (list (py-method "__init__"
+                                              (uir-call (uir-get (uir-call (v "super") '())
+                                                                 (uir-string "__init__"))
+                                                        '()))))
+             (py-class/super "SingleZip" (v "ZipFile")
+                             (list (py-method "__init__"
+                                              (uir-call (uir-get (uir-call (v "super") '())
+                                                                 (uir-string "__init__"))
+                                                        '()))))))
+  (define rows (infer-effects-all (list (cons "m.rkt" p))))
+  (check-equal? (hash-ref rows (cons "m.rkt" 'BadHeader.__init__)) (empty-row))
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'SingleZip.__init__)) 'io) 'may))
+
+(define (test-super-alias-import-typing)
+  ;; A superclass written as an import alias (`class JSerializer(PySer)`) must
+  ;; resolve through the import graph to the real corpus class, so super().m()
+  ;; follows the aliased MRO instead of falling to unknown.
+  (define python (prog (py-class "Serializer"
+                                 (list (py-method "start" (uir-call (dot (v "db") "commit") '()))))))
+  (define json (prog (py-class/super "JSerializer" (v "PySer")
+                                     (list (py-method "start"
+                                                      (uir-call (uir-get (uir-call (v "super") '())
+                                                                         (uir-string "start"))
+                                                                '()))))))
+  (define env
+    (import-env (hash "python.py" "pkg.python" "json.py" "pkg.json")
+                (hash "pkg.json" (hash "PySer" (handle 'class "pkg.python" "Serializer")))
+                (hash)))
+  (define rows (infer-effects-all (list (cons "python.py" python) (cons "json.py" json))
+                                  #:import-env env))
+  (check-equal? (modality (hash-ref rows (cons "json.py" 'JSerializer.start)) 'db) 'may))
+
+(define (test-module-qualified-super-resolution)
+  ;; `class Serializer(base.Serializer)` must resolve `base` through the import
+  ;; graph to its module, then `Serializer` to that module's class, so
+  ;; super().start() follows the real MRO instead of self-looping on the local
+  ;; class name (which has no `start` of its own).
+  (define base (prog (py-class "Serializer"
+                               (list (py-method "start" (uir-call (dot (v "db") "commit") '()))))))
+  (define python (prog (py-class/super "Serializer" (dot (v "base") "Serializer")
+                                       (list (py-method "start"
+                                                        (uir-call (uir-get (uir-call (v "super") '())
+                                                                           (uir-string "start"))
+                                                                  '()))))))
+  (define env
+    (import-env (hash "python.py" "pkg.python" "base.py" "pkg.base")
+                (hash "pkg.python" (hash "base" (handle 'module "pkg.base" #f))
+                      "pkg.base" (hash "Serializer" (handle 'class "pkg.base" "Serializer")))
+                (hash)))
+  (define rows (infer-effects-all (list (cons "python.py" python) (cons "base.py" base))
+                                  #:import-env env))
+  (check-equal? (modality (hash-ref rows (cons "python.py" 'Serializer.start)) 'db) 'may))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -1317,8 +1940,8 @@
   (test-json-load-stays-unknown)
   (test-re-compile-pure)
   (test-math-floor-pure)
-  (test-datetime-now-pure)
-  (test-os-path-getsize-stays-unknown)
+  (test-datetime-now-is-time)
+  (test-os-path-getsize-is-io)
   (test-os-path-exists-not-db)
   (test-dict-get-not-db)
   (test-list-reverse-not-db)
@@ -1337,11 +1960,22 @@
   (test-dotted-super-name-resolution)
   (test-super-call-resolution)
   (test-super-call-skips-self-override)
+  (test-super-init-object-base-pure)
+  (test-super-init-baseless-pure)
+  (test-nested-class-does-not-leak)
   (test-super-call-whole-program)
   (test-whole-program-cross-file-inheritance)
   (test-whole-program-collision-stays-distinct)
   (test-imported-class-cap-effect)
+  (test-imported-receiver-dataflow)
+  (test-imported-class-ctor-pure)
+  (test-imported-fn-effect)
+  (test-external-singleton-method-domain)
+  (test-external-class-receiver-dataflow)
+  (test-param-type-propagation-unannotated-method)
+  (test-method-name-collides-with-pure-bare-name)
   (test-imported-module-pure)
+  (test-os-stdlib-lexicon)
   (test-receiver-type-local-constructor)
   (test-receiver-type-self-attr)
   (test-receiver-type-pure-class)
@@ -1349,6 +1983,19 @@
   (test-receiver-type-class-attr-cross-file)
   (test-receiver-type-manager-attr)
   (test-receiver-type-manager-attr-pure)
+  (test-receiver-type-nested-attr)
+  (test-receiver-type-bare-class-ref)
+  (test-receiver-type-class-field-initializer)
+  (test-imported-constructor-receiver)
+  (test-imported-class-bare-ref-receiver)
+  (test-param-annotation-receiver)
+  (test-imported-module-result-type)
+  (test-return-type-projection-cached-property)
+  (test-decorated-method-collected)
+  (test-async-method-collected)
+  (test-sync-to-async-bridge)
+  (test-bare-lexicon-pure-roots)
+  (test-dotted-lexicon-pure-methods)
   (test-annotate-writes-back)
   (test-annotate-preserves-explicit-row)
   (test-annotate-skips-empty-inferred)
@@ -1369,4 +2016,10 @@
   (test-const-function-expr-inferred)
   (test-const-arrow-annotate-wraps)
   (test-const-arrow-annotate-no-wrap-when-pure)
+  (test-call-result-receiver-typing)
+  (test-super-stdlib-parent-typing)
+  (test-self-stdlib-parent-fallback)
+  (test-self-external-parent-fallback)
+  (test-super-alias-import-typing)
+  (test-module-qualified-super-resolution)
   (displayln "All infer tests passed."))

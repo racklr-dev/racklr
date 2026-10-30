@@ -3,6 +3,8 @@
 **Status:** Revised draft for working-group review
 **Scope:** Extending the UIR and pass pipeline with algebraic effect rows, targeting Python (FastAPI, Django), TypeScript, React, and htmx. Next.js is treated as one instance of the general web-framework pattern, not as the design center.
 
+**As-built vs planned:** §3.4, §6, and the Phase-0 half of §9 describe what is implemented and running in `racklr/effects/`; §5, §7, §8, and §11–§12 describe later phases (annotation extraction, contract algebra, runtime enforcement). The P0.3 acceptance bar is the Phase-0 half: zero `unknown` leaves with provenance on every edge.
+
 ---
 
 ## 1. The Corrected Focus
@@ -45,15 +47,19 @@ Each entry has:
 
 | Field | Description | Example |
 |---|---|---|
-| `name` | Opaque symbol, never interpreted by racklr | `llm`, `db`, `network`, `state-mutation` |
+| `name` | Opaque symbol, never interpreted by racklr | `llm`, `db`, `network`, `cache` |
 | `modality` | `may`, `must`, or `must-not` | `may` |
-| `ops` | Specific operations constrained (empty = all) | `(query)` |
+| `ops` | Typed operation symbols the entry covers (empty = whole domain); each op is receiver-qualified — `db<QuerySet>.read` — so the capability names the concrete class that performs it | `(db<QuerySet>.read)` |
 | `budget` | Integer upper bound on invocations | `5` |
 | `scope` | Information-flow or resource qualifier | `reads=search_index` |
 
+`ops` is where "grounded in the concrete call chain" becomes a data property: an op is `domain<ReceiverClass>.verb` — the domain comes from the class's module, the receiver class from the call-chain dataflow, and the verb from the method name via a per-domain DATA verb table. A coarse entry (empty ops) means "any op in this domain" and dominates; it is never narrowed by a precise entry.
+
 ### 3.2 Semantics
 
-- **Absence is prohibition.** An effect not listed is `must-not` by default.
+These bullets are **contract** semantics — what a declared capability means when it is checked. They are distinct from **inference** semantics — what the classifier records when it reads a body: a detected effect is recorded `may`, an unresolvable call is recorded `unknown` (a tracked obligation, §3.4), and a body with no recorded entries is `pure` (the empty row).
+
+- **Absence is prohibition.** On the contract side, an effect a declared row does not list is `must-not` by default.
 - **`may` is permission, not obligation.** A function typed `<may llm>` may or may not call the LLM.
 - **`must` is obligation.** A function typed `<must llm>` must perform at least one LLM operation on every execution path.
 - **Budgets are upper bounds** on operation invocations. Statically resolvable where the call graph is finite; otherwise lowered to runtime counters.
@@ -72,6 +78,43 @@ The algebra operates on the canonicalized UIR form:
 
 ---
 
+### 3.4 Effect domain vocabulary and the unknown obligation
+
+Inference normalizes every concrete call chain to a small canonical set of
+**domains**; the contract checker then treats those atoms as opaque (it never
+interprets a domain's meaning — it only compares and unifies it). The current
+canonical domains:
+
+| Domain | Meaning |
+|---|---|
+| `llm` | call to a language-model provider |
+| `db` | database read or write (SQL/ORM) |
+| `network` | socket / HTTP client traffic |
+| `cache` | cache read or invalidation |
+| `io` | interaction with the outside world: stream reads/writes (file, socket, stdio) **and filesystem queries** (stat/readdir/exists — observing external state is an effect even when it mutates nothing) |
+| `process` | process lifecycle (spawn, exec, exit, kill) |
+| `time` | clock reads and sleeps |
+| `email` | mail transport |
+
+Client-side state mutation (`useState` / `useReducer` setters) is a candidate
+future domain for the React front end, not one of the current eight.
+
+`pure` is not an effect; it is the **empty row** — a function with no row entry
+interacts only with in-process values.
+
+`unknown` is a **tracked obligation, never a silent default**: a call whose
+receiver/callee cannot be resolved structurally contributes an `unknown` entry
+with modality `unknown`, and the P0.3 acceptance bar is that the corpus reaches
+zero such leaves. The mapping from a language/library's concrete surface
+(`os.path.exists`, `requests.get`, a `useState` setter) to these domains lives in
+DATA lexicons (`racklr/effects/library-tokens.rkt`,
+`racklr/effects/imports/library-config.rkt`), injected per front end — the
+algebra itself carries no language-specific tokens. Each target emitter reifies
+a row's language-neutral atoms back into that language's concrete guard API,
+which is what makes the representation reifiable across languages.
+
+---
+
 ## 4. UIR Extensions
 
 ### 4.1 New node types
@@ -84,6 +127,11 @@ The algebra operates on the canonicalized UIR form:
 (struct uir-capability (effect scope) #:transparent)
 (struct uir-subtype (left right) #:transparent)  ; first-class per working-group answer
 ```
+
+As built today (`racklr/uir/types.rkt`): `uir-effect-row`, `uir-effect-entry`,
+`uir-effect-op`, `uir-effect-handler`, and `uir-effect-decl` exist and are
+serialized; `uir-fn` already carries an `effects` slot. `uir-capability` and
+`uir-subtype` are Phase 1 proposals, not yet in the schema.
 
 ### 4.2 Extended mutator nodes
 
@@ -145,7 +193,7 @@ The `uir-decorated` node already exists; the parser can recognize this pattern a
 async function summarize(input: string): Promise<string> { ... }
 ```
 
-The `lower-typescript` parser would need to be extended to recognize `@effects` tags. (TypeScript lowering is planned, not yet implemented; this is an addition to that planned module.)
+The `lower-typescript` front end is extended to recognize `@effects` tags. (TypeScript/TSX parsing and lowering already exist; this is an addition to that front end.)
 
 **Mechanism C: Inference.** Default when no annotation is present.
 
@@ -157,23 +205,69 @@ htmx-triggered endpoints are ordinary FastAPI or Django view functions; the same
 
 ## 6. Effect Inference
 
-The inference pass (Pass 2.4) computes effect rows for mutators that lack annotations. Per the working-group's answer, effects are **inferred** by default.
+The inference pass computes an effect row for every named function and method.
+It is **receiver-grounded, never name-grounded**: classification is a property
+of the resolved receiver class, resolved class → module → domain, with concrete
+library tokens kept in DATA lexicons only (`library-tokens.rkt`,
+`imports/library-config.rkt`). There is no `fetch → network` / `db.* → db` table
+in engine code.
 
-The algorithm:
+The pipeline, as built in `racklr/effects/`:
 
-1. Walk the UIR, building the call graph.
-2. Initialize each `uir-fn`'s effect row to `⊥` (empty, pure).
-3. Iterate to fixpoint: a function's row is the union of its callees' rows plus any directly performed effects.
-4. Direct effect detection rules:
-   - `fetch` / `axios` calls → `network`
-   - `db.*` / `Model.objects` calls → `db`
-   - `llm.*` / `openai.*` calls → `llm`
-   - `useState` setter calls → `state-mutation`
-   - `revalidatePath` / cache invalidation → `cache`
-5. For recursion, use a monotone worklist; rows converge because the effect set is finite.
-6. For higher-order calls where the callee is unknown at compile time, **defer to runtime** (per working-group answer 10.2). The deferred effect is represented as `uir-effect-entry` with modality `unknown`.
+1. **Import resolution (Pass 2.3).** `imports/` reads the raw token stream
+   (import statements are flattened away by lowering) and resolves each file's
+   `import` / `from … import` into an `import-env`: per-file module path,
+   an export graph, and class-qualified effect capabilities derived from
+   module paths. No module body is executed.
+2. **Receiver-type dataflow.** `receiver-type.rkt` tracks the class of locals
+   and `self`/`cls` attributes from constructor assignments (`x = KnownClass(...)`,
+   `self.attr = KnownClass(...)`) and aliases, so a later `x.m(...)` resolves
+   through the receiver's class. `whole-program.rkt` extends this across files
+   and through attribute chains (`self.a.b.m(...)`).
+3. **Call-site classification.** Each call is classified in precedence order:
+   (a) an intra- or cross-file call-graph edge to a known function/method
+   (MRO-resolved `self.m()`, `super().m()`, bare `f()`); (b) a constructor or
+   pure builtin/synthetic construct; (c) a receiver-grounded capability via
+   the tracked receiver class, a manager attribute (`X.objects.Y`), or an
+   imported name; (d) a direct effect root or pure stdlib name from the DATA
+   lexicon; (e) otherwise `unknown`.
+4. **Whole-program fixpoint.** One monotone fixpoint over the union of every
+   component's call graph, with component-qualified `(component . name)` keys,
+   so inheritance that crosses file boundaries becomes an edge instead of
+   `unknown`. A function's row is the union of its direct entries and its
+   callees' rows; rows converge because the effect set is finite.
+5. **Typed operations.** A method capability is `domain<Receiver>.verb`
+   (e.g. `db<QuerySet>.read`), derived from where the class lives (domain) and
+   what the method does (verb, via a per-domain DATA verb table). An
+   unclassified verb keeps the coarse `()` ("any op in the domain").
 
-The inference result is written back to `uir-fn.effects`. Downstream passes see a fully-populated row.
+**Unknown is a tracked obligation, never a silent default and not a deferral.**
+A call that no structural or lexicon rule resolves contributes an `unknown`
+entry; the row keeps it through the fixpoint, `type-graph.rkt` reports it, and
+the acceptance bar is zero such leaves. The emitter drops `unknown` entries
+when materializing concrete rows, because a runtime guard cannot enforce an
+unclassified effect — the obligation is to eliminate the leaf, not to ship it.
+
+The inferred rows are written back to `uir-fn.effects`. Hand-written annotations
+(§5) win over inference and are never overwritten.
+
+### 6.1 Provenance: evidence over assertion
+
+The P0.3 acceptance bar is not "rows exist"; it is **provenance on every
+effect edge**: something is `db` because you can point at why, or it is not
+classified. An effect entry's provenance is the triple that produced it:
+
+| Provenance | What it names | Where it is recorded |
+|---|---|---|
+| **Receiver type** | the class whose method was called | the `Receiver` slot of the typed op `db<QuerySet>.read`, resolved by receiver-type dataflow |
+| **Call chain** | the caller→callee edge(s) that propagated the entry | the component-qualified `(component . name)` keys and the fixpoint's `edges` table |
+| **Tokens** | the source tokens that grounded the classification (module root, method name) | the DATA lexicon rule / import handle that matched |
+
+`type-graph.rkt` already records file-level provenance (`files-by-name`: which
+components touch each effect). The remaining Phase 0/1 work is to make
+provenance **per-edge and first-class**: the same query shape as effervesce's
+`ask` ("show the exact call chain that makes this function `db`") rather than a
+report column.
 
 ---
 
@@ -248,18 +342,30 @@ The same binary enforces the same contract everywhere.
 
 ## 9. Revised Pipeline
 
+**As built (Phase 0 — the P0.3 path):**
+
 ```
-Pass 1:    Parse (per-language ANTLR grammar, extended for effect annotations)
-Pass 1.5:  Effect Annotation Extraction (parser → uir-effect-row)
-Pass 2:    CST → UIR (existing, extended to attach effect rows to uir-fn/uir-event/uir-state)
-Pass 2.4:  Effect Inference (fixpoint on call graph; defer higher-order to runtime)
-Pass 2.5:  Contract Algebra (subtyping, budgets, prohibitions; emits uir-subtype nodes)
-Pass 2.6:  Runtime Fallback Emission (uir-effect-handler → Jolt validator calls)
-Pass 3:    Target Lowering (existing, extended to know effect rows)
-Pass 4:    Emission (existing, extended to emit guards or brands)
+Pass 1:    Parse (per-language ANTLR grammar)
+Pass 2:    CST → UIR (lowering; existing)
+Pass 2.3:  Import resolution (token-level import extraction → module table →
+           export fixpoint → import-env; no module body executes)
+Pass 2.4:  Effect inference (receiver-type dataflow + one whole-program
+           monotone fixpoint, class → module → domain, typed ops; §6)
+Pass 2.5:  Provenance + graph projection (type-graph.rkt: fn-effects,
+           fn-effect-row, effect-entry, effect-op, inherits atoms)
+Pass 3:    Target lowering + emission (existing)
 ```
 
-Pass 1.5 is parser-side. Passes 2.4, 2.5, and 2.6 are language-agnostic.
+**Planned (later phases, not on the P0.3 path):**
+
+```
+Pass 1.5:  Effect annotation extraction (parser → uir-effect-row)   — Phase 2
+Pass 4:    Contract algebra (subtyping, budgets, prohibitions)       — Phase 1
+Pass 5:    Runtime fallback emission (Jolt validator calls)          — Phase 5
+```
+
+Passes 2.3–2.5 are language-agnostic; only the grammar and the DATA lexicon
+(`library-tokens.rkt`, `imports/library-config.rkt`) are per-language.
 
 ---
 
@@ -279,23 +385,35 @@ The algebra and inference passes remain language-agnostic.
 
 ## 11. Phased Implementation Plan
 
-**Phase 1 — UIR and Python annotation extraction (4 weeks).**
-Extend `uir-fn`, `uir-event`, and `uir-state` with `effects` fields. Extend `lower-python.rkt` to recognize `@effects(...)` decorators and `__effects__` attributes. Write fixture tests for a FastAPI route handler and a Django view.
+Phase numbers here map onto ROADMAP.md; the P0.3 bar is the Phase 0 entry.
 
-**Phase 2 — Effect inference and contract algebra (4 weeks).**
-Implement Pass 2.4 (fixpoint inference) and Pass 2.5 (subtyping, budgets, prohibitions) on the UIR. Test against a FastAPI + SQLAlchemy fixture and a Django ORM fixture.
+**Phase 0 — inference to the acceptance bar (in progress).**
+Import resolution, receiver-type dataflow, and the whole-program fixpoint are
+built and green (§6). Remaining: drive the Django corpus to zero `unknown`
+leaves and make provenance per-edge and first-class (§6.1).
 
-**Phase 3 — Runtime fallback and Jolt validator (4 weeks).**
-Implement Pass 2.6. Build the Jolt validator shared library with the C ABI. Wire `__validate_effects` emission into the Python emitter.
+**Phase 1 — contract algebra (planned).**
+Extract the effect algebra as a standalone typed library: join as the fixpoint
+operation, sequence / choose / scope combinators, effect polymorphism, and
+subtyping (Pass 4 in §9).
 
-**Phase 4 — TypeScript / React support (6 weeks).**
-Implement the TypeScript parser and lowering (currently planned, not implemented). Extend it to recognize `withEffects(...)` and JSDoc `@effects`. Implement effect inference for React hooks and event handlers. Wire `__withEffects` emission.
+**Phase 2 — annotation extraction (planned).**
+Recognize `@effects(...)` / `withEffects(...)` / JSDoc `@effects` in the front
+ends and lower them to a `uir-effect-row` (Pass 1.5 in §9); make UIR
+self-describing.
 
-**Phase 5 — Cross-language consistency testing (4 weeks).**
-Build the fixture spec (§12). Emit it to Python (FastAPI), TypeScript (React), and JavaScript. Verify that all three enforce the same contract via the Jolt validator.
+**Phase 3 — TypeScript / React effect support (planned).**
+TypeScript/TSX parsing and lowering exist; extend them to recognize
+`withEffects(...)` and JSDoc `@effects`, and infer rows for hooks and event
+handlers.
 
-**Phase 6 — htmx and Django integration testing (3 weeks).**
-Test the Python emitter against htmx-triggered FastAPI endpoints and Django form handlers. Verify that server-side mutators are guarded identically to React handlers.
+**Phase 4 — runtime enforcement (planned).**
+Build the Jolt validator and emit `__validate_effects` / `__withEffects` guards
+for rows that cannot be statically resolved (Pass 5 in §9).
+
+**Phase 5 — cross-language consistency testing (planned).**
+The fixture spec (§12) emitted to Python and TypeScript, verified to enforce
+the same contract via the same validator.
 
 ---
 

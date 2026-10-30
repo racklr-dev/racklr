@@ -47,7 +47,7 @@
    "is" "is not" "in" "not in" "and" "or"
    ;; Python structural calls and comprehensions
    "not" "tuple" "set" "list" "assert" "raise" "del" "global" "nonlocal"
-   "list-comp" "dict-comp" "set-comp" "gen-comp" "kwarg"
+   "list-comp" "dict-comp" "set-comp" "gen-comp" "gen-exp" "kwarg"
    ;; Clojure special forms / data constructors
    "quote" "syntax-quote" "unquote" "unquote-splicing" "deref" "var"
    "vector" "hash-set" "fn*" "with-meta" "namespace" "host-expr"))
@@ -62,27 +62,14 @@
 (define (runtime-primitive-callee? c)
   (memq (callee-name c) '(__handle)))
 
-;; Side-effect-free Python builtins. They lower to uir-var callees (unlike
-;; the uir-symbol-encoded constructs in `synthetic-callees`), so without this
+;; Side-effect-free Python builtins lower to uir-var callees; without this
 ;; table a call like `len(x)` / `dict(a=1)` / `isinstance(x, T)` is classified
-;; `unknown` and pollutes the inferred effect algebra. Effectful builtins
-;; (open, input, print, eval, exec, compile, breakpoint, help) are deliberately
-;; absent: they perform I/O or code execution and stay `unknown` (or, later,
-;; map to a dedicated effect) rather than being falsely marked pure.
-(define python-builtins
-  (set
-   "abs" "all" "any" "ascii" "bin" "bool" "bytearray" "bytes" "callable"
-   "chr" "classmethod" "complex" "delattr" "dict" "dir" "divmod"
-   "enumerate" "filter" "float" "format" "frozenset" "getattr" "globals"
-   "hasattr" "hash" "hex" "id" "int" "isinstance" "issubclass" "iter"
-   "len" "list" "locals" "map" "max" "memoryview" "min" "next" "object"
-   "oct" "ord" "pow" "property" "range" "repr" "reversed" "round" "set"
-   "setattr" "slice" "sorted" "staticmethod" "str" "sum" "super" "tuple"
-   "type" "vars" "zip" "__import__"))
-
-(define (pure-builtin-callee? c)
+;; `unknown`. Effectful builtins (open, input, print, eval, exec, compile,
+;; breakpoint, help) are deliberately absent. Names live in the injected token
+;; lexicon (library-tokens.rkt).
+(define (pure-builtin-callee? c [tokens default-effect-tokens])
   (define nm (callee-name c))
-  (and nm (set-member? python-builtins (symbol->string nm))))
+  (and nm (set-member? (effect-tokens-python-builtins tokens) (symbol->string nm))))
 
 ;; Directly-imported stdlib/ctypes/functools value constructors and decorators
 ;; that lower to a BARE callee (`from functools import partial`) and therefore
@@ -96,21 +83,12 @@
                        (symbol->string nm))))
 
 ;; Protocol ("dunder") methods on an arbitrary receiver: `x.__init__()`,
-;; `x.__repr__()`, `x.__eq__()`, ... implement the object protocol. They
-;; initialize / compare / format / index the instance and perform no domain
-;; effect (llm/db/network/cache/io/process/time/email) — mutating the
-;; instance's own attributes is a local effect, not a domain effect. A dunder
-;; call that resolves as an intra-program edge (`self.__str__()`) never reaches
-;; this tail; only unresolvable arbitrary-receiver dunders do. `__call__`,
-;; `__enter__`, `__exit__`, and `__getattr__` are deliberately absent: they can
-;; dispatch to arbitrary (possibly effectful) code and stay `unknown`.
-(define pure-dunder-names
-  (set "__init__" "__new__" "__repr__" "__str__" "__format__"
-       "__eq__" "__ne__" "__lt__" "__le__" "__gt__" "__ge__" "__hash__"
-       "__bool__" "__len__" "__contains__" "__iter__" "__next__"
-       "__getitem__" "__setitem__" "__delitem__" "__copy__" "__deepcopy__"))
-
-(define (pure-dunder-callee? c)
+;; `x.__repr__()`, ... implement the object protocol with no domain effect. A
+;; dunder call that resolves as an intra-program edge (`self.__str__()`) never
+;; reaches this tail. `__call__`, `__enter__`, `__exit__`, and `__getattr__`
+;; are deliberately absent: they dispatch to arbitrary code. Names live in the
+;; injected token lexicon.
+(define (pure-dunder-callee? c [tokens default-effect-tokens])
   (and (member-access-callee? c)
        (let* ([base (cond [(uir-get? c) (uir-get-base c)]
                           [(dot-call? c) (first (uir-call-args c))]
@@ -118,11 +96,9 @@
               [op (effect-op-of-callee c)])
          (and op
               ;; `super().__init__()` targets a specific parent method that may
-              ;; do real work (and resolves as a whole-program edge); it is not
-              ;; an arbitrary receiver's protocol call, so it stays a real edge
-              ;; or `unknown` rather than being swept pure.
+              ;; do real work; it stays a real edge or `unknown`, not swept pure.
               (not (super-call? base))
-              (set-member? pure-dunder-names (symbol->string op))))))
+              (set-member? (effect-tokens-pure-dunder-names tokens) (symbol->string op))))))
 
 ;; Exception constructors (`ValueError`, `TypeError`, `ValidationError`, ...)
 ;; build an exception object to raise and perform no effect themselves; the
@@ -183,42 +159,22 @@
                               (symbol->string op))))))
 
 ;; String-literal method calls (`"".join(x)`, `"{}".format(v)`) are pure str
-;; operations. The receiver is a uir-string literal, so `dotted-root` is #f and
-;; none of the var/symbol-rooted tables can see it; the literal base is what
-;; disambiguates them from an arbitrary `obj.join(...)`.
-(define str-method-names
-  (set "join" "format" "format_map" "split" "rsplit" "splitlines" "strip"
-       "lstrip" "rstrip" "lower" "upper" "capitalize" "title" "swapcase"
-       "casefold" "replace" "translate" "zfill" "center" "ljust" "rjust"
-       "expandtabs" "count" "find" "rfind" "index" "rindex" "startswith"
-       "endswith" "isalnum" "isalpha" "isascii" "isdecimal" "isdigit"
-       "isidentifier" "islower" "isnumeric" "isprintable" "isspace" "istitle"
-       "isupper" "encode" "partition" "rpartition" "removeprefix" "removesuffix"
-       "maketrans"))
-
-(define (str-literal-method-callee? c)
+;; operations; the uir-string base disambiguates them from `obj.join(...)`.
+;; Names live in the injected token lexicon.
+(define (str-literal-method-callee? c [tokens default-effect-tokens])
   (and (uir-get? c)
        (uir-string? (uir-get-base c))
        (let ([op (get-field-symbol (uir-get-field c))])
-         (and op (set-member? str-method-names (symbol->string op))))))
+         (and op (set-member? (effect-tokens-str-method-names tokens) (symbol->string op))))))
 
 ;; Pure collection-method calls on an arbitrary receiver (list/dict/set/deque
-;; read or in-place mutation). In the effect-row algebra these perform no
-;; effect: mutating a local collection is not llm/db/network/cache/io/process/
-;; time/email. The name list DELIBERATELY omits every name that collides with a
-;; Django QuerySet/RelatedManager operation (`get`, `update`, `add`, `remove`,
-;; `clear`, `set`, `create`, `values`, `reverse`, `filter`, `exclude`,
-;; `order_by`, `save`, `delete`, `count`, `exists`, `first`, `last`, `union`,
-;; `intersection`, `difference`, `symmetric_difference`) — those reach
-;; `direct-effect-of-callee` first and must classify `db`; anything still
-;; carrying one of those names at this tail is an arbitrary object, not a
-;; collection, and stays `unknown`.
-(define pure-container-method-names
-  (set "append" "extend" "insert" "pop" "popitem" "sort" "index" "keys"
-       "items" "setdefault" "copy" "fromkeys" "discard"
-       "issubset" "issuperset" "isdisjoint"))
-
-(define (pure-container-method-callee? c)
+;; read or in-place mutation); mutating a local collection is not a domain
+;; effect. The name list deliberately omits Django QuerySet/RelatedManager
+;; collisions (`get`, `update`, `filter`, `save`, `delete`, ...): those
+;; classify `db` first, so anything still carrying one here is an arbitrary
+;; object and stays `unknown`. Names live in the injected token lexicon.
+(define (pure-container-method-callee? c [tokens default-effect-tokens])
   (and (member-access-callee? c)
        (let ([op (effect-op-of-callee c)])
-         (and op (set-member? pure-container-method-names (symbol->string op))))))
+         (and op (set-member? (effect-tokens-pure-container-method-names tokens)
+                              (symbol->string op))))))

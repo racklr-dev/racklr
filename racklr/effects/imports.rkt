@@ -46,6 +46,7 @@
   effect-tag-config
   resolve-effect-tag
   module-effect-tag
+  handle-effect-domain
   clear-effect-tag-cache!
   class-effect-tag
   method-ops

@@ -26,3 +26,9 @@ manifest.yaml
 # npm/esbuild
 node_modules/
 package-lock.json
+
+# Large local artifacts, not racklr work (session junk)
+atomspace/
+link-grammar/
+chaining/
+effervesce-out/

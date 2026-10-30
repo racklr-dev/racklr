@@ -329,21 +329,37 @@
   (define testlist (if (>= (length kids) 2) (second kids) #f))
   (define block (if (>= (length kids) 3) (third kids) #f))
   (define else-block (if (>= (length kids) 4) (fourth kids) #f))
-  ;; Extract loop variable name from exprlist
+  ;; Extract loop variable names from exprlist (destructuring binds several).
   (define var-toks (if exprlist (cst-tokens-deep exprlist tk-type tk-value) '()))
-  (define var-name (for/or ([t var-toks]
-                            #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
-                    (second t)))
+  (define var-names (for/list ([t var-toks]
+                               #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
+                      (second t)))
   ;; Lower iterable expression
   (define iterable (if testlist (lower-expr testlist tk-type tk-value) (uir-symbol "?iter")))
   ;; Lower body
   (define body (if block (lower-block-or-stmt block tk-type tk-value) (uir-null)))
   ;; Lower else body
   (define else-body (if else-block (lower-block-or-stmt else-block tk-type tk-value) (uir-null)))
-  (uir-for-each (uir-symbol (or var-name "?var"))
-                iterable
-                body
-                else-body))
+  (if (<= (length var-names) 1)
+      (uir-for-each (uir-symbol (if (pair? var-names) (car var-names) "?var"))
+                    iterable
+                    body
+                    else-body)
+      ;; Destructuring loop: `for a, b in iter` unpacks each element. Lower to
+      ;; `for <tmp> in iter: a = <tmp>[0]; b = <tmp>[1]; body` so every bound
+      ;; name survives in the UIR (effect inference and the census can then
+      ;; type `a`/`b` as element projections instead of treating them as
+      ;; unbound).
+      (let* ([tmp (uir-symbol (symbol->string (gensym 'unpacked)))]
+             [assigns
+              (for/list ([nm (in-list var-names)] [i (in-naturals)])
+                (uir-set! (uir-var (uir-symbol nm))
+                          (uir-get (uir-var tmp) (uir-number (number->string i)))))]
+             [body-stmts
+              (cond [(uir-null? body) '()]
+                    [(uir-block? body) (uir-block-stmts body)]
+                    [else (list body)])])
+        (uir-for-each tmp iterable (uir-block (append assigns body-stmts)) else-body))))
 
 ;; ── Yield ──────────────────────────────────────────────────────────
 
@@ -891,6 +907,14 @@
                 (set! methods (cons
                                (lower-method (first cc) tk-type tk-value)
                                methods))]
+               ['async_stmt
+                (set! methods (cons
+                               (lower-async-method (first cc) tk-type tk-value)
+                               methods))]
+               ['decorated
+                (set! methods (cons
+                               (lower-decorated-method (first cc) tk-type tk-value)
+                               methods))]
                ['classdef (void)]
                [_ (void)]))]
           [(eq? tag 'stmt)
@@ -908,6 +932,45 @@
   ;; funcdef inside a class becomes a method
   (define fn (lower-funcdef cst tk-type tk-value))
   (uir-method (uir-fn-name fn) (uir-fn-params fn) (uir-fn-body fn) 'public))
+
+;; `async def` inside a class: lower-async yields (call "async-fn" (list fn));
+;; keep the async-fn wrapper around a uir-method so the async-ness survives for
+;; the emitter while collect-methods can unwrap to the method.
+(define (lower-async-method cst tk-type tk-value)
+  (define a (lower-async cst tk-type tk-value))
+  (if (and (uir-call? a)
+           (uir-symbol? (uir-call-callee a))
+           (string=? (uir-symbol-name (uir-call-callee a)) "async-fn")
+           (= (length (uir-call-args a)) 1)
+           (uir-fn? (first (uir-call-args a))))
+      (let ([fn (first (uir-call-args a))])
+        (async-fn-wrap (uir-method (uir-fn-name fn) (uir-fn-params fn)
+                                   (uir-fn-body fn) 'public)))
+      a))
+
+;; A decorated def inside a class (@property/@classmethod/@staticmethod/
+;; @cached_property/...): lower-decorated yields (uir-decorated decos inner),
+;; where inner is a uir-fn or an async-fn wrapper. Re-wrap inner as a method
+;; (preserving async-fn) so decorated methods are collected as methods instead
+;; of being dropped from the class surface.
+(define (lower-decorated-method cst tk-type tk-value)
+  (define d (lower-decorated cst tk-type tk-value))
+  (define decos (uir-decorated-decorators d))
+  (define inner (uir-decorated-inner d))
+  (define (as-method x)
+    (cond
+      [(uir-fn? x)
+       (uir-method (uir-fn-name x) (uir-fn-params x) (uir-fn-body x) 'public)]
+      [(and (uir-call? x)
+            (uir-symbol? (uir-call-callee x))
+            (string=? (uir-symbol-name (uir-call-callee x)) "async-fn")
+            (= (length (uir-call-args x)) 1)
+            (uir-fn? (first (uir-call-args x))))
+       (let ([fn (first (uir-call-args x))])
+         (async-fn-wrap (uir-method (uir-fn-name fn) (uir-fn-params fn)
+                                    (uir-fn-body fn) 'public)))]
+      [else x]))
+  (uir-decorated decos (as-method inner)))
 
 (define (lower-block-or-stmt cst tk-type tk-value)
   (define tag (any-tree-tag cst))
