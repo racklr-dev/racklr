@@ -29,6 +29,7 @@
  dialect-method-receiver-offset dialect-init-method-name
  dialect-keyword-arg-callee dialect-annotation-callee
  dialect-literal-receiver-types
+ dialect-control-transfer-names dialect-short-circuit-callees
  ;; lexicon
  lexicon? lexicon
  lexicon-name lexicon-tokens lexicon-import-config
@@ -56,7 +57,15 @@
    ;; node-kind symbol -> receiver TYPE name for a literal VALUE (`string` →
    ;; "str", `record` → "dict"). A literal's receiver type is a host-language
    ;; convention, so it is DATA here rather than a name literal in the engine.
-   literal-receiver-types) ; hash: symbol -> string
+   literal-receiver-types   ; hash: symbol -> string
+   ;; Callee/statement names that always transfer control out of the enclosing
+   ;; block (`raise`, JS `throw`, `sys.exit`, `break`, `continue`). The effect
+   ;; inference's must analysis reads this set, so the transfer vocabulary is
+   ;; host DATA, never a name literal in engine code.
+   control-transfer-names   ; set: names as strings
+   ;; Callee names whose right operands are evaluated only conditionally
+   ;; (short-circuit boolean operators): `and`/`or`, JS `&&`/`||`/`??`.
+   short-circuit-callees)   ; set: names as strings
   #:transparent)
 
 ;; The whole host lexicon: token tables, their dialect, import-tag rules, the

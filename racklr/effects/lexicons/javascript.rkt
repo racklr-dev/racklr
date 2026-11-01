@@ -56,7 +56,12 @@
    "__withEffects"
    ;; JS literal receiver types are not modeled yet (no String/Array type
    ;; tables in this lexicon).
-   (hash)))
+   (hash)
+   ;; Callees/statements that always transfer control out of the block:
+   ;; `throw` does not return; `break`/`continue` leave the loop body.
+   (set "throw" "break" "continue")
+   ;; Short-circuit boolean operators: the right operand runs conditionally.
+   (set "&&" "||" "??")))
 
 ;; ── token tables ────────────────────────────────────────────────────
 (define javascript-lexicon
