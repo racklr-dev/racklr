@@ -109,6 +109,54 @@ PRs (gh CLI, bot identity `allen-munsch`). The four untracked trees
 (`atomspace/`, `chaining/`, `effervesce-out/`, `link-grammar/`) predate this
 work and are left untouched.
 
+## Phase 2 work landed
+
+- **P2.1 — Express the UIR schema as self-describing data: DONE (verified)**
+  (epic child drg-c985)
+  - `racklr/uir/schema-data.rkt` holds `UIR-SCHEMA`, a UIR value: a
+    `uir-schema` of `uir-node-kind` declarations, each recording its tag, its
+    constructor, and one `uir-schema-field` per field (name + codec/type).
+    `racklr/uir/types.rkt` is now 17 lines: require the schema, validate it,
+    let the generator synthesise the node kinds.
+  - The bootstrap is a hand-written, versioned fixed-point kernel:
+    `racklr/uir/kernel.rkt` (bootstrap node kinds `schema`/`node-kind`/
+    `schema-field`, layouts, codecs, introspection), `schema-io.rkt` (generic
+    UIR<->sexp and JSON reader/writer), `schema-check.rkt` (self-validation
+    and schema extension), `schema-macro.rkt` (schema-driven struct,
+    predicate, accessor, and layout generation). `UIR-KERNEL-VERSION` versions
+    the trust root; the schema value declares the kernel version it requires
+    and `version.rkt` derives `UIR-SCHEMA-VERSION` from the schema value.
+  - `check-schema!` validates the schema value under the declarations it itself
+    contains, and checks the kernel-owned declarations against the
+    hand-written `KERNEL-LAYOUTS`. The schema value also round-trips through
+    its own serialization using only the kernel layouts: the trust root reads
+    and writes the schema without the generated vocabulary.
+  - Schema fields carry a default marker (`required` or `false`); only a
+    trailing suffix may be defaulted. The payload omits trailing fields at
+    their default and the reader fills them back in, so `typed-param`'s
+    optional `kind` slot is expressible as data (payload v2, identity v1 -> v2
+    migration) while every generated constructor stays exact-arity. This
+    pre-lands the UIR-layer part of the parameter-marker PR so either order
+    merges without dropping the kind field.
+  - DOD proofs in `racklr-test/uir-test.rkt`: the schema is UIR data and round
+    trips (sexp, kernel-only sexp, JSON); every declared kind has a generated
+    layout; an extended schema value adds a `demo` node kind whose
+    constructor, predicate, accessors, sexp and JSON codecs all work with no
+    core struct edit; kernel/schema version mismatch, duplicate kind tags, and
+    unknown field codecs are refused.
+  - The JSON reader is now schema-aware: it restores `symbol`-typed fields
+    instead of leaving them strings, so JSON round trips now hold for every
+    declared kind (previously `method` visibility, `effect-entry` modality and
+    other symbol-valued fields did not round-trip through JSON).
+  - Verification observed (recorded 2026-11-01): `racklr-test/uir-test.rkt`
+    passes; all 332 previously provided bindings still exist with identical
+    arities; `raco make` of every tracked `.rkt` in racklr and effervesce exits
+    0; racklr suite matrix 40/42 pass (only the two documented pre-existing
+    parse failures `gen-python3-test` and `lower-python-test` remain);
+    effervesce suites 10/10 pass; the shared baseline is unchanged at
+    `sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`
+    (no graph diff).
+
 ## Next
 
 P0.3 (`drg-1bd3`) is the active task but "zero unknown leaves" is a multi-lever

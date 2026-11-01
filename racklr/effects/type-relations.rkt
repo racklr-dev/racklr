@@ -85,11 +85,12 @@
     (define cls (hash-ref param-types (cons k i) #f))
     (cond
       [(and cls (uir-symbol? p))
-       (uir-typed-param p (uir-symbol (symbol->string cls)) #f)]
+       (uir-typed-param p (uir-symbol (symbol->string cls)) #f #f)]
       [(and cls (uir-typed-param? p) (not (uir-typed-param-type p)))
        (uir-typed-param (uir-typed-param-name p)
                         (uir-symbol (symbol->string cls))
-                        (uir-typed-param-default p))]
+                        (uir-typed-param-default p)
+                        #f)]
       [else p])))
 
 ;; Self-attribute assignments collected across every class: class-level field
