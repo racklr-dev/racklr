@@ -10,6 +10,8 @@ gen-sqlite-parser.rkt
 gen-sqlite-tmp.rkt
 # ANTLR grammars (nested git repo)
 grammars-v4/
+# Koka build artifacts (bendtt/)
+.koka/
 # Racket bytecode
 compiled/
 # Debug / scratch files
