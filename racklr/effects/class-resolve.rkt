@@ -11,7 +11,9 @@
 
 (require racklr/uir
          racklr/effects/imports
-         racklr/effects/shape)
+         racklr/effects/shape
+         racklr/effects/library-tokens
+         racklr/effects/lexicon)
 
 (provide resolve-class-component
          modpath-index
@@ -139,7 +141,8 @@
 
 ;; `(component . name)` keys a method callee could resolve to (the whole-program
 ;; counterpart of `method-callee-qualified-names`).
-(define (method-callee-keys callee comp owner methods class-defs comp-supers)
+(define (method-callee-keys callee comp owner methods class-defs comp-supers
+                           [tokens default-effect-tokens])
   (cond
     [(not (uir-get? callee)) '()]
     [else
@@ -159,7 +162,7 @@
          [(and mname (uir-var? base))
           (let ([base-name (string->symbol (uir-symbol-name (uir-var-name base)))])
             (cond
-              [(memq base-name '(self cls))
+              [(tokens-self-name? tokens base-name)
                (or (and owner (mro-method-keys comp owner mname methods class-defs comp-supers)) '())]
               [else
                (define c (resolve-class-component base-name comp class-defs))
@@ -188,12 +191,13 @@
 ;; resolves through its candidate MRO keys and projects only when every
 ;; candidate key WITH a projected type agrees on one class (sound: a mixed
 ;; MRO is not projected).
-(define (corpus-call-return-type callee comp class-defs owner methods fn-defs known comp-supers return-types)
+(define (corpus-call-return-type callee comp class-defs owner methods fn-defs known comp-supers return-types
+                                 [tokens default-effect-tokens])
   (and return-types
        (let ([nm (callee-name callee)])
          (or (and nm (let ([k (bare-function-key nm comp fn-defs known)])
                        (and k (hash-ref return-types k #f))))
-             (let ([mks (method-callee-keys callee comp owner methods class-defs comp-supers)])
+             (let ([mks (method-callee-keys callee comp owner methods class-defs comp-supers tokens)])
                (and (pair? mks)
                     (let loop ([mks mks] [t #f])
                       (cond

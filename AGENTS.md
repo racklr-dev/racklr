@@ -19,8 +19,15 @@ declared capability contracts.
   state with an elimination obligation, never a silent default.
 - Effect keys come from the call chain via receiver-type dataflow
   (class to module to domain), never from a method-name table in engine code.
-- Library-specific tokens live only in `racklr/effects/library-tokens.rkt` and
-  `racklr/effects/imports/library-config.rkt`. Engine code carries none.
+- Library-specific tokens live only in the DATA modules:
+  `racklr/effects/library-tokens.rkt`, `library-pure-names.rkt`,
+  `library-stdlib-types.rkt`, `library-racket-tokens.rkt`,
+  `library-dialect.rkt`, `racklr/effects/imports/library-config.rkt`, and the
+  per-host lexicons under `racklr/effects/lexicons/`. Engine code carries none.
+- The classification engine is host-neutral: every entry point takes an
+  optional injected lexicon (`#:lexicon`, or the token-only
+  `[tokens default-effect-tokens]` shape). The default is the Python/Django
+  lexicon; a non-Python host supplies its own instead of editing the engine.
 - Every effect edge carries provenance you can point at.
 - UIR is the single source of truth.
 
@@ -28,8 +35,11 @@ declared capability contracts.
 
 - No `.rkt` file over 400 lines. Split by responsibility, not size.
 - Respect layer boundaries: absorb, uir, effect, check, graph, emit.
-- A new front end is a grammar plus a lowering hook plus token-lexicon data.
-  It must not edit core modules.
+- A new front end is a grammar plus a lowering hook plus lexicon data: token
+  tables, the host dialect (implicit receiver names, exception/constructor
+  conventions, front-end construct encodings), import-tag rules, and the
+  operation vocabulary. It must not edit core modules. The parser generator
+  takes the host's grammar policy as data (`#:policy`).
 - Keep public call shapes stable. Add injectable config as an optional
   argument with a default, not a breaking change.
 

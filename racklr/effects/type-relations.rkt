@@ -25,7 +25,8 @@
          racklr/effects/walk
          racklr/effects/shape
          racklr/effects/receiver-type
-         racklr/effects/library-tokens)
+         racklr/effects/library-tokens
+         racklr/effects/lexicon)
 
 (provide type-relations? type-relations
          type-relations-assign type-relations-self-attr
@@ -45,15 +46,16 @@
 ;; Class name of a class-body field initializer (`attr = KnownClass` /
 ;; `attr = KnownClass(...)`); #f when the initializer does not name a known
 ;; class. (was field-init-class in whole-program.rkt)
-(define (field-class init class-defs import-env comp)
+(define (field-class init class-defs import-env comp [tokens default-effect-tokens])
   (cond
-    [(bare-class-value init class-defs default-effect-tokens import-env comp)]
+    [(bare-class-value init class-defs tokens import-env comp)]
     [(uir-call? init) (call-result-type (uir-call-callee init) class-defs
-                                        default-effect-tokens #f import-env comp)]
+                                        tokens #f import-env comp)]
     [else #f]))
 
 ;; Class-level field initializers keyed by (comp . class) -> { attr -> class }.
-(define (class-field-attrs comp-programs class-defs import-env)
+(define (class-field-attrs comp-programs class-defs import-env
+                           [tokens default-effect-tokens])
   (define h (make-hash))
   (for ([cp (in-list comp-programs)])
     (define comp (car cp))
@@ -71,7 +73,7 @@
              (when (uir-field? f)
                (define attr (and (uir-field-name f) (uir-symbol? (uir-field-name f))
                                  (string->symbol (uir-symbol-name (uir-field-name f)))))
-               (define cls (field-class (uir-field-init f) class-defs import-env comp))
+               (define cls (field-class (uir-field-init f) class-defs import-env comp tokens))
                (when (and attr cls) (hash-set! acc attr cls)))))]
         [(struct? n)
          (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
@@ -102,8 +104,9 @@
 (define (class-self-attrs comp-programs class-defs import-env
                           [param-types (hash)]
                           [return-types #f]
-                          [methods #f] [fn-defs #f] [known #f] [comp-supers #f])
-  (define h (class-field-attrs comp-programs class-defs import-env))
+                          [methods #f] [fn-defs #f] [known #f] [comp-supers #f]
+                          #:tokens [tokens default-effect-tokens])
+  (define h (class-field-attrs comp-programs class-defs import-env tokens))
   (for ([cp (in-list comp-programs)])
     (define comp (car cp))
     (define mparams (collect-method-params (cdr cp)))
@@ -116,6 +119,7 @@
                   (infer-receiver-types body class-defs (hash) import-env comp
                                         (seed-params (hash-ref mparams n '()) k param-types)
                                         owner
+                                        #:tokens tokens
                                         #:return-types return-types
                                         #:methods methods
                                         #:fn-defs fn-defs
@@ -147,9 +151,11 @@
 
 ;; Syntax-visible seed: the self-attr relation from class fields + method
 ;; bodies. assign/param/return are empty until the join runs.
-(define (materialize-type-relations comp-programs class-defs import-env)
+(define (materialize-type-relations comp-programs class-defs import-env
+                                    #:tokens [tokens default-effect-tokens])
   (type-relations (make-hash)
-                  (class-self-attrs comp-programs class-defs import-env (hash))
+                  (class-self-attrs comp-programs class-defs import-env (hash)
+                                    #:tokens tokens)
                   (make-hash)
                   (make-hash)))
 
@@ -166,7 +172,8 @@
                                #:fn-params fn-params
                                #:method-params method-params
                                #:fn-defs fn-defs
-                               #:comp-supers comp-supers)
+                               #:comp-supers comp-supers
+                               #:tokens [tokens default-effect-tokens])
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define param (type-relations-param tr))
@@ -191,7 +198,8 @@
 
   (define (rebuild-self-attrs!)
     (set! self-attr (class-self-attrs comp-programs class-defs import-env param
-                                      return methods fn-defs known comp-supers))
+                                      return methods fn-defs known comp-supers
+                                      #:tokens tokens))
     (set-type-relations-self-attr! tr self-attr))
 
   (define (rebuild-assign!)
@@ -202,6 +210,7 @@
       (define base-attrs (or (and class-env (receiver-types-self-attrs class-env)) (hash)))
       (define rt (infer-receiver-types (body-of k) class-defs base-attrs import-env comp
                                        (seed-params (params-of k) k param) owner
+                                       #:tokens tokens
                                        #:return-types return
                                        #:methods methods
                                        #:fn-defs fn-defs
@@ -222,7 +231,7 @@
       (define comp (car k))
       (define owner (owner-of k))
       (define rt (rt-of k))
-      (define (arg-class a) (value-class-of a rt class-defs default-effect-tokens import-env comp owner))
+      (define (arg-class a) (value-class-of a rt class-defs tokens import-env comp owner))
       ;; Split a call's argument list into positional values and keyword
       ;; bindings (name-symbol . value). A keyword argument is lowered as
       ;; (call "kwarg" (list (var name) value)); anything else is positional
@@ -233,7 +242,9 @@
         (for ([a (in-list args)])
           (if (and (uir-call? a)
                    (uir-symbol? (uir-call-callee a))
-                   (string=? (uir-symbol-name (uir-call-callee a)) "kwarg")
+                   (tokens-keyword-arg-callee tokens)
+                   (string=? (uir-symbol-name (uir-call-callee a))
+                             (tokens-keyword-arg-callee tokens))
                    (= (length (uir-call-args a)) 2)
                    (uir-var? (first (uir-call-args a))))
               (set! kwargs
@@ -277,18 +288,23 @@
              (note-positional! fk 0 positional)
              (note-kwargs! fk kwargs)]
             [else
-             (define mks (method-callee-keys callee comp owner methods class-defs comp-supers))
+             (define mks (method-callee-keys callee comp owner methods class-defs
+                                             comp-supers tokens))
              (cond
                [(pair? mks)
+                (define offset (tokens-method-receiver-offset tokens))
                 (for ([mk (in-list mks)])
-                  (note-positional! mk 1 positional)
+                  (note-positional! mk offset positional)
                   (note-kwargs! mk kwargs))]
                [else
-                (define cname (constructor-class callee class-defs))
+                (define cname (constructor-class callee class-defs tokens))
                 (define c (and cname (resolve-class-component cname comp class-defs)))
-                (define ik (and c (cons c (qualified-name-symbol cname '__init__))))
+                (define init-name (tokens-init-method-name tokens))
+                (define ik (and c init-name
+                                (cons c (qualified-name-symbol
+                                         cname (string->symbol init-name)))))
                 (when (and ik (hash-has-key? methods ik))
-                  (note-positional! ik 1 positional)
+                  (note-positional! ik (tokens-method-receiver-offset tokens) positional)
                   (note-kwargs! ik kwargs))])])))
       (walk-body (body-of k) visit!))
     (define out (make-hash))
@@ -304,7 +320,7 @@
       (define owner (owner-of k))
       (hash-set! return k
                  (return-class-of (body-of k) (rt-of k) class-defs
-                                  default-effect-tokens import-env comp owner)))
+                                  tokens import-env comp owner)))
     (set-type-relations-return! tr return))
 
   (let loop ([round 0])

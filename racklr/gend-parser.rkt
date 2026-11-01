@@ -2,7 +2,8 @@
 
 (require racklr/tree
          "gend-parser/lexer.rkt"
-         "gend-parser/parser.rkt")
+         "gend-parser/parser.rkt"
+         "gend-parser/language-policy.rkt")
 
 (provide generate-parser-module)
 
@@ -10,7 +11,11 @@
 ;; Given a grammar CST, returns Racket source string for a generated parser.
 ;; The generated parser provides: token struct, tokenize, parse.
 
-(define (generate-parser-module grammar-cst #:source-path [source-path #f] #:indent-tokens? [indent-tokens? #f] #:preserve-comments? [preserve-comments? #f])
+(define (generate-parser-module grammar-cst
+                                #:source-path [source-path #f]
+                                #:indent-tokens? [indent-tokens? #f]
+                                #:preserve-comments? [preserve-comments? #f]
+                                #:policy [policy default-language-policy])
   (define rules-node (second (any-tree-children grammar-cst)))
   (define rules (any-tree-children rules-node))
   (define parser-rules (filter (lambda (r) (eq? (any-tree-tag r) 'parser-rule)) rules))
@@ -65,19 +70,21 @@
       (any-tree-text (first (any-tree-children rule)))))
 
   (define has-parser-rules (not (null? parser-rules)))
-  (define has-newline? (lexer-has-newline-rule? all-lexer))
+  (define has-newline? (lexer-has-newline-rule? all-lexer policy))
 
    (string-join
-    (list (gen-header #:indent-tokens? indent-tokens?)
+    (list (gen-header #:indent-tokens? indent-tokens? #:policy policy)
           (gen-match-helpers)
           (gen-lexer-matchers all-lexer)
           (gen-lexer-matchers implicit-lexer-rules)
           (gen-tokenizer mode-map #:has-newline? has-newline? #:indent-tokens? indent-tokens?
-                         #:preserve-comments? preserve-comments? #:hidden-names hidden-names)
+                         #:preserve-comments? preserve-comments? #:hidden-names hidden-names
+                         #:policy policy)
           (gen-parser-helpers)
           (if has-parser-rules (gen-parser-rules parser-rules) "")
           (if has-parser-rules (gen-parser-provides parser-rules) "")
-          (if has-parser-rules (gen-entry parser-rules #:preserve-comments? preserve-comments?)
+          (if has-parser-rules (gen-entry parser-rules #:preserve-comments? preserve-comments?
+                                          #:policy policy)
               (gen-lexer-entry)))
     "\n"))
 (module+ main

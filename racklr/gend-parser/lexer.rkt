@@ -1,7 +1,8 @@
 #lang racket
 
 (require racklr/tree
-         racklr/g4-parse)
+         racklr/g4-parse
+         "language-policy.rkt")
 
 (provide extract-option
          load-lexer-grammar-rules
@@ -31,10 +32,12 @@
           (filter (lambda (r) (eq? (any-tree-tag r) 'fragment-rule)) rules)
           (filter (lambda (r) (eq? (any-tree-tag r) 'mode)) rules)))
 
-(define (lexer-has-newline-rule? lexer-rules)
-  (for/or ([r lexer-rules])
-    (and (eq? (any-tree-tag r) 'lexer-rule)
-         (string=? (any-tree-text (first (any-tree-children r))) "NEWLINE"))))
+(define (lexer-has-newline-rule? lexer-rules [policy default-language-policy])
+  (define newline-name (language-policy-newline-token-name policy))
+  (and newline-name
+       (for/or ([r lexer-rules])
+         (and (eq? (any-tree-tag r) 'lexer-rule)
+              (string=? (any-tree-text (first (any-tree-children r))) newline-name)))))
 
 ;; Is this lexer rule hidden from the parser (channel(HIDDEN) / channel(1))?
 ;; With comment preservation these tokens are emitted (not skipped) so they can
@@ -86,127 +89,17 @@
 
 ;; ── Sections ──────────────────────────────────────────────────────
 
-(define (gen-header #:indent-tokens? [indent-tokens? #f])
+(define (gen-header #:indent-tokens? [indent-tokens? #f]
+                     #:policy [policy default-language-policy])
   (string-append
    "#lang racket
 (require racklr/tree)
 (provide token token? token-type token-value token-start token-end tokenize parse)
 (struct token (type value start end) #:transparent)"
-   (if indent-tokens?
-       (gen-indent-helpers)
-       "")))
-
-;; ── Python INDENT/DEDENT helpers (embedded in generated lexer) ────
-(define (gen-indent-helpers)
-  "
-;; Python indent computation: spaces count 1, tabs advance to next multiple of 8
-(define (compute-indent ws)
-  (let loop ([i 0] [col 0])
-    (if (>= i (string-length ws))
-        col
-        (let ([c (string-ref ws i)])
-          (if (char=? c #\\tab)
-              (loop (+ i 1) (+ col (- 8 (modulo col 8))))
-              (loop (+ i 1) (+ col 1)))))))
-
-(define (paren-open? type)
-  (member type '(OPEN_PAREN OPEN_BRACK OPEN_BRACE)))
-
-(define (paren-close? type)
-  (member type '(CLOSE_PAREN CLOSE_BRACK CLOSE_BRACE)))
-
-;; Strip the newline prefix from a NEWLINE token value, returning
-;; (values newline-str indent-ws).
-(define (split-newline-value v)
-  (define vlen (string-length v))
-  (cond [(and (>= vlen 2) (char=? (string-ref v 0) #\\return)
-              (char=? (string-ref v 1) #\\newline))
-         (values \"\\r\\n\" (substring v 2 vlen))]
-        [(and (>= vlen 1) (or (char=? (string-ref v 0) #\\newline)
-                              (char=? (string-ref v 0) #\\return)
-                              (char=? (string-ref v 0) #\\page)))
-         (values (substring v 0 1) (substring v 1 vlen))]
-        [else (values v \"\")]))
-
-;; Post-process token list to insert INDENT/DEDENT tokens
-;; raw-tokens: list of (token ...) including EOF at end
-;; Returns: new list with INDENT/DEDENT inserted (EOF preserved at end)
-(define (insert-indents raw-tokens)
-  (define indent-stack (list 0))
-  (define opened 0)
-  (define dummy-pos (pos 0 0 0))
-  (define result '())
-  (define (emit t) (set! result (cons t result)))
-  (define (emit-indent indent-ws)
-    (emit (token 'INDENT indent-ws dummy-pos dummy-pos)))
-  (define (emit-dedent)
-    (emit (token 'DEDENT \"\" dummy-pos dummy-pos)))
-  ;; Collapse a leading run of consecutive NEWLINE tokens. Blank and
-  ;; comment-only lines each contribute a spurious NEWLINE; only the run's
-  ;; final NEWLINE carries the next real line's indentation. Returns the
-  ;; final NEWLINE and the remaining tokens after the run.
-  (define (skip-newlines toks)
-    (let nl-loop ([prev (car toks)] [rest (cdr toks)])
-      (if (and (pair? rest) (eq? (token-type (car rest)) 'NEWLINE))
-          (nl-loop (car rest) (cdr rest))
-          (values prev rest))))
-
-  (let loop ([remaining raw-tokens])
-    (if (null? remaining)
-        (begin
-          (for ([_ (in-range (sub1 (length indent-stack)))])
-            (emit-dedent))
-          (reverse result))
-        (let ([t (car remaining)]
-              [rest (cdr remaining)])
-          (define type (token-type t))
-          (define value (token-value t))
-          (cond
-            [(eq? type 'EOF)
-             ;; EOF: emit pending DEDENTs then EOF
-             (for ([_ (in-range (sub1 (length indent-stack)))])
-               (emit-dedent))
-             (emit t)
-             (reverse result)]
-            [(paren-open? type)
-             (set! opened (+ opened 1))
-             (emit t)
-             (loop rest)]
-            [(paren-close? type)
-             (set! opened (max 0 (- opened 1)))
-             (emit t)
-             (loop rest)]
-            [(eq? type 'NEWLINE)
-             ;; Inside an open bracket a NEWLINE is Python implicit line
-             ;; joining: drop it entirely. At depth 0, collapse any run of
-             ;; consecutive NEWLINEs to the last one (blank/comment-only
-             ;; lines) and process that line's indentation.
-             (if (= opened 0)
-                 (let*-values ([(nl rest-after-run) (skip-newlines remaining)]
-                               [(nl-str indent-ws) (split-newline-value (token-value nl))])
-                   (let ([indent (compute-indent indent-ws)]
-                         [current-top (car indent-stack)])
-                     (emit (token 'NEWLINE nl-str (token-start nl) (token-end nl)))
-                     (cond
-                       [(> indent current-top)
-                        (set! indent-stack (cons indent indent-stack))
-                        (emit-indent indent-ws)]
-                       [(< indent current-top)
-                        (let pop-loop ()
-                          (when (and (pair? indent-stack) (> (car indent-stack) indent))
-                            (set! indent-stack (cdr indent-stack))
-                            (emit-dedent)
-                            (pop-loop)))
-                        (when (or (null? indent-stack) (not (= (car indent-stack) indent)))
-                          (error 'insert-indents
-                                 \"unindent does not match any outer indentation level\"))]
-                       [else (void)])
-                     (loop rest-after-run)))
-                 (loop rest))]
-            [else
-              (emit t)
-              (loop rest)])))))
-")
+   (let ([layout (language-policy-layout-helper-source policy)])
+     (if (and indent-tokens? layout)
+         layout
+         ""))))
 
 ;; Mangle a string into a valid Racket identifier
 (define (mangle str)
@@ -556,22 +449,35 @@
 
 (define (gen-tokenizer mode-map #:has-newline? [has-newline? #f] #:indent-tokens? [indent-tokens? #f]
                        #:preserve-comments? [preserve-comments? #f]
-                       #:hidden-names [hidden-names '()])
+                       #:hidden-names [hidden-names '()]
+                       #:policy [policy default-language-policy])
   (define mode-clauses
     (string-join
      (for/list ([(mode-name rules) (in-dict mode-map)])
-       (gen-mode-section mode-name rules preserve-comments?))
+       (gen-mode-section mode-name rules preserve-comments? policy))
      "\n"))
+  (define template-mode (language-policy-template-mode-name policy))
   (define whitespace-handler
-    (if has-newline?
-        ;; Skip non-newline whitespace only; let newlines be matched by NEWLINE rule
-        "            [(and (char-whitespace? ch) (not (char=? ch #\\newline)))
-              (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending)]\n"
-         ;; Skip all whitespace including newlines (unless in TEMPLATE mode)
-         "            [(and (char-whitespace? ch) (not (eq? mode 'TEMPLATE)))
+    (cond
+      [has-newline?
+       ;; Skip non-newline whitespace only; let newlines be matched by the
+       ;; host policy's line-break token rule.
+       "            [(and (char-whitespace? ch) (not (char=? ch #\\newline)))
+              (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending)]\n"]
+      [template-mode
+       ;; Skip all whitespace including newlines, except in the policy's
+       ;; template-literal mode (its text is matched by the grammar).
+       (format "            [(and (char-whitespace? ch) (not (eq? mode '~a)))
                (if (char=? ch #\\newline)
                    (loop (+ p 1) (+ l 1) 1 (+ o 1) tks mode mstack pending)
-                   (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending))]\n"))
+                   (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending))]\n"
+               template-mode)]
+      [else
+       ;; No template modes: skip all whitespace including newlines.
+       "            [(char-whitespace? ch)
+               (if (char=? ch #\\newline)
+                   (loop (+ p 1) (+ l 1) 1 (+ o 1) tks mode mstack pending)
+                   (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending))]\n"]))
   (string-append
    (format "(define (~a in)~n" (if indent-tokens? "tokenize-raw" "tokenize"))
     "   (define il (string-length in))
@@ -599,12 +505,13 @@
         "")
     "\n"))
 
-(define (gen-mode-section mode-name rules preserve-comments?)
+(define (gen-mode-section mode-name rules preserve-comments?
+                          [policy default-language-policy])
   ;; Generate a longest-match loop: try all matchers at position p,
   ;; pick the one that advances furthest. If tie, first defined wins.
   ;; This implements ANTLR4's maximal munch lexer strategy.
   (define clauses-str
-    (string-join (map (λ (rule) (gen-token-clause rule preserve-comments?)) rules) "\n"))
+    (string-join (map (λ (rule) (gen-token-clause rule preserve-comments? policy)) rules) "\n"))
   (string-append
    (format "            [(eq? mode '~a)\n             (let __mloop ([__rules (list\n" mode-name)
    clauses-str
@@ -618,7 +525,7 @@
    "                         (__mloop (cdr __rules) (car __r) (cdar __rules))\n"
    "                         (__mloop (cdr __rules) __best-np __best-handle)))))]"))
 
-(define (gen-token-clause rule preserve-comments?)
+(define (gen-token-clause rule preserve-comments? [policy default-language-policy])
   (define children (any-tree-children rule))
   (define raw-name (any-tree-text (first children)))
   (define mangled (mangle raw-name))
@@ -630,11 +537,12 @@
     (if (regexp-match? #rx"^[a-zA-Z_][a-zA-Z0-9_]*$" raw-name)
         (format "'~a" raw-name)
         (format "(string->symbol ~s)" raw-name)))
-  (define cmd-body (gen-command-body commands token-expr raw-name preserve-comments?))
+  (define cmd-body (gen-command-body commands token-expr raw-name preserve-comments? policy))
   (format "               (cons ~a-match (lambda (np v) ~a))"
           mangled cmd-body))
 
-(define (gen-command-body commands token-expr raw-name preserve-comments?)
+(define (gen-command-body commands token-expr raw-name preserve-comments?
+                          [policy default-language-policy])
   (define inner-body
     (if (null? commands)
         (format "(define sl (string-length v)) (define tk (token ~a v (pos l c o) (pos l (+ c sl) (+ o sl)))) (loop np l (+ c sl) (+ o sl) (cons tk tks) ~a ~a ~a)" token-expr "mode" "mstack" "pending")
@@ -683,46 +591,7 @@
                              (format "(string->symbol ~s)" tname)))
                        (loop (cdr cmds) skip? more? texpr next-mode next-mstack next-pending)]
                       [else (loop (cdr cmds) skip? more? emit-type next-mode next-mstack next-pending)]))))))
-  ;; Template depth/brace tracking for specific rules
-  (cond [(string=? raw-name "BackTick")
-         (string-append "(set-box! template-depth (+ (unbox template-depth) 1)) " inner-body)]
-        [(string=? raw-name "BackTickInside")
-         (string-append "(set-box! template-depth (- (unbox template-depth) 1)) " inner-body)]
-         [(string=? raw-name "TemplateStringStartExpression")
-          (string-append "(set-box! brace-depth 1) " inner-body)]
-        [(string=? raw-name "OpenBrace")
-         (string-append "(when (> (unbox template-depth) 0) (set-box! brace-depth (+ (unbox brace-depth) 1))) " inner-body)]
-        [(string=? raw-name "CloseBrace")
-         ;; Conditional popMode: if template-depth > 0 and brace-depth reaches 0, pop back to TEMPLATE
-         (string-append
-          "(let ([new-bd (if (> (unbox template-depth) 0)"
-          "                  (- (unbox brace-depth) 1)"
-          "                  (unbox brace-depth))])"
-          "  (set-box! brace-depth new-bd)"
-          "  (if (and (> (unbox template-depth) 0) (= new-bd 0))"
-          "      (let ([next-mode (if (null? mstack) 'default (car mstack))]"
-          "            [next-mstack (if (null? mstack) '() (cdr mstack))])"
-          "        (define sl (string-length v))"
-          "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-          "        (loop np l (+ c sl) (+ o sl) (cons tk tks) next-mode next-mstack pending))"
-          "      (let ()"
-          "        (define sl (string-length v))"
-          "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-          "        (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))")]
-        [(string=? raw-name "TemplateCloseBrace")
-         (string-append
-          "(let ([new-bd (if (> (unbox template-depth) 0)"
-          "                  (- (unbox brace-depth) 1)"
-          "                  (unbox brace-depth))])"
-          "  (set-box! brace-depth new-bd)"
-          "  (if (and (> (unbox template-depth) 0) (= new-bd 0))"
-          "      (let ([next-mode (if (null? mstack) 'default (car mstack))]"
-          "            [next-mstack (if (null? mstack) '() (cdr mstack))])"
-          "        (define sl (string-length v))"
-          "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-          "        (loop np l (+ c sl) (+ o sl) (cons tk tks) next-mode next-mstack pending))"
-          "      (let ()"
-          "        (define sl (string-length v))"
-          "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-          "        (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))")]
-        [else inner-body]))
+  ;; Host-specific lexer-rule bookkeeping (e.g. ANTLR template-literal rule
+  ;; names) is a policy hook; this engine only calls it.
+  (define post ((language-policy-rule-post-process policy) raw-name inner-body token-expr))
+  (or post inner-body))

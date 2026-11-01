@@ -10,7 +10,7 @@ These are the non-negotiable contracts. A change that breaks one is not done, no
 
 - Every function and method carries an effect row (db, io, network, process, cache, llm, time, email). Unknown is a tracked state with an elimination obligation, never a silent default.
 - Effect keys are grounded in the concrete call chain. Classification is a property of the receiver's class, resolved class to module to domain. No method-name heuristics in engine code.
-- Library-specific tokens live only in the two DATA modules: `racklr/effects/library-tokens.rkt` and `racklr/effects/imports/library-config.rkt`. Engine code carries none.
+- Library-specific tokens live only in the DATA modules: `racklr/effects/library-tokens.rkt`, `library-pure-names.rkt`, `library-stdlib-types.rkt`, `library-racket-tokens.rkt`, `library-dialect.rkt`, `racklr/effects/imports/library-config.rkt`, and the per-host lexicons under `racklr/effects/lexicons/`. Engine code carries none, and the shared parser generator carries no host grammar policy (that is `racklr/gend-parser/language-policy.rkt` data, injectable with `#:policy`).
 - Every effect edge carries provenance. You can point at the exact tokens that made something `db`, or it is not classified.
 - UIR is the single source of truth. Absorb then emit is identity within the declared loss model, not a hidden one.
 - The checkers that grade host code are themselves gradeable. The gate is the contract.
@@ -44,8 +44,8 @@ Parallel threads stay out of each other's way by owning disjoint file sets.
 
 - No `.rkt` file over 400 lines. Split by responsibility, not by mechanical size.
 - Respect the layer boundaries: absorb (grammars plus lowering), uir, effect, check, graph, emit. A module stays in its layer.
-- Language knowledge is data, not core code. Adding a front end is a grammar plus a lowering hook plus a token lexicon, and it must not edit core modules.
-- Keep public call shapes stable. Add injectable config as an optional argument with a default, the way `direct-effect-of-callee` and `pure-stdlib-callee?` take `[tokens default-effect-tokens]`. Existing consumers keep their single-argument call.
+- Language knowledge is data, not core code. Adding a front end is a grammar plus a lowering hook plus a lexicon (token tables, host dialect, import rules, operation vocabulary), and it must not edit core modules.
+- Keep public call shapes stable. Add injectable config as an optional argument with a default, the way `direct-effect-of-callee` and `pure-stdlib-callee?` take `[tokens default-effect-tokens]` and `infer-effects` / `infer-effects-all` / `classify-call` take `#:lexicon`. A token value is a complete lexicon (the dialect travels in it), so the token-only shape stays valid. Existing consumers keep their single-argument call.
 
 ## Testability
 
