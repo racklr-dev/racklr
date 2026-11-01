@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Stable site origins for effect-edge provenance (nc-4A19):
+  `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural
+  receiver chain (from the UIR callee, never a rendered expression), and a
+  call-node positional discriminator (the line stand-in while UIR carries no
+  source positions, after which a recorded line joins the identity). Every
+  ground and call hop carries its origin; `make-callee-site` /
+  `make-declared-site` take `#:file`/`#:line`/`#:position` and `infer-effects`
+  gains an additive `#:source-file`, so per-file and whole-program inference
+  agree on a site identity. The projection names `site` atoms by
+  `file::owner@position:receiver-chain`, making the readable expression a
+  `site-expression` display atom, and adds `site-file`, `site-line` (when
+  known) and `site-chain` atoms; `provenance-origins` returns the sorted site
+  ids for run-to-run drift diffs. Origin identity excludes the inferred effect,
+  kind, coverage, tokens, and receiver class, so a site whose classification
+  changes keeps its identity; two identical expressions at different positions
+  are now distinct grounds. `tools/provenance-corpus.rkt` uses repo-relative
+  component names and reports the distinct-origin count plus a sha256
+  fingerprint (with `--origins` to dump the ids).
+- `racklr-test/provenance-origin-test.rkt` covering origin fields and identity,
+  identical-expression distinctness, cross-run stability, effect/kind and
+  literal-value independence, the structural receiver chain, graph display
+  separation, whole-program and declared origins, the line forward path, drift
+  localisation, per-file/whole-program agreement, and record/graph agreement.
 - Effect-row subtyping under a row-valued handler interpretation:
   `racklr/effects/algebra/subtyping` generalizes the bridge checker's
   capability → effect-names table to typed rows, so a handler can bound the

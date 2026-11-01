@@ -97,12 +97,15 @@ Effect rows give generated code a readable boundary: a function declares which c
 
 - `infer.rkt`: effect inference; composes rows up the call graph from annotations and known effects, and defers higher-order calls whose callee is not statically known.
 - `contract.rkt`: contract checking; subtyping between rows, budgets as upper bounds, and prohibitions.
-- `provenance.rkt` + `graph/provenance.rkt`: every inference run records the
-  evidence for each effect edge (classifying call site, source tokens, receiver
-  type, call chain) as structured data, projected into the typed hypergraph
-  substrate; `provenance-paths` answers "why is this function `db`" with the
-  exact caller→callee chain, and the projection refuses an effect edge with no
-  ground.
+- `origin.rkt` + `provenance.rkt` + `graph/provenance.rkt`: every inference run
+  records the evidence for each effect edge (classifying call site, source
+  tokens, receiver type, call chain) as structured data, projected into the
+  typed hypergraph substrate; `provenance-paths` answers "why is this function
+  `db`" with the exact caller→callee chain, and the projection refuses an
+  effect edge with no ground. Each site is keyed by a stable origin
+  (`file::owner@position:receiver-chain`, from source structure only, never an
+  inferred value), so the readable call expression is a display atom and
+  `provenance-origins` is a run-to-run drift fingerprint.
 - `labels.rkt` + `graph/profile.rkt`: each effect edge carries a confidence
   (`inferred` / `declared` / `unknown`) and a coverage (`universal` /
   `census-param` / `local-literal`) label, combined by the weakest link;
@@ -196,6 +199,7 @@ racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monoto
 racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
 racket effects-subtyping-handlers-test.rkt # subtyping laws + row-valued handler interpretation + bridge equivalence
 racket provenance-test.rkt           # effect-edge provenance + graph query
+racket provenance-origin-test.rkt    # stable site origins: stability, drift diff
 racket effect-profile-test.rkt       # confidence/coverage labels + transitive profiles
 racket effects-contract-test.rkt     # contract checking
 racket emit-contract-test.rkt        # emit contract + single dispatch
@@ -223,11 +227,15 @@ and grammar prerequisites as the shared baseline):
 racket tools/provenance-corpus.rkt                 # django/django/core
 racket tools/provenance-corpus.rkt django/django   # wider probe
 racket tools/provenance-corpus.rkt --profiles      # also transitive profiles
+racket tools/provenance-corpus.rkt --origins       # dump the stable site origins
 ```
 
 It prints the effect-edge and provenance counts (and, with `--profiles`, the
-transitive-profile label report) and exits non-zero if any effect edge has no
-reachable ground; it never re-pins the baseline.
+transitive-profile label report), the distinct-origin count and a sha256
+fingerprint of the sorted site origins (`--origins` prints the ids themselves so
+two runs diff directly; origins use repo-relative component names), and exits
+non-zero if any effect edge has no reachable ground or the graph's site origins
+disagree with the record. It never re-pins the baseline.
 
 ### Full-corpus measurement
 

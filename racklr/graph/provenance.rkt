@@ -17,6 +17,12 @@
 ;; Each ground also carries the edge's labels: the classification kind (which
 ;; maps to the confidence label) and the coverage label.
 ;;
+;; Site identity is the STABLE origin (racklr/effects/origin), not the rendered
+;; call expression: `site` atoms are named by the origin id
+;; (file::owner@position:receiver-chain), and the readable expression is a
+;; `site-expression` display atom. `provenance-origins` returns the sorted
+;; origin ids, so two runs can be diffed site by site.
+;;
 ;; `provenance-graph` refuses to project a row with an effect edge that no ground
 ;; can reach: "no effect edge exists without provenance" is enforced at
 ;; construction, by the SAME reachability traversal over the projected atoms
@@ -42,18 +48,31 @@
   ;; queries
   effect-edge
   provenance-paths
-  walk-hop walk-hop? walk-hop-from walk-hop-to walk-hop-site
+  walk-hop walk-hop? walk-hop-from walk-hop-to walk-hop-site walk-hop-origin
   walk-ground walk-ground? walk-ground-fn walk-ground-site walk-ground-effect
   walk-ground-tokens walk-ground-receiver walk-ground-kind walk-ground-coverage
+  walk-ground-origin walk-ground-file walk-ground-line walk-ground-chain
   walk-ground-entry
   walk-path walk-path? walk-path-hops walk-path-ground
   walk-path->string
+  provenance-origins
   ;; re-exported submodule APIs (kept stable for existing consumers)
   (all-from-out "provenance-atoms.rkt")
   (all-from-out "provenance-index.rkt")
   (all-from-out "provenance-check.rkt"))
 
 ;; ── projection ──────────────────────────────────────────────────────
+
+;; The origin's components as typed atoms. The `site` node name already IS the
+;; canonical origin id; these atoms make the components queryable (a file, a
+;; line, a receiver chain) without parsing the id back apart.
+(define (add-origin-atoms! add! id origin)
+  (when (prov-origin-file origin)
+    (add! (site-file-link id (prov-origin-file origin))))
+  (when (prov-origin-line origin)
+    (add! (site-line-link id (prov-origin-line origin))))
+  (when (pair? (prov-origin-chain origin))
+    (add! (site-chain-link id (string-join (prov-origin-chain origin) ".")))))
 
 ;; Project `rows` (the inference result: call-graph key → uir-effect-row) and
 ;; `prov` (the provenance record collected by the same run) into the typed graph.
@@ -82,8 +101,8 @@
       (add! (fn-effect-link fq entry)))
     (hash-set! entry-by fq by-effect))
 
-  ;; Grounds: the direct evidence for an effect edge, with its tokens, receiver
-  ;; type, classification kind, and coverage label.
+  ;; Grounds: the direct evidence for an effect edge, with its stable origin and
+  ;; its readable expression/tokens/receiver/kind/coverage.
   (for ([(fq by-effect) (in-hash (provenance-grounds prov))])
     (for ([(effect sites) (in-hash by-effect)])
       (define entry (hash-ref (hash-ref entry-by fq (hash)) effect #f))
@@ -92,7 +111,8 @@
                "ground for ~a at ~a is not in that function's row"
                effect fq))
       (for ([site (in-list sites)])
-        (define id (site-id fq (prov-site-site site)))
+        (define origin (prov-site-origin site))
+        (define id (site-id origin))
         (add! (grounds-link fq id entry))
         (add! (site-expression-link id (prov-site-site site)))
         (add! (site-effect-link id effect))
@@ -104,15 +124,19 @@
         (add! (site-kind-link id (prov-site-kind site)))
         (if (prov-site-coverage site)
             (add! (site-coverage-link id (prov-site-coverage site)))
-            (void)))))
+            (void))
+        (add-origin-atoms! add! id origin))))
 
-  ;; Call graph: each edge carries the callee expression the classifier saw, so
-  ;; a path step names WHY the effect travelled that hop.
+  ;; Call graph: each edge carries the callee expression the classifier saw and
+  ;; the stable origin of that call site, so a path step names WHY the effect
+  ;; travelled that hop.
   (for ([(caller calls) (in-hash (provenance-calls prov))])
     (for ([call (in-list calls)])
-      (define id (site-id caller (prov-call-site call)))
+      (define origin (prov-call-origin call))
+      (define id (site-id origin))
       (add! (call-site-link caller (prov-call-to call) id))
-      (add! (site-expression-link id (prov-call-site call)))))
+      (add! (site-expression-link id (prov-call-site call)))
+      (add-origin-atoms! add! id origin)))
 
   (define graph (sort (flatten-atoms atoms) atom-less?))
   ;; Enforcement is the atom-level reachability check, not a promise from the
@@ -130,15 +154,16 @@
 
 ;; ── query ───────────────────────────────────────────────────────────
 
-;; One hop of a provenance path: the caller, the callee, and the call expression
-;; that classification saw at that step.
-(struct walk-hop (from to site) #:transparent)
+;; One hop of a provenance path: the caller, the callee, the call expression
+;; that classification saw at that step, and that call site's stable origin id.
+(struct walk-hop (from to site origin) #:transparent)
 
 ;; The grounding site a path ends at: the classifying call expression, the
 ;; effect it grounded, its tokens, the receiver type (when resolved), the
-;; classification kind (confidence evidence), the coverage label, and the effect
-;; edge entry it proves.
-(struct walk-ground (fn site effect tokens receiver kind coverage entry)
+;; classification kind (confidence evidence), the coverage label, the effect
+;; edge entry it proves, and the site's stable origin (id + file/line/chain).
+(struct walk-ground (fn site effect tokens receiver kind coverage entry
+                     origin file line chain)
   #:transparent)
 
 ;; A complete provenance path for one effect edge: the hops from the queried
@@ -184,11 +209,15 @@
                    [receiver (hash-ref (graph-index-site-receivers idx) site #f)]
                    [expr (hash-ref (graph-index-site-exprs idx) site site)]
                    [kind (hash-ref (graph-index-site-kinds idx) site 'inferred)]
-                   [coverage (hash-ref (graph-index-site-coverages idx) site #f)])
+                   [coverage (hash-ref (graph-index-site-coverages idx) site #f)]
+                   [file (hash-ref (graph-index-site-files idx) site #f)]
+                   [line (hash-ref (graph-index-site-lines idx) site #f)]
+                   [chain (hash-ref (graph-index-site-chains idx) site '())])
               (set! results
                     (cons (walk-path (reverse hops)
                                      (walk-ground fn expr want tokens receiver
-                                                  kind coverage entry))
+                                                  kind coverage entry
+                                                  site file line chain))
                           results)))
             (void)))
       ;; Continue along the inferred call graph; the first visit is the shortest.
@@ -196,10 +225,17 @@
         (define callee (first call))
         (unless (hash-ref seen callee #f)
           (hash-set! seen callee #t)
-          (define site (hash-ref (graph-index-site-exprs idx) (second call) (second call)))
-          (push! (cons (walk-hop fn callee site) hops) callee)))
+          (define site-id (second call))
+          (define site (hash-ref (graph-index-site-exprs idx) site-id site-id))
+          (push! (cons (walk-hop fn callee site site-id) hops) callee)))
       (loop)))
   (sort results (λ (a b) (string<? (walk-path->key a) (walk-path->key b)))))
+
+;; Every stable site origin id the graph names, sorted: one string per distinct
+;; site, independent of the readable expression. Comparing this list across runs
+;; localises graph drift to the sites that actually moved.
+(define (provenance-origins graph)
+  (graph-index-origins (ensure-index graph)))
 
 (define (walk-path->key p)
   (format "~a/~a" (walk-ground-fn (walk-path-ground p)) (walk-path->string p)))

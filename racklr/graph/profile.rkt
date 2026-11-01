@@ -98,7 +98,11 @@
                 (hash-ref (graph-index-site-receivers idx) site #f)
                 (hash-ref (graph-index-site-kinds idx) site 'inferred)
                 (hash-ref (graph-index-site-coverages idx) site #f)
-                entry)))
+                entry
+                site
+                (hash-ref (graph-index-site-files idx) site #f)
+                (hash-ref (graph-index-site-lines idx) site #f)
+                (hash-ref (graph-index-site-chains idx) site '()))))
 
 ;; Breadth-first walk from `fq` collecting every reachable ground site. Each
 ;; visited function keeps the shortest hop list that reached it, so every
@@ -119,7 +123,10 @@
         (define callee (first call))
         (unless (hash-ref visited callee #f)
           (hash-set! visited callee
-                     (cons (walk-hop fn callee (site-expr-of idx (second call))) hops))
+                     (cons (walk-hop fn callee
+                                     (site-expr-of idx (second call))
+                                     (second call))
+                           hops))
           (enqueue! queue callee)))
       (loop)))
   paths)
