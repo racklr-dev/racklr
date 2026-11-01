@@ -6,6 +6,21 @@ Add Haskell as a source and target language: `lower-haskell.rkt` (Haskell CST to
 
 Haskell has no effect type system in the language. Effects are handled by monads and, above them, by effect libraries. The "first-class typed effects" motivation does not hold for Haskell in the language sense; what Haskell offers is the pure/effectful split on `IO` and a mature ecosystem of effect libraries that racklr can map onto its effect rows.
 
+## Status (verified 2026-11-01)
+
+**Phase 1 (grammar verification): DONE.** The upstream `antlr/grammars-v4`
+pair cannot parse under racklr's generator: its `OCURLY`/`VOCURLY`/`SEMI`/
+`CCURLY` layout tokens are produced by the Java `HaskellBaseLexer` preprocessor,
+whose lexer actions racklr compiles as no-ops, and its `NEWLINE` rule does not
+carry the next line's indentation, so no `INDENT`/`DEDENT` is inserted. A
+tracked authored pass-1 grammar now lives at `grammars/haskell/Haskell.g4`;
+`grammars/haskell/README.md` records the acquisition evidence, the coverage
+table, and the pass-1 limits, and `racklr-test/gen-haskell-test.rkt` exercises
+it (14 test cases: tokenizer, layout, 32 Phase-1 parser fixtures, 15 rejects;
+observed 14/14, exit 0). Phases 2-5 (lowering, emission,
+typeclass-to-effect mapping, round-trip tests) are open. The `Current State`
+section below records the pre-work survey, not this post-Phase-1 state.
+
 ## Effect-System Status (read this first)
 
 Haskell distinguishes pure functions from effectful ones through a single type, `IO`, not through effect rows.

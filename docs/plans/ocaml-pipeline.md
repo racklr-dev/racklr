@@ -6,6 +6,18 @@ Add OCaml as a source and target language: `lower-ocaml.rkt` (OCaml CST to UIR) 
 
 OCaml 5 has first-class effect handlers, but they are untyped. The "first-class typed effects" motivation does not hold for OCaml as it stands. The more interesting angle is the reverse: racklr's effect-inference layer can add static effect tracking on top of OCaml's untyped handlers, which the language itself does not provide.
 
+## Status (verified 2026-11-01)
+
+**Phase 1 (grammar acquisition): DONE.** No upstream ANTLR4 OCaml grammar
+exists (`antlr/grammars-v4` has no `ocaml/` directory), so
+`grammars/ocaml/OCamlLexer.g4` and `grammars/ocaml/OCamlParser.g4` are authored
+from the OCaml 5.2 manual with no third-party grammar text. `grammars/ocaml/README.md`
+records the acquisition evidence, the generator constraints worked around, and
+the pass-1 limits; `racklr-test/gen-ocaml-test.rkt` exercises the Phase-1
+fixture set (24 test cases; observed 24/24, exit 0). Phases 2-5 (lowering,
+emission, effect inference over handlers, round-trip tests) are open. The
+`Current State` section below records the pre-work survey.
+
 ## Effect-System Status (read this first)
 
 OCaml 5 (released December 2022) added algebraic effect handlers to the runtime and standard library, but deliberately not to the type system.
