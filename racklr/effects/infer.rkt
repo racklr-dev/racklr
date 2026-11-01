@@ -28,7 +28,7 @@
 (require racklr/uir
          racklr/effects/contract
          (prefix-in alg: racklr/effects/algebra/main)
-         racklr/effects/ts-annot
+         racklr/effects/annotation-hooks
          racklr/effects/walk
          racklr/effects/shape
          racklr/effects/effect-roots
@@ -37,7 +37,8 @@
          racklr/effects/classify
          racklr/effects/labels
          racklr/effects/provenance
-         racklr/effects/whole-program)
+         racklr/effects/whole-program
+         racklr/effects/lexicon)
 
 (provide
   infer-effects
@@ -72,7 +73,9 @@
 ;;                         provenance path walks.
 (define (compute-effect-rows fns methods class-names supers known
                              #:provenance-table [prov-box #f]
-                             #:provenance-record [rec-box #f])
+                             #:provenance-record [rec-box #f]
+                             #:lexicon [lex default-lexicon])
+  (define tokens (lexicon-tokens lex))
   (define direct-rows (make-hash))  ;; name → algebra-row (direct entries only)
   (define edges (make-hash))        ;; name → (listof name-symbol)
   (define direct-prov (and prov-box (make-hash)))  ;; name → hash effect → sites
@@ -94,7 +97,8 @@
     (define (visit! node)
       (if (uir-call? node)
           (let* ([callee (uir-call-callee node)]
-                 [cls (classify-call callee known owner class-names supers)]
+                 [cls (classify-call callee known owner class-names supers
+                                    #:lexicon lex)]
                  [site (callee-site-string callee)])
             (case (car cls)
               [(edge)
@@ -128,7 +132,7 @@
                                          (make-callee-site (function-fq n) 'unknown callee
                                                            #:kind 'unresolved
                                                            #:coverage
-                                                           (unresolved-coverage callee))))]))
+                                                           (unresolved-coverage callee #f tokens))))]))
           (void)))
     (walk-body body visit!)
     (hash-set! direct-rows n (effects->algebra-row effects))
@@ -177,7 +181,8 @@
 ;; `unknown`.
 (define (infer-effects program
                        #:provenance-table [prov-box #f]
-                       #:provenance-record [rec-box #f])
+                       #:provenance-record [rec-box #f]
+                       #:lexicon [lex default-lexicon])
   (define fns (collect-functions program))
   (define methods (collect-methods program))
   (define class-names (collect-class-names program))
@@ -187,7 +192,8 @@
   (for ([(n _) (in-hash methods)]) (hash-set! known n #t))
   (compute-effect-rows fns methods class-names supers known
                        #:provenance-table prov-box
-                       #:provenance-record rec-box))
+                       #:provenance-record rec-box
+                       #:lexicon lex))
 
 ;; ── write-back ──────────────────────────────────────────────────────
 
@@ -200,8 +206,15 @@
 ;; wrapped in the internal `__withEffects(row, fn)` call those emitters render.
 ;; Targets with their own row placement (Koka's typed effect row, Clojure's
 ;; defn metadata) pass #f so their emitters see the row on the uir-fn instead.
-(define (annotate-effects program #:wrap-anonymous? [wrap? #t])
-  (define rows (infer-effects program))
+(define (annotate-effects program
+                          #:wrap-anonymous? [wrap? #t]
+                          #:lexicon [lex default-lexicon]
+                          #:annotation-hooks [hooks default-annotation-hooks])
+  (define tokens (lexicon-tokens lex))
+  (define with-effects-call? (annotation-hooks-with-effects-call? hooks))
+  (define extract-with-effects-row (annotation-hooks-extract-row hooks))
+  (define extract-with-effects-fn (annotation-hooks-extract-fn hooks))
+  (define rows (infer-effects program #:lexicon lex))
   ;; Materialize an inferred row for emission: 'unknown is a checker signal
   ;; ("could not verify"), not a runtime effect, and the runtime guards reject
   ;; the 'unknown modality. So it is dropped here; an all-unknown row becomes
@@ -232,8 +245,9 @@
   ;; JS emitter renders.
   (define (with-effects-wrap val nm)
     (define c (inferred-row nm))
-    (if c
-        (uir-call (uir-symbol "__withEffects") (list c val))
+    (define annotation-callee (tokens-annotation-callee tokens))
+    (if (and c annotation-callee)
+        (uir-call (uir-symbol annotation-callee) (list c val))
         val))
   ;; A hand-written `withEffects(row)(fn)` annotation declares its row
   ;; explicitly. Rewrite it into the internal __withEffects(row, fn) call the
@@ -242,8 +256,9 @@
   (define (rewrite-with-effects val)
     (define row (extract-with-effects-row val))
     (define fn (extract-with-effects-fn val))
-    (if row
-        (uir-call (uir-symbol "__withEffects") (list row fn))
+    (define annotation-callee (tokens-annotation-callee tokens))
+    (if (and row annotation-callee)
+        (uir-call (uir-symbol annotation-callee) (list row fn))
         val))
   (define (rewrite-value val nm)
     (cond
@@ -251,7 +266,8 @@
       [(uir-fn? val) (with-effects val nm)]
       [(and (uir-call? val)
             (uir-symbol? (uir-call-callee val))
-            (member (uir-symbol-name (uir-call-callee val)) '("async-fn" "gen-fn"))
+            (set-member? (tokens-wrapper-callees tokens)
+                         (uir-symbol-name (uir-call-callee val)))
             (= (length (uir-call-args val)) 1)
             (uir-fn? (first (uir-call-args val))))
        (struct-copy uir-call val
@@ -274,7 +290,8 @@
       ;; (call "const"/"let"/"var" (list (set! NAME <fn/arrow>))). Descend to
       ;; reach the named binding so its inferred row is written back.
       [(and (uir-call? n) (uir-symbol? (uir-call-callee n))
-            (member (uir-symbol-name (uir-call-callee n)) '("var" "let" "const"))
+            (set-member? (tokens-binding-callees tokens)
+                         (uir-symbol-name (uir-call-callee n)))
             (= (length (uir-call-args n)) 1))
        (struct-copy uir-call n
                     [args (list (rewrite (first (uir-call-args n))))])]

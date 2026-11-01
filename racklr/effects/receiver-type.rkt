@@ -17,7 +17,8 @@
          racklr/effects/walk
          racklr/effects/class-resolve
          racklr/effects/imports
-         racklr/effects/library-tokens)
+         racklr/effects/library-tokens
+         racklr/effects/lexicon)
 
 (provide
   receiver-types? receiver-types receiver-types-locals receiver-types-self-attrs
@@ -34,9 +35,10 @@
 ;; locals:     hash name-symbol → class-name-symbol
 ;; self-attrs: hash attr-symbol → class-name-symbol (on self / cls)
 
-(define (self-or-cls-var? v)
+(define (self-or-cls-var? v [tokens default-effect-tokens])
   (and (uir-var? v)
-       (memq (string->symbol (uir-symbol-name (uir-var-name v))) '(self cls))))
+       (tokens-self-name? tokens
+                          (string->symbol (uir-symbol-name (uir-var-name v))))))
 
 ;; A pure stdlib/builtin value constructor name (`Path`, `md5`, `dict`): pure to
 ;; construct, and therefore also a usable receiver type for a call result.
@@ -68,7 +70,7 @@
 ;; or a bare class reference. Moved above `call-result-type` because
 ;; `call-result-type` consults it when a call's callee is a class-valued
 ;; receiver expression (`self.build_file_class(...)`).
-(define (receiver-class-of env base)
+(define (receiver-class-of env base [tokens default-effect-tokens])
   (cond
     [(not env) #f]
     [(uir-var? base)
@@ -79,7 +81,7 @@
                (string->symbol (uir-symbol-name base)) #f)]
     [(uir-get? base)
      (define attr (get-field-symbol (uir-get-field base)))
-     (and attr (self-or-cls-var? (uir-get-base base))
+     (and attr (self-or-cls-var? (uir-get-base base) tokens)
           (hash-ref (receiver-types-self-attrs env) attr #f))]
     [else #f]))
 
@@ -116,7 +118,7 @@
      ;; A dotted callee rooted at self/cls is an attribute method call
      ;; (`self._cache.set(...)`), NOT a module-qualified constructor — the
      ;; final field `set` must not collide with the builtin `set` type here.
-     (and f (not (memq (dotted-root callee) '(self cls)))
+     (and f (not (tokens-self-name? tokens (dotted-root callee)))
           (or (hash-has-key? class-defs f) (pure-stdlib-type? f tokens)) f)]
     [else #f]))
 
@@ -177,7 +179,7 @@
 ;; value (`self.build_file_class(...)`) carry the class through to the result.
 (define (call-result-type callee class-defs [tokens default-effect-tokens] [rt #f]
                            [import-env #f] [comp #f])
-  (or (and rt (receiver-class-of rt callee))
+  (or (and rt (receiver-class-of rt callee tokens))
       (constructor-class callee class-defs tokens)
       (let ([nm (callee-name callee)])
         (and nm
@@ -222,18 +224,18 @@
      (call-result-type (uir-call-callee value) class-defs tokens rt import-env comp)]
     [(uir-var? value)
      (define nm (string->symbol (uir-symbol-name (uir-var-name value))))
-     (or (and owner (memq nm '(self cls)) owner)
+     (or (and owner (tokens-self-name? tokens nm) owner)
          (hash-ref (receiver-types-locals rt) nm #f)
          (bare-class-value value class-defs tokens import-env comp))]
     [(uir-symbol? value)
      (define nm (string->symbol (uir-symbol-name value)))
-     (or (and owner (memq nm '(self cls)) owner)
+     (or (and owner (tokens-self-name? tokens nm) owner)
          (hash-ref (receiver-types-locals rt) nm #f)
          (bare-class-value value class-defs tokens import-env comp))]
     [(uir-get? value)
      (define attr (get-field-symbol (uir-get-field value)))
      (cond
-       [(and attr (self-or-cls-var? (uir-get-base value)))
+       [(and attr (self-or-cls-var? (uir-get-base value) tokens))
         (hash-ref (receiver-types-self-attrs rt) attr #f)]
        [else
         ;; `module.Class` where `module` is a tracked module receiver:
@@ -285,6 +287,7 @@
 ;; method body.
 (define (infer-receiver-types body class-defs [base-attrs (hash)]
                               [import-env #f] [comp #f] [params '()] [owner #f]
+                              #:tokens [tokens default-effect-tokens]
                               #:return-types [return-types #f]
                               #:methods [methods #f]
                               #:fn-defs [fn-defs #f]
@@ -301,21 +304,21 @@
       (define pname (and (uir-symbol? (uir-typed-param-name p))
                          (string->symbol (uir-symbol-name (uir-typed-param-name p)))))
       (define pcls (bare-class-value (uir-typed-param-type p) class-defs
-                                     default-effect-tokens import-env comp))
+                                     tokens import-env comp))
       (when (and pname pcls) (hash-set! locals pname pcls))))
   (define (value-class value)
     (or (and (uir-call? value) return-types methods fn-defs known comp-supers
              (corpus-call-return-type (uir-call-callee value) comp class-defs owner
                                       methods fn-defs known comp-supers return-types))
         (value-class-of value (receiver-types locals self-attrs)
-                        class-defs default-effect-tokens import-env comp owner)))
+                        class-defs tokens import-env comp owner)))
   (define (process-set! n)
     (define cls (value-class (uir-set!-value n)))
     (when cls
       (define lhs (uir-set!-name n))
       (cond
         [(and (uir-get? lhs) (get-field-symbol (uir-get-field lhs))
-              (self-or-cls-var? (uir-get-base lhs)))
+              (self-or-cls-var? (uir-get-base lhs) tokens))
          (hash-set! self-attrs (get-field-symbol (uir-get-field lhs)) cls)]
         [(set!-lhs-symbol lhs)
          => (λ (nm) (hash-set! locals nm cls))]

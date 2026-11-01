@@ -33,6 +33,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared grounds, transitive witnesses, mixed-confidence aggregation, and
   the unknown-obligation data structure.
 
+- Injectable host lexicons for effect classification (P2.2). A lexicon bundles
+  token tables, the host dialect (implicit receiver names, exception and
+  constructor conventions, front-end construct encodings), import-tag rules and
+  the operation vocabulary. `infer-effects`, `infer-effects-all`,
+  `classify-call` and `classify-call-all` take it as `#:lexicon`; the default is
+  the Python/Django lexicon, assembled from the DATA modules
+  (`library-tokens.rkt`, `library-pure-names.rkt`, `library-dialect.rkt`,
+  `imports/library-config.rkt`).
+- `racklr/effects/lexicons/javascript.rkt`: a complete non-Python lexicon as
+  data, proving a JavaScript host classifies with zero engine edits. Like the
+  Python lexicon's starting point it is name-table-driven (`fs.readFile` → io,
+  `console.log` → io, `JSON.parse` → pure), so it is the injection proof, not
+  the receiver-type-dataflow milestone; JS unknown leaves will need the
+  receiver-type dataflow work (P0.3/P4.x) applied to JS.
+- `racklr/gend-parser/language-policy.rkt`: the absorb layer's host grammar
+  policy (layout token post-pass, line-break/template-mode token names,
+  template-rule bookkeeping hooks, preferred entry rule) as injectable data;
+  `generate-parser-module` takes it as `#:policy`.
+- `racklr-test/effects-lexicon-test.rkt`: end-to-end lexicon-injection tests
+  plus grep guards that fail if library names, quoted-symbol/string literals,
+  or host-grammar policy leak back into the core engine; the guards derive
+  their forbidden sets from the lexicons' DATA and derive their scan targets
+  from the directories, so a module split cannot silently shrink the scan.
 - Effect-edge provenance is first-class in the graph substrate. Inference
   (`infer-effects`, `infer-effects-all`) optionally records every classifying
   call site (tokens, receiver type, classification kind) and the inferred call
@@ -129,6 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `algebra/join`, and `rows.rkt` is the algebra adapter. The refactor is
   behavior-preserving: the `type-graph.rkt django/django/core` baseline is
   unchanged (`sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`).
+- The classification engine is host-neutral and fully injectable: the lexical
+  receiver-type/classifier helpers moved to `receiver-resolve.rkt` (splitting
+  `classify-all.rkt` under the 400-line obligation), and the annotation surface
+  is an injected hook (`annotation-hooks.rkt`) rather than a require of one
+  host's annotation module. The default remains the Python/Django lexicon, so
+  classification results are unchanged (`baseline OK`).
+- The parser generator no longer embeds Python layout code or
+  JavaScript/TypeScript template-literal rule names; existing front ends'
+  generated parsers are byte-identical.
 - `docs/django-frontend-catalogue.md` is now the re-run record, not a list of
   open blockers: all twelve front-end blockers are marked resolved, the latest
   whole-tree scan is 907/907 `ok` with 0 blockers, and the measurement command

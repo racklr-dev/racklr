@@ -41,7 +41,9 @@
 ;; or one worked-instance-only edge cannot claim a stronger label as a whole.
 
 (require racklr/uir
-         racklr/effects/shape)
+         racklr/effects/shape
+         racklr/effects/library-tokens
+         racklr/effects/lexicon)
 
 (provide
  ;; vocabularies, ordered weakest -> strongest
@@ -114,10 +116,12 @@
 ;; Does the callee's receiver (or a bare callee) root in a parameter of the
 ;; enclosing function? `self`/`cls` are receivers, not parameters, even when the
 ;; front end keeps them in the parameter list.
-(define (parameter-rooted? callee [param-names #f])
+(define (parameter-rooted? callee [param-names #f] [tokens default-effect-tokens])
   (define root (expression-root-name callee))
   (and root param-names
-       (not (memq root '(self cls)))
+       ;; The host dialect names its implicit receivers (`self`/`cls` in the
+       ;; default Python dialect); they are receivers, not parameters.
+       (not (tokens-self-name? tokens root))
        (and (memq root param-names) #t)))
 
 ;; Coverage of a ground the classifier established from a call site. `evidence`
@@ -133,9 +137,10 @@
 ;; receiver environment, so its grounds are structural and stay universal; the
 ;; whole-program fixpoint (infer-effects-all) is what distinguishes the
 ;; worked-instance cases.
-(define (ground-coverage callee [evidence 'structural] [param-names #f])
+(define (ground-coverage callee [evidence 'structural] [param-names #f]
+                         [tokens default-effect-tokens])
   (if (eq? evidence 'dataflow)
-      (if (parameter-rooted? callee param-names) 'census-param 'local-literal)
+      (if (parameter-rooted? callee param-names tokens) 'census-param 'local-literal)
       'universal))
 
 ;; Coverage of an UNRESOLVED ground (the elimination obligation): the site's
@@ -143,5 +148,5 @@
 ;; site is one parameter dataflow would resolve (census `param`); every other
 ;; site is a tracked local/literal call. The label is the elimination
 ;; obligation's evidence kind, kept as data instead of a boolean flag.
-(define (unresolved-coverage callee [param-names #f])
-  (if (parameter-rooted? callee param-names) 'census-param 'local-literal))
+(define (unresolved-coverage callee [param-names #f] [tokens default-effect-tokens])
+  (if (parameter-rooted? callee param-names tokens) 'census-param 'local-literal))

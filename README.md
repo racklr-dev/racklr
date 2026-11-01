@@ -179,9 +179,11 @@ Recursive descent with backtracking. Each grammar rule becomes a `parse-XXX` fun
 
 1. Find or create ANTLR4 `.g4` grammar files. Pristine vendored grammars live in the untracked `grammars-v4/<lang>/` checkout; authored or modified grammars are tracked in `grammars/<lang>/` (see `grammars/koka/` and `grammars/python3/`)
 2. If using separate lexer/parser grammars, ensure `tokenVocab = <LexerName>` is set in the parser grammar
-3. Generate and test: `(parse-g4-file "grammars-v4/<lang>/<Lang>Parser.g4")` → `(generate-parser-module cst #:source-path path)`
-4. Write lowering pass: CST → UIR
-5. Write code generator: UIR → target language text
+3. If the language has layout or template-literal lexing conventions, add a `language-policy` value (see `racklr/gend-parser/language-policy.rkt`) and pass it as `#:policy`
+4. Generate and test: `(parse-g4-file "grammars-v4/<lang>/<Lang>Parser.g4")` → `(generate-parser-module cst #:source-path path #:policy policy)`
+5. Write lowering pass: CST → UIR
+6. Write a host lexicon under `racklr/effects/lexicons/`: token tables (`effect-tokens`), the host dialect (implicit receiver names, exception/constructor conventions, front-end construct encodings), import-tag rules, and the operation vocabulary. The default is the Python/Django lexicon; `infer-effects` / `infer-effects-all` / `classify-call` take it as `#:lexicon`. No engine edits.
+7. Write code generator: UIR → target language text
 
 ## Testing
 

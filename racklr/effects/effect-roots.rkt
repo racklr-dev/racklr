@@ -4,9 +4,11 @@
 ;;
 ;; The "direct effect" classifier: a generic engine that maps a callee to an
 ;; effect (llm / db / network / cache / io / process / time / email) using the
-;; injected token lexicon, plus the pure-stdlib predicate. The token tables
-;; themselves live in library-tokens.rkt; this module carries no
-;; library-specific names.
+;; injected token tables, plus the pure-stdlib predicate. The tables
+;; themselves live in the DATA modules (library-tokens.rkt and friends); this
+;; module carries no library-specific names. Every entry point takes an
+;; optional token value, which is a complete host lexicon: it carries both the
+;; name tables and the host dialect (naming/encoding conventions).
 
 (require racklr/uir
          racklr/effects/shape
@@ -17,31 +19,62 @@
   pure-stdlib-callee?
   stdlib-type-method-effect)
 
-;; Is `root` a builtin type or stdlib module name? Used to keep the name-based
-;; ORM fallback from claiming dotted calls on non-ORM receivers.
-(define (non-orm-root? tokens root)
+;; Is `root` a builtin type or stdlib module name? Used to keep the name-only
+;; method fallback from claiming dotted calls on non-library receivers
+;; (`dict.get` must not classify as a database read).
+(define (method-fallback-exempt-root? tokens root)
   (and root
        (or (set-member? (effect-tokens-builtin-type-roots tokens) (symbol->string root))
            (set-member? (effect-tokens-stdlib-module-roots tokens) (symbol->string root)))))
 
-(define (orm-callee? tokens c)
+;; Effect of a whole call ROOT (the leftmost name of a dotted callee): the
+;; domain whose effect-root table contains it. Root domains are tried in the
+;; injected priority order (the strongest root wins).
+(define (root-effect tokens root)
+  (and root
+       (for/or ([domain (in-list (effect-tokens-effect-root-priority tokens))])
+         (and (set-member? (hash-ref (effect-tokens-effect-roots tokens) domain (set))
+                           (symbol->string root))
+              domain))))
+
+;; Effect of a BARE callee name that is an effect on its own (`fetch(...)`,
+;; `open(...)`, `sleep(...)`), from the injected name→domain table.
+(define (bare-name-effect tokens nm)
+  (and nm (hash-ref (effect-tokens-bare-name-effects tokens) (symbol->string nm) #f)))
+
+;; Effect of a dotted METHOD name that is an effect regardless of receiver
+;; (`obj.write(...)`, `obj.send_mail(...)`), from the injected name→domain
+;; table. `log` is deliberately absent from the default table: it collides
+;; with `math.log`; a host whose logger is unambiguous can list it.
+(define (method-name-effect tokens op)
+  (and op (hash-ref (effect-tokens-method-effects tokens) (symbol->string op) #f)))
+
+;; Name-only method fallback: a method name that implies a domain even when the
+;; receiver cannot be resolved. The unambiguous table always applies; the
+;; ambiguous table (generic English verbs such as `get`/`update`/`save`) applies
+;; only when the host enables it. Exempt roots keep builtin/stdlib receivers out
+;; so `dict.get` is not misread as a database read.
+(define (fallback-method-effect tokens c)
   (and (member-access-callee? c)
        (let* ([op (effect-op-of-callee c)]
               [root (dotted-root c)])
          (and op
-              (not (non-orm-root? tokens root))
-              (or (set-member? (effect-tokens-orm-methods tokens) (symbol->string op))
-                  (and (effect-tokens-orm-generic-by-name? tokens)
-                       (set-member? (effect-tokens-orm-generic-methods tokens)
-                                    (symbol->string op))))))))
+              (not (method-fallback-exempt-root? tokens root))
+              (or (hash-ref (effect-tokens-unambiguous-method-effects tokens)
+                            (symbol->string op) #f)
+                  (and (effect-tokens-ambiguous-method-effects-enabled? tokens)
+                       (hash-ref (effect-tokens-ambiguous-method-effects tokens)
+                                 (symbol->string op) #f)))))))
 
 ;; ── stdlib effect roots ─────────────────────────────────────────────
 ;;
 ;; Standard-library / framework calls that perform an effect but are not
-;; covered by the primary roots (llm/db/network/cache). These map to the
-;; opaque effect names `io`, `process`, `time`, and `email` (plus `network`
-;; for raw-socket/HTTP-client modules). Detection is root- or method-name
-;; based, and runs after the stronger roots in `direct-effect-of-callee`.
+;; covered by the primary effect roots: bare builtins with an effect, whole
+;; library roots that are always an effect, dotted methods that are an effect
+;; regardless of receiver, and root-qualified method tables
+;; (`os.remove` → io, `sys.exit` → process). Runs after the stronger roots in
+;; `direct-effect-of-callee` and after its name-only fallback, preserving the
+;; order the default (Django) corpus was classified with.
 
 ;; Effect name for a stdlib/framework callee, or #f.
 (define (stdlib-effect-of tokens c)
@@ -49,15 +82,9 @@
   (define nm (callee-name c))
   (define op (effect-op-of-callee c))
   (cond
-    [(and nm (set-member? (effect-tokens-io-builtins tokens) (symbol->string nm))) 'io]
-    [(and nm (set-member? (effect-tokens-time-methods tokens) (symbol->string nm))) 'time]
-    [(hash-ref (effect-tokens-stdlib-root-effects tokens) root #f) => (λ (e) e)]
-    [(and op (member-access-callee? c)
-          (set-member? (effect-tokens-io-methods tokens) (symbol->string op))) 'io]
-    [(and op (member-access-callee? c)
-          (set-member? (effect-tokens-email-methods tokens) (symbol->string op))) 'email]
-    [(and op (member-access-callee? c)
-          (set-member? (effect-tokens-time-methods tokens) (symbol->string op))) 'time]
+    [(bare-name-effect tokens nm) => values]
+    [(hash-ref (effect-tokens-stdlib-root-effects tokens) root #f) => values]
+    [(and (member-access-callee? c) (method-name-effect tokens op)) => values]
     [(and op root
           (let ([m (hash-ref (effect-tokens-root-method-effects tokens) root #f)])
             (and m (hash-ref m (symbol->string op) #f))))]
@@ -94,12 +121,8 @@
   (define root (dotted-root c))
   (define nm (callee-name c))
   (cond
-    [(and root (set-member? (effect-tokens-llm-roots tokens) (symbol->string root))) 'llm]
-    [(and root (set-member? (effect-tokens-db-roots tokens) (symbol->string root))) 'db]
-    [(and root (set-member? (effect-tokens-network-roots tokens) (symbol->string root))) 'network]
-    [(and nm (set-member? (effect-tokens-network-names tokens) (symbol->string nm))) 'network]
-    [(and root (set-member? (effect-tokens-cache-roots tokens) (symbol->string root))) 'cache]
-    [(and nm (set-member? (effect-tokens-cache-names tokens) (symbol->string nm))) 'cache]
-    [(orm-callee? tokens c) 'db]
-    [(stdlib-effect-of tokens c) => (λ (e) e)]
+    [(root-effect tokens root) => values]
+    [(bare-name-effect tokens nm) => values]
+    [(fallback-method-effect tokens c) => values]
+    [(stdlib-effect-of tokens c) => values]
     [else #f]))

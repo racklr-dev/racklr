@@ -47,28 +47,32 @@
 
 (define (test-injectable-effect-tokens)
   ;; direct-effect-of-callee honors an injected token lexicon; the default
-  ;; lexicon does not know the custom root.
+  ;; lexicon does not know the custom root. The token value IS the host
+  ;; lexicon: name tables + dialect, so injecting one is a data swap.
   (define custom
     (struct-copy effect-tokens default-effect-tokens
-                 [llm-roots (set "mymodel")]))
+                 [effect-roots (hash-set (effect-tokens-effect-roots default-effect-tokens)
+                                         'llm (set "mymodel"))]))
   (check-equal? (direct-effect-of-callee (dot (v "mymodel") "generate") custom) 'llm)
   (check-false (direct-effect-of-callee (dot (v "mymodel") "generate")))
-  ;; declarative-callee? honors an injected lexicon too.
+  ;; pure-constructor-callee? honors an injected lexicon too.
   (define custom2
     (struct-copy effect-tokens default-effect-tokens
-                 [declarative-names (set "MyField")]))
-  (check-true (declarative-callee? (v "MyField") custom2))
-  (check-false (declarative-callee? (v "MyField")))
-  ;; time-methods and root-method-effects honor an injected lexicon too.
+                 [pure-constructor-names (set "MyField")]))
+  (check-true (pure-constructor-callee? (v "MyField") custom2))
+  (check-false (pure-constructor-callee? (v "MyField")))
+  ;; method-effects and root-method-effects honor an injected lexicon too.
   (define custom3
     (struct-copy effect-tokens default-effect-tokens
-                 [time-methods (set "pause")]
+                 [method-effects (hash-set (effect-tokens-method-effects
+                                            default-effect-tokens)
+                                           "pause" 'time)]
                  [root-method-effects (hash 'mylib (hash "launch" 'process))]))
   (check-equal? (direct-effect-of-callee (dot (v "clock") "pause") custom3) 'time)
   (check-equal? (direct-effect-of-callee (dot (v "mylib") "launch") custom3) 'process)
   (check-false (direct-effect-of-callee (dot (v "clock") "pause")))
   (check-false (direct-effect-of-callee (dot (v "mylib") "launch")))
-  ;; the three pure-roots name tables honor an injected lexicon too.
+  ;; the pure-roots name tables honor an injected lexicon too.
   (define custom4
     (struct-copy effect-tokens default-effect-tokens
                  [pure-stdlib-bare-names (set "mypartial")]))
@@ -76,14 +80,14 @@
   (check-false (pure-stdlib-bare-callee? (v "mypartial")))
   (define custom5
     (struct-copy effect-tokens default-effect-tokens
-                 [gettext-names (set "mytrans")]))
-  (check-true (gettext-callee? (v "mytrans") custom5))
-  (check-false (gettext-callee? (v "mytrans")))
+                 [pure-op-names (set "mytrans")]))
+  (check-true (pure-op-callee? (v "mytrans") custom5))
+  (check-false (pure-op-callee? (v "mytrans")))
   (define custom6
     (struct-copy effect-tokens default-effect-tokens
-                 [pure-config-method-names (set "myconfig")]))
-  (check-true (pure-config-method-callee? (dot (v "parser") "myconfig") custom6))
-  (check-false (pure-config-method-callee? (dot (v "parser") "myconfig"))))
+                 [pure-method-names (set "myconfig")]))
+  (check-true (pure-method-callee? (dot (v "parser") "myconfig") custom6))
+  (check-false (pure-method-callee? (dot (v "parser") "myconfig"))))
 
 (define (test-direct-llm)
   (define p (prog (fn "summarize"

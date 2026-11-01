@@ -3,19 +3,26 @@
 ;; racklr/effects/imports/effect-tag.rkt
 ;;
 ;; Generic module-path → effect-domain tagging: a class inherits its module's
-;; domain from the config rules, and its method's primitive ops are derived
-;; from the method name via a per-domain verb table. The capability model
-;; structs live in effect-tag-types.rkt; the library-specific rules live in
-;; library-config.rkt.
+;; domain from the injected lexicon's import rules, and its method's primitive
+;; ops are derived from the method name via the lexicon's per-domain verb
+;; tables. The capability model structs live in effect-tag-types.rkt; the
+;; Python/Django data lives in library-config.rkt and is assembled into the
+;; default lexicon.
+;;
+;; Every lookup takes an optional injected lexicon: the import-tag rule config
+;; and the operation vocabulary are host data, so a non-Python host's lexicon
+;; decomposes its own methods into typed ops without editing this engine.
 
 (require racklr/effects/imports/import-extract
          racklr/effects/imports/handle
          racklr/effects/imports/effect-tag-types
-         racklr/effects/imports/library-config)
+         racklr/effects/lexicon)
 
 (provide
   (all-from-out racklr/effects/imports/effect-tag-types)
   effect-tag-config
+  db-read-methods db-write-methods io-read-verbs io-write-verbs io-other-verbs
+  builtin-class-methods
   resolve-effect-tag
   module-effect-tag
   handle-effect-domain
@@ -24,8 +31,18 @@
   method-ops
   typed-op-parts
   derive-class-method-effects
-  derive-class-supers
-  builtin-class-methods)
+  derive-class-supers)
+
+;; Backward-compatible default data bindings: the Python/Django lexicon's
+;; import rules and operation vocabulary. Kept exported because the public
+;; contract (and existing callers) name them directly.
+(define effect-tag-config (lexicon-import-config default-lexicon))
+(define db-read-methods (lexicon-db-read-methods default-lexicon))
+(define db-write-methods (lexicon-db-write-methods default-lexicon))
+(define io-read-verbs (lexicon-io-read-verbs default-lexicon))
+(define io-write-verbs (lexicon-io-write-verbs default-lexicon))
+(define io-other-verbs (lexicon-io-other-verbs default-lexicon))
+(define builtin-class-methods (lexicon-builtin-class-methods default-lexicon))
 
 ;; An effect is a structured capability, not a bare category atom. It is a
 ;; pair (domain . ops): `domain` is the effect root the effect-row algebra
@@ -33,15 +50,12 @@
 ;; of primitive operations the capability covers (() = "all ops" = the coarse
 ;; category). A method's capability is derived from WHERE its class lives
 ;; (domain, from the config rules) and WHAT the method does (ops, from the
-;; method name via a per-domain verb table). `pure` is not an effect — it is
-;; the absence of one (the empty effect row), so pure methods get no entry.
+;; method name via the lexicon's per-domain verb table). `pure` is not an
+;; effect — it is the absence of one (the empty effect row), so pure methods
+;; get no entry.
 ;;
 ;; The lookup is cached per library (nested hash: library-name → module-path →
 ;; domain), so after the first resolution of a module path the rest are O(1).
-
-;; The capability structs and the library-specific config live in sibling
-;; modules (effect-tag-types.rkt / library-config.rkt); both are re-exported
-;; above so the public contract is unchanged.
 
 ;; Per-library lookup cache: library-name → (hash module-path → domain-or-#f).
 (define effect-tag-cache (make-hash))
@@ -91,9 +105,6 @@
   (for/or ([cand (in-list (dotted-candidates path name mname))])
     (module-effect-tag cand config)))
 
-;; The db/io verb vocabulary lives in library-config.rkt (DATA); this engine
-;; module consumes it only through the bindings required from that module.
-
 ;; A typed operation symbol: domain<ReceiverType>.verb (e.g. db<QuerySet>.read,
 ;; io<File>.write). The receiver TYPE is the concrete class that performs the
 ;; operation — a db.read on a QuerySet is a different capability from one on a
@@ -106,26 +117,32 @@
 
 ;; Primitive ops for a method of a class in a module, given the domain. Ops are
 ;; TYPED by the receiver class, so the I/O stream (file/http/stdio/socket) is
-;; implicit in the class name — no separate resource table.
-(define (method-ops domain path cname mname)
+;; implicit in the class name — no separate resource table. The verb tables and
+;; the builtin receiver method table come from the injected lexicon.
+(define (method-ops domain path cname mname [lex default-lexicon])
   (case domain
-    [(db) (cond [(set-member? db-write-methods mname) (list (typed-op domain cname "write"))]
-                [(set-member? db-read-methods mname)  (list (typed-op domain cname "read"))]
+    [(db) (cond [(set-member? (lexicon-db-write-methods lex) mname)
+                 (list (typed-op domain cname "write"))]
+                [(set-member? (lexicon-db-read-methods lex) mname)
+                 (list (typed-op domain cname "read"))]
                 [else '()])]
     [(io) (cond
-            [(set-member? io-write-verbs mname) (list (typed-op domain cname "write"))]
-            [(set-member? io-read-verbs mname)  (list (typed-op domain cname "read"))]
-            [(set-member? io-other-verbs mname) (list (typed-op domain cname mname))]
+            [(set-member? (lexicon-io-write-verbs lex) mname)
+             (list (typed-op domain cname "write"))]
+            [(set-member? (lexicon-io-read-verbs lex) mname)
+             (list (typed-op domain cname "read"))]
+            [(set-member? (lexicon-io-other-verbs lex) mname)
+             (list (typed-op domain cname mname))]
             [else '()])]
     [else '()]))
-
-;; Builtin receiver classes (the seed environment) live in library-config.rkt
-;; (DATA) as `builtin-class-methods`; re-exported for the public contract.
 
 ;; Derive Class.method → effect-cap for every class in a tagged module. Pure
 ;; modules (domain 'pure) and untagged modules contribute nothing; methods
 ;; with no classified op keep () ops (the coarse category within the domain).
-(define (derive-class-method-effects mods [config effect-tag-config])
+;; `config` is the import-tag rules; `lex` supplies the operation vocabulary and
+;; the builtin receiver method table.
+(define (derive-class-method-effects mods [config effect-tag-config]
+                                    [lex default-lexicon])
   (define out (make-hash))
   (for ([(path mi) (in-hash mods)])
     (define domain (module-effect-tag path config))
@@ -133,7 +150,7 @@
       (for ([(cname ci) (in-hash (module-info-classes mi))])
         (for ([mname (in-hash-keys (class-info-methods ci))])
           (hash-set! out (format "~a.~a" cname mname)
-                     (effect-cap domain (method-ops domain path cname mname)))))))
+                     (effect-cap domain (method-ops domain path cname mname lex)))))))
   out)
 
 ;; Parse a typed operation symbol back into its parts: `db<QuerySet>.read` →

@@ -1,7 +1,8 @@
 #lang racket
 
 (require racklr/tree
-         "lexer.rkt")
+         "lexer.rkt"
+         "language-policy.rkt")
 
 (provide detect-left-recursion
          gen-parser-helpers
@@ -310,13 +311,18 @@
   (format "(provide ~a)"
           (string-join (map (λ (n) (format "parse-~a" n)) names) " ")))
 
-(define (gen-entry parser-rules #:preserve-comments? [preserve-comments? #f])
+(define (gen-entry parser-rules #:preserve-comments? [preserve-comments? #f]
+                   #:policy [policy default-language-policy])
+  ;; Prefer the host policy's entry-rule names (e.g. a grammar whose first
+  ;; rule is a non-`program` start symbol); fall back to the first rule.
+  (define preferred (language-policy-entry-rule-names policy))
   (define first-name
-    (let ([program-rule (findf (lambda (r)
-                                 (string=? (any-tree-text (first (any-tree-children r))) "program"))
-                               parser-rules)])
-      (if program-rule
-          "program"
+    (let ([preferred-rule
+           (findf (lambda (r)
+                    (member (any-tree-text (first (any-tree-children r))) preferred))
+                  parser-rules)])
+      (if preferred-rule
+          (any-tree-text (first (any-tree-children preferred-rule)))
           (any-tree-text (first (any-tree-children (first parser-rules)))))))
   (define tks-expr
     (if preserve-comments?

@@ -22,8 +22,10 @@
          racklr/effects/type-relations
          racklr/effects/library-tokens
          racklr/effects/imports
+         racklr/effects/imports
          racklr/effects/labels
-         racklr/effects/provenance)
+         racklr/effects/provenance
+         racklr/effects/lexicon)
 
 (provide infer-effects-all classify-call-all)
 
@@ -54,12 +56,12 @@
 ;; filter))` binds `loop-var` over the iterable, so an element method call
 ;; inside the result expression is a comp-var (needs element-type dataflow),
 ;; not an unbound name. Returns the loop-var uir-symbol, or #f.
-(define (comp-loop-var node)
+(define (comp-loop-var node [tokens default-effect-tokens])
   (and (uir-call? node)
        (let ([callee (uir-call-callee node)])
          (and (uir-symbol? callee)
-              (memq (string->symbol (uir-symbol-name callee))
-                    '(list-comp dict-comp set-comp gen-exp))
+              (set-member? (tokens-comprehension-callees tokens)
+                           (uir-symbol-name callee))
               (pair? (cdr (uir-call-args node)))
               (second (uir-call-args node))))))
 
@@ -69,7 +71,9 @@
 (define (infer-effects-all comp-programs
                            #:import-env [import-env #f]
                            #:unknown-tally [unknown-tally #f]
-                           #:provenance-record [rec-box #f])
+                           #:provenance-record [rec-box #f]
+                           #:lexicon [lex default-lexicon])
+  (define tokens (lexicon-tokens lex))
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
   (define comp-supers (make-hash))   ;; (cons comp class) → (listof super-ref: symbol | (first . full-dotted))
@@ -108,7 +112,8 @@
   ;; Materialize the type relations and close them with the deterministic join:
   ;; assign (locals), self-attr (per-class attrs), param (concrete call-chain
   ;; param types), and return (projected return class).
-  (define tr (materialize-type-relations comp-programs class-defs import-env))
+  (define tr (materialize-type-relations comp-programs class-defs import-env
+                                         #:tokens tokens))
   (close-type-relations! tr
                          #:comp-programs comp-programs
                          #:class-defs class-defs
@@ -118,7 +123,8 @@
                          #:fn-params fn-params
                          #:method-params method-params
                          #:fn-defs fn-defs
-                         #:comp-supers comp-supers)
+                         #:comp-supers comp-supers
+                         #:tokens tokens)
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define return-types (type-relations-return tr))
@@ -150,7 +156,8 @@
     (define comp (car k))
     (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
     (define rt (rt-of k))
-    (define blessed (and (hash-has-key? methods k) (method-cap k import-env)))
+    (define blessed (and (hash-has-key? methods k)
+                        (method-cap k import-env lex)))
     (define effects (if blessed (list blessed) '()))
     ;; A blessed capability is asserted at the method definition by the DATA
     ;; config, so it is its own ground: the tokens are the module path, class,
@@ -187,7 +194,7 @@
          => (λ (lhs) (hash-set! local-kinds lhs (binding-value-kind (uir-ann-set!-value node))))]
         [(and (uir-for-each? node) (var-symbol (uir-for-each-var node)))
          => (λ (v) (hash-set! local-kinds v 'loop-var))]
-        [(comp-loop-var node)
+        [(comp-loop-var node tokens)
          => (λ (lv)
               (cond
                 [(uir-list? lv)
@@ -219,7 +226,8 @@
                    [cov-box (and prov (box 'structural))]
                    [cls (classify-call-all callee known methods
                                            class-defs fn-defs comp-supers self-attr comp owner
-                                           import-env rt return-types cov-box)]
+                                           import-env rt return-types cov-box
+                                           #:lexicon lex)]
                    [site (callee-site-string callee)])
             (case (car cls)
               [(edge)
@@ -244,7 +252,8 @@
                                     #:coverage (ground-coverage
                                                 callee
                                                 (and cov-box (unbox cov-box))
-                                                param-names))))]
+                                                param-names
+                                                tokens))))]
               [(pure) (void)]
               [(unknown)
                (set! effects (cons 'unknown effects))
@@ -254,14 +263,15 @@
                                                            #:kind 'unresolved
                                                            #:coverage
                                                            (unresolved-coverage
-                                                            callee param-names))))
+                                                            callee param-names
+                                                            tokens))))
                (when unknown-tally
                  (define rx
                    (and (uir-get? callee)
                         (var-symbol (uir-get-base callee))))
                  (set-box! unknown-tally
                            (cons (list (car k) (cdr k)
-                                       (receiver-shape callee param-names)
+                                       (receiver-shape callee param-names tokens)
                                        (effect-op-of-callee callee)
                                        rx
                                        (and rx (hash-ref local-kinds rx 'unbound)))
