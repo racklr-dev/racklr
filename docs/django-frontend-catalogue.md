@@ -1,17 +1,34 @@
-# racklr Python front end: exhaustive blocker catalogue (Django 907-file scan)
+# racklr Python front end: blocker catalogue and re-run history (Django 907-file scan)
 
-Goal: effervesce the entire `django/django` tree (907 files, 165,826 lines) through
-Python3 -> UIR -> effect inference -> Effervesce bridge/verify. This document lists
-every construct racklr currently cannot handle, measured by a full-tree scan plus a
-construct-level probe battery. It is the checklist of front-end blockers between the
-current state and full-Django effervescing.
+Goal: effervesce the entire `django/django` tree (907 files) through
+Python3 -> UIR -> effect inference -> Effervesce bridge/verify. This document
+started as the catalogue of every construct racklr could not handle, measured by
+a full-tree scan plus a construct-level probe battery. Those blockers are now
+resolved, and the document is retained as the record of what was fixed and how
+the corpus is re-measured.
+
+**Status (2026-11-01): 0 blockers. Re-run: files=907, ok=907; every other bucket
+(PARSE-FAIL, INDENT-ERROR, LOWER-ERROR, FALLBACK) is empty.** Each blocker below
+is marked with its resolution; the reproducer snippets stay as regression probes.
+
+This scan measures the front-end buckets only: parse, lower, and `?`-fallback
+symbols. It does not measure effect coverage; unknown-effect elimination is
+tracked separately (`LOOP_PLAN.md`, P0.3).
 
 Measured with:
 
-- `effervesce/tools/scan-python.rkt ../django/django --verbose` (whole-tree, 26.7s)
-- `effervesce/tools/probe-python.rkt` (construct-level, 3-stage classification)
+- `racket tools/scan-python.rkt django/django` (whole-tree; tracked
+  `grammars/python3/` grammar, the parser the repository owns). Add `--verbose`
+  for per-file failures and effect rows.
+- `effervesce/tools/probe-python.rkt` (construct-level, 3-stage classification).
+
+The historical scan below was taken with `effervesce/tools/scan-python.rkt
+../django/django --verbose`; that harness reads the untracked vendored
+`grammars-v4/` tree, so it needs an environment where that tree is present.
 
 ## Whole-tree totals
+
+Original scan (before the fixes):
 
 | bucket | files |
 | ------ | ----- |
@@ -21,15 +38,32 @@ Measured with:
 | LOWER-ERROR | 3 |
 | FALLBACK (lowers, but emits `?`-unhandled nodes) | 1 |
 
-Files that cannot be effervesced today: **699 of 907 (77%)**.
+Files that could not be effervesced: **699 of 907 (77%)**.
 
-The bottleneck is the Python front end, not the hypergraph/Effervesce layer. The
-Effervesce substrate was proven working end to end on a toy Django example (clean
-verify, and correct `db`-effect detection on a leaky variant).
+Latest re-run (2026-11-01, `racket tools/scan-python.rkt django/django`):
+
+| bucket | files |
+| ------ | ----- |
+| ok (parses + lowers) | 907 |
+| PARSE-FAIL | 0 |
+| INDENT-ERROR | 0 |
+| LOWER-ERROR | 0 |
+| FALLBACK (lowers, but emits `?`-unhandled nodes) | 0 |
+
+Files that cannot be effervesced today: **0 of 907 (0%)**.
+
+At the time of the original scan the bottleneck was the Python front end, not the
+hypergraph/Effervesce layer: the Effervesce substrate was proven working end to
+end on a toy Django example (clean verify, and correct `db`-effect detection on a
+leaky variant).
 
 ---
 
 ## 1. NEWLINE tokens inside brackets are not suppressed (dominant PARSE-FAIL)
+
+**Resolved.** `insert-indents` in `racklr/gend-parser/lexer.rkt` tracks bracket
+depth (`(`, `[`, `{`) and drops NEWLINE inside an open bracket (implicit line
+joining).
 
 **Reproducers (all PARSE-FAIL):**
 
@@ -73,6 +107,9 @@ import in the Django codebase.
 
 ## 2. Blank lines inside nested blocks break `insert-indents` (INDENT-ERROR, 124 files)
 
+**Resolved.** The same pass collapses runs of NEWLINEs to the last one before
+computing indentation, so blank lines no longer pop the indent stack.
+
 **Reproducer (RAISE):**
 
 ```python
@@ -101,6 +138,9 @@ stack).
 ---
 
 ## 3. Comment-only and whitespace-only lines inside nested blocks (PARSE-FAIL)
+
+**Resolved.** Comment-only lines are hidden tokens and the collapsed NEWLINE run
+leaves only the next real line's indentation for `insert-indents`.
 
 **Reproducers (PARSE-FAIL):**
 
@@ -135,6 +175,10 @@ lines.
 
 ## 4. Non-decimal numeric literals (PARSE-FAIL)
 
+**Resolved.** The tracked grammar's `NUMBER`/`INTEGER`/`FLOAT_NUMBER`/`IMAG_NUMBER`
+rules accept the specialised tokens, and `racklr/lower-python/expr.rkt` lowers
+hex/octal/binary/float/complex literals to `uir-number`.
+
 **Reproducers (all PARSE-FAIL):**
 
 ```python
@@ -161,6 +205,9 @@ FLOAT_NUMBER | IMAG_NUMBER`.
 
 ## 5. Underscore numeric literals, PEP 515 (PARSE-FAIL)
 
+**Resolved.** The integer fragments in `grammars/python3/Python3Lexer.g4` allow `_`
+between digits, for decimal/hex/octal/binary and the fraction.
+
 **Reproducer (PARSE-FAIL):**
 
 ```python
@@ -179,6 +226,9 @@ fragment does not allow `_` inside the literal, so `_000` lexes as an identifier
 ---
 
 ## 6. Multi-line triple-quoted strings (PARSE-FAIL)
+
+**Resolved.** `LONG_STRING` in `grammars/python3/Python3Lexer.g4` spans newlines, so
+multi-line docstrings tokenize as a single STRING.
 
 **Reproducers (PARSE-FAIL):**
 
@@ -204,6 +254,10 @@ multi-line content.
 
 ## 7. Keyword-only marker `*` in parameter lists (LOWER-ERROR, 3 files)
 
+**Resolved.** `lower-parameters` in `racklr/lower-python/stmt.rkt` walks the
+`typedargslist` for `tfpdef` nodes and attaches defaults, so the bare `*`/`/`
+separators are skipped instead of being misread as parameter names.
+
 **Reproducer (RAISE):**
 
 ```python
@@ -228,6 +282,9 @@ separator and continue lowering subsequent params as keyword-only.
 
 ## 8. Positional-only marker `/` (PARSE-FAIL)
 
+**Resolved.** `typedargslist`/`varargslist` accept `/` in the tracked grammar and
+lowering skips the marker (PR #71).
+
 **Reproducer (PARSE-FAIL):**
 
 ```python
@@ -244,6 +301,9 @@ def f(a, /, b):
 ---
 
 ## 9. Walrus operator `:=` (PARSE-FAIL)
+
+**Resolved.** `namedexpr_test` is in the tracked grammar and lowers to `uir-walrus`
+(PR #71).
 
 **Reproducer (PARSE-FAIL):**
 
@@ -263,6 +323,9 @@ conditions.
 
 ## 10. `type` alias statement, PEP 695 (PARSE-FAIL)
 
+**Resolved.** The `type_alias`/`type_params` rules are in the tracked grammar and
+lower to `uir-type-alias` (PR #71).
+
 **Reproducer (PARSE-FAIL):**
 
 ```python
@@ -276,6 +339,9 @@ type T = int | str
 ---
 
 ## 11. Class bases with keyword arguments (PARSE-FAIL)
+
+**Resolved.** `classdef` uses the shared `arglist`/`argument` rules, so
+`class A(B, metaclass=M)` parses like a call.
 
 **Reproducers (PARSE-FAIL):**
 
@@ -296,6 +362,10 @@ spot needs a look at the `arglist`/`argument` handling in the `classdef` context
 
 ## 12. Lowering gaps that emit `?`-unhandled nodes (FALLBACK)
 
+**Resolved.** Chained comparisons and binary operators (`**`) fold over the
+operator/operand pairs, `...` lowers to a symbol and PEP 604 unions lower as
+expressions; `tasks/exceptions.py` is `ok` in the latest scan.
+
 These parse and lower without raising, but produce `?`-prefixed unhandled symbols. They
 do not block the file, but lose information for effect inference.
 
@@ -308,19 +378,39 @@ The single FALLBACK file in Django is `tasks/exceptions.py`.
 
 ---
 
-## Fix priority
+## How the blockers were retired
 
-Ranked by blast radius in the Django scan:
+Ranked by the blast radius the original scan measured; all items are resolved.
 
-1. NEWLINE-inside-brackets (#1) — unlocks most of the 572 PARSE-FAIL files.
-2. Blank/comment/whitespace-only lines in nested blocks (#2, #3) — unlocks the 124
-   INDENT-ERROR files plus a share of PARSE-FAIL.
-3. Non-decimal + underscore numeric literals (#4, #5) — pervasive in real code.
-4. Multi-line triple-quoted strings (#6) — every docstring.
-5. Keyword-only `*` (#7) — the 3 LOWER-ERROR files.
-6. Modern-grammar features (#8-#10: `/`, `:=`, `type`), then class keyword bases (#11),
-   then the FALLBACK lowering gaps (#12).
+1. NEWLINE-inside-brackets (#1) — unlocked most of the 572 PARSE-FAIL files.
+   Fixed in `racklr/gend-parser/lexer.rkt`.
+2. Blank/comment/whitespace-only lines in nested blocks (#2, #3) — unlocked the 124
+   INDENT-ERROR files plus a share of PARSE-FAIL. Fixed in the same pass.
+3. Non-decimal + underscore numeric literals (#4, #5) — fixed in the tracked lexer
+   grammar and `racklr/lower-python/expr.rkt`.
+4. Multi-line triple-quoted strings (#6) — fixed in the tracked lexer grammar.
+5. Keyword-only `*` (#7) — fixed in `lower-parameters` (`lower-python/stmt.rkt`).
+6. Modern-grammar features (#8-#10: `/`, `:=`, `type`), class keyword bases (#11)
+   and the FALLBACK lowering gaps (#12) — fixed in the tracked
+   `grammars/python3/` grammar (PR #71) and the Python lowerer.
 
-The fixes concentrate in two files: `racklr/gend-parser/lexer.rkt` (indent/bracket/line
-handling) and the vendored `grammars-v4/python/python3/` lexer+parser grammar, plus
-`racklr/lower-python/stmt.rkt` for the parameter-lowering gaps.
+The fixes concentrate in three places: `racklr/gend-parser/lexer.rkt`
+(indent/bracket/line handling), the tracked `grammars/python3/` lexer+parser
+grammar, and `racklr/lower-python/stmt.rkt` / `expr.rkt` for the parameter and
+expression lowering gaps. The tracked grammar replaced the vendored
+`grammars-v4/python/python3/` copy as the grammar the repository owns and
+measures (`racket tools/scan-python.rkt`).
+
+## Re-running the measurement
+
+From the repository root, with the `django/` submodule initialised:
+
+```bash
+racket tools/scan-python.rkt django/django            # aggregate
+racket tools/scan-python.rkt django/django --verbose  # per-file failures + effects
+```
+
+The tool exits 0 only when every file lowers cleanly and exits 1 when any bucket
+is non-zero, so the same command is the regression gate for the acceptance bar.
+`racklr-test/scan-python-test.rkt` pins the bucket classification on a small
+fixture tree.
