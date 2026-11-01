@@ -48,12 +48,23 @@
   x4)
 
 ;; Drop declarations/imports the emitter injects (its effect-guard runtime).
+;; Emitters spell some injected declarations as `const/let/var NAME = ...`
+;; statement calls rather than a bare declaration, so a wrapper whose arguments
+;; are all generated declarations is dropped too.
 (define (strip-generated injected user-names x)
-  (define (drop? stmt)
-    (define n (and (pair? stmt) (decl-name stmt)))
+  (define (generated-decl? d)
+    (define n (and (pair? d) (decl-name d)))
     (and n
          (or (and (generated-name? n) (not (member n user-names)))
-             (and (list-tag? stmt 'import) (member n injected)))))
+             (and (list-tag? d 'import) (member n injected)))))
+  (define (wrapper? stmt)
+    (and (list-tag? stmt 'call)
+         (member (ref-name (cadr stmt)) '("const" "let" "var"))))
+  (define (drop? stmt)
+    (or (generated-decl? stmt)
+        (and (wrapper? stmt)
+             (let ([args (caddr stmt)])
+               (and (pair? args) (for/and ([a (in-list args)]) (generated-decl? a)))))))
   (cond [(list-tag? x 'block)
          (list* 'block
                 (for/list ([s (in-list (cadr x))] #:unless (drop? s))

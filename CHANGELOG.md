@@ -138,6 +138,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nodes through shape helpers that preserve appended schema fields, so a
   parallel schema addition (such as the `typed-param` kind) cannot be silently
   dropped.
+- Loss verification follows the emit contract (`racklr/emit-effects.rkt`):
+  Python/JavaScript rows are checked through their runtime guards, Clojure
+  through the `:__effects__` metadata map, and Koka through the typed row, with
+  the model's `effect-rows` details naming the documented annotations as well.
+- The loss verifier drops emitter-injected guard declarations even when an
+  emitter wraps them in `const`/`let`/`var` statement calls, so the new guard
+  runtime is not mistaken for source definitions.
+- TypeScript lowering stores numeric literals in `uir-number` as strings (seven
+  sites in `lower-typescript/{stmt,expr}.rkt`), as the schema requires; emitted
+  TSX for rest/array extraction and `void` previously failed schema-driven
+  serialization with `uir->sexp: string field: 0`.
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.

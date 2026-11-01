@@ -28,7 +28,7 @@
   (uir-fn (uir-symbol name) params body #f row))
 
 (define (simple-param name)
-  (uir-typed-param (uir-symbol name) #f #f))
+  (uir-typed-param (uir-symbol name) #f #f #f))
 
 (define (program . stmts)
   (uir-block stmts))

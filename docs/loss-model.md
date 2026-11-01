@@ -99,18 +99,26 @@ than silently assumed.
 ## Effect rows in the target's native form
 
 "Effect rows preserved" means the row survives translation in the target's own
-vocabulary, and the verifier re-absorbs it:
+vocabulary, and the verifier re-absorbs it. The spelling is owned by the emit
+contract (`racklr/emit-effects.rkt`); each emitter owns only where the row is
+placed:
 
-- Python: emitted as `@__withEffects({...})` decorators; the verifier decodes
-  the row record back into a canonical row.
-- JavaScript/TypeScript/TSX: emitted as `__withEffects({...}, fn)`; bound names
-  are mapped back to their rows.
-- Clojure: emitted as the `{:__effects__ ...}` defn attr-map.
-- Koka: carried in the return-type row (names only on both sides).
+- Python: `@__withEffects({...})` decorator plus a documented
+  `# @effects {...}` annotation; the verifier decodes the decorator row.
+- JavaScript/TypeScript/TSX: `__withEffects({...}, fn)` plus a documented
+  `/** @effects {...} */` annotation; bound names are mapped back to their
+  rows.
+- Clojure: the `{:__effects__ ...}` defn attr-map; the verifier re-absorbs the
+  metadata map.
+- Koka: the typed return-type row (names only), plus a documented
+  `// @effects {...}` annotation when the row is lossy; the verifier compares
+  the typed names.
 - JSON: rows are refused (no function concept).
 
-Rendering richer per-target vocabulary is the job of the P3.2 work; when that
-changes, the model's `effect-rows` rules are the place to record the change.
+When the emit contract changes what a target can spell, the pair's
+`effect-rows` rule (and, if the verifier's native-form extraction needs it,
+`racklr/loss/effects.rkt`) is the deliberate edit: the model must keep saying
+what is actually preserved.
 
 ## What a violation is
 
