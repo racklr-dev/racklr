@@ -139,6 +139,7 @@ racket lower-clojure-test.rkt        # Clojure lowering + emit
 racket lower-typescript-test.rkt     # TypeScript lowering
 racket tsx-integration-test.rkt      # TSX/React end-to-end
 racket lower-python-test.rkt         # Python lowering + emit
+racket modern-python-test.rkt        # modern Python: walrus, positional-only, type alias
 racket lower-javascript-test.rkt     # JavaScript lowering + emit
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
