@@ -151,7 +151,13 @@
 ;; Rewrite a program so every named function carries its inferred effect row
 ;; in the `effects` field: named uir-fn nodes, plus the JS/TS `set!`-bound
 ;; function declarations (writing back into the wrapped uir-fn).
-(define (annotate-effects program)
+;;
+;; `#:wrap-anonymous?` controls the JS/Python runtime-guard convention: when
+;; true (the default) an arrow/function expression with no effects slot gets
+;; wrapped in the internal `__withEffects(row, fn)` call those emitters render.
+;; Targets with their own row placement (Koka's typed effect row, Clojure's
+;; defn metadata) pass #f so their emitters see the row on the uir-fn instead.
+(define (annotate-effects program #:wrap-anonymous? [wrap? #t])
   (define rows (infer-effects program))
   ;; Materialize an inferred row for emission: 'unknown is a checker signal
   ;; ("could not verify"), not a runtime effect, and the runtime guards reject
@@ -208,7 +214,7 @@
        (struct-copy uir-call val
                     [args (list (with-effects (first (uir-call-args val)) nm))])]
       [(or (arrow-call? val) (function-expr-call? val))
-       (with-effects-wrap val nm)]
+       (if wrap? (with-effects-wrap val nm) val)]
       [else val]))
   (define (rewrite n)
     (cond

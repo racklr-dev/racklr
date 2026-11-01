@@ -102,6 +102,33 @@ Effect rows give generated code a readable boundary: a function declares which c
 
 Both emitters attach the row to the emitted function so it survives round-trips: Python via a `__effects__` attribute, Clojure via `:__effects__` metadata on the `defn`. The Clojure effects test executes the emitted code through the [Jolt](https://github.com/jolt-lang/jolt) runtime and reads the row back off the var.
 
+### Effect-row emission (the emit contract)
+
+`racklr/emit-effects.rkt` is the one place that renders a `uir-effect-row` into
+each target's native effect vocabulary. Emitters own where the row is placed;
+the contract owns how it is spelled, so a row cannot be dropped silently.
+
+| Target | Native effect expression | Placement |
+|---|---|---|
+| Python | object literal plus a `# @effects {...}` documented comment | `@__withEffects(row)` decorator above the `def` |
+| JavaScript | object literal plus a `/** @effects {...} */` documented annotation | `__withEffects(row, fn)` guard around the declaration |
+| TypeScript | emitted through the JS emitter (type annotations drop at emit), so the JS object/guard form is its emitted native form | as JavaScript |
+| Clojure | keyword-keyed map, e.g. `{:llm {:modality :may :max 5}}` | `defn` attr-map metadata `{:__effects__ ...}`, which the reader keeps on the var |
+| Koka | typed effect row, e.g. `: <llm, db> ret` (or `total` when none) | function return type |
+
+Fields without native syntax are documented, not discarded. A Koka typed row
+spells names only, so budgets, scopes, ops and prohibitions are recorded in a
+`// @effects {...}` comment next to the typed row, and a `must-not` entry is
+never granted as a typed effect. Koka's grammar only accepts `<effects>` in
+front of a result type, so a function with a known row but no declared result
+type carries it as the documented comment alone. The JSON target has no
+functions or effect vocabulary, so function rows do not appear there.
+`unknown` entries are dropped: an unclassified effect is a tracked inference
+obligation, not something a target guard can enforce. `uir-method` has no
+effect-row slot yet, so method rows are not emitted by any target.
+
+Per-target mapping tests live in `racklr-test/effects-{python,ts,jsdoc,clojure,koka}-annot-test.rkt`.
+
 **Planned:** runtime enforcement. Static checks run wherever the call graph is resolvable; a runtime guard covers the rest. Jolt is the Clojure runtime for this, and effect-ts is the chosen direction for JavaScript/TypeScript emission.
 
 ### emit-contract.rkt / emit.rkt

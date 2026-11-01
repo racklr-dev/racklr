@@ -2,6 +2,7 @@
 
 (require racklr/uir
          racklr/emit-contract
+         racklr/emit-effects
          racklr/effects/infer
          racklr/effects/python-annot)
 
@@ -190,37 +191,10 @@
                  (emit-body (uir-with-body uir) (+ indent 1))))
 
 ;; ── Effect-row runtime guard (pure Python, no FFI) ─────────────────
-
-(define (emit-effect-entry-dict e)
-  ;; {"modality":"may","max":5,"scope":"...","ops":["query"]}
-  (let* ([base (list (format "~s: ~s" "modality"
-                             (symbol->string (uir-effect-entry-modality e))))]
-         [with-budget (if (uir-effect-entry-budget e)
-                          (cons (format "~s: ~a" "max" (uir-effect-entry-budget e)) base)
-                          base)]
-         [with-scope (if (uir-effect-entry-scope e)
-                         (cons (format "~s: ~s" "scope" (uir-symbol-name (uir-effect-entry-scope e))) with-budget)
-                         with-budget)]
-         [with-ops (if (pair? (uir-effect-entry-ops e))
-                       (cons (format "~s: [~a]" "ops"
-                                     (string-join
-                                      (map (λ (o) (format "~s" (uir-symbol-name o)))
-                                           (uir-effect-entry-ops e))
-                                      ", "))
-                             with-scope)
-                       with-scope)])
-    (string-append "{" (string-join (reverse with-ops) ", ") "}")))
-
-(define (emit-effect-row row)
-  (string-append
-   "{"
-   (string-join
-    (map (λ (e) (format "~s: ~a"
-                        (uir-symbol-name (uir-effect-entry-name e))
-                        (emit-effect-entry-dict e)))
-         (uir-effect-row-entries row))
-    ", ")
-   "}"))
+;;
+;; The row's spelling is owned by the emit contract (racklr/emit-effects); this
+;; section only places it: a `# @effects {...}` documented annotation plus the
+;; live `@__withEffects` guard that enforces it at runtime.
 
 ;; Wrap a directly-performed effect call in the runtime guard: the ambient
 ;; effect context (established by the __withEffects decorator) enforces
@@ -235,7 +209,11 @@
 
 (define (emit-effects-guard fn indent)
   (define spc (make-string (* indent 4) #\space))
-  (string-append spc "@__withEffects(" (emit-effect-row (uir-fn-effects fn)) ")"))
+  (define row (uir-fn-effects fn))
+  (define annotation (render-effect-annotation 'python row))
+  (string-append
+   (if annotation (string-append spc annotation "\n") "")
+   spc "@__withEffects(" (render-effect-row 'python row) ")"))
 
 (define (effects-guard-preamble)
   (string-append

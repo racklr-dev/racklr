@@ -210,9 +210,22 @@
 
 ;; Attach a row to a function value: write it into a uir-fn's effects slot, or
 ;; wrap an arrow / function expression in the internal __withEffects call.
+;; A value that is already the internal `__withEffects(row, fn)` guard (which
+;; is how the JS/TS emitter renders a row) keeps its shape and takes the
+;; documented @effects row, so an emitted annotation re-absorbs to the same
+;; native form.
 (define (attach-jsdoc-value v row)
   (cond
     [(uir-fn? v) (struct-copy uir-fn v [effects row])]
+    [(and (uir-call? v)
+          (let ([c (uir-call-callee v)])
+            (and (or (uir-symbol? c) (uir-var? c))
+                 (string=? (uir-symbol-name
+                            (if (uir-var? c) (uir-var-name c) c))
+                           "__withEffects")))
+          (= (length (uir-call-args v)) 2))
+     (struct-copy uir-call v
+                  [args (list row (second (uir-call-args v)))])]
     [(async-or-gen-wrapper? v)
      (struct-copy uir-call v
                   [args (list (struct-copy uir-fn (first (uir-call-args v)) [effects row]))])]

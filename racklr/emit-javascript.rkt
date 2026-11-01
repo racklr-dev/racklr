@@ -2,6 +2,7 @@
 
 (require racklr/uir
          racklr/emit-contract
+         racklr/emit-effects
          racklr/effects/infer)
 
 (provide emit-javascript)
@@ -128,6 +129,9 @@
     [(uir-list items)
      (format "[~a]" (string-join (map emit-js items) ", "))]
 
+    [(uir-effect-row row)
+     (render-effect-row 'javascript row)]
+
     [(uir-record entries)
      (format "{ ~a }"
              (string-join
@@ -174,7 +178,7 @@
      (cond [(and (uir-fn? val) (uir-effect-row? (uir-fn-effects val)))
             (format "const ~a = __withEffects(~a, ~a)"
                     (emit-js name)
-                    (emit-effect-row (uir-fn-effects val))
+                    (render-effect-row 'javascript (uir-fn-effects val))
                     (emit-raw-fn val))]
            [(and (uir-call? val) (uir-symbol? (uir-call-callee val))
                  (let ([op (uir-symbol-name (uir-call-callee val))])
@@ -186,7 +190,7 @@
                             (emit-raw-async-fn fn)
                             (emit-raw-gen-fn fn)))
             (format "const ~a = __withEffects(~a, ~a)"
-                    (emit-js name) (emit-effect-row (uir-fn-effects fn)) raw)]
+                    (emit-js name) (render-effect-row 'javascript (uir-fn-effects fn)) raw)]
            [(uir-fn? val)
             (format "function ~a(~a) { ~a }"
                     (emit-js name)
@@ -209,7 +213,7 @@
     [(uir-fn _ params body _ fx)
      (define raw (emit-raw-fn (uir-fn #f params body #f #f)))
      (if (uir-effect-row? fx)
-         (format "__withEffects(~a, ~a)" (emit-effect-row fx) raw)
+         (format "__withEffects(~a, ~a)" (render-effect-row 'javascript fx) raw)
          raw)]
     
     [(uir-call callee args)
@@ -314,7 +318,7 @@
              ;; (call "__withEffects" (list row fn)) so the emitter can render
              ;; the runtime guard around a function value with no effects slot.
              (format "__withEffects(~a, ~a)"
-                     (emit-effect-row (first args))
+                     (render-effect-row 'javascript (first args))
                      (emit-js (second args)))]
             [(and op-name (set-member? (set "var" "let" "const") op-name) (= (length args) 1))
              (emit-declaration op-name (first args))]
@@ -386,8 +390,49 @@
         [(uir-block? node) (emit-js node)]
         [else (emit-js node)]))
 
+;; The effect row carried by a statement's function value, if any: a
+;; `set!`-bound function/arrow/async declaration, a var/let/const declaration
+;; of one, an export/decl wrapper around one, or a bare named function. This is
+;; what lets the emitter place the documented `@effects` annotation above the
+;; guarded declaration without re-deriving the row.
+(define (value-effect-row val)
+  (cond
+    [(and (uir-fn? val) (uir-effect-row? (uir-fn-effects val)))
+     (uir-fn-effects val)]
+    [(and (uir-call? val)
+          (uir-symbol? (uir-call-callee val))
+          (let ([n (uir-symbol-name (uir-call-callee val))])
+            (or (string=? n "async-fn") (string=? n "gen-fn")))
+          (= (length (uir-call-args val)) 1)
+          (uir-fn? (first (uir-call-args val)))
+          (uir-effect-row? (uir-fn-effects (first (uir-call-args val)))))
+     (uir-fn-effects (first (uir-call-args val)))]
+    [(and (uir-call? val)
+          (let ([c (uir-call-callee val)])
+            (and (or (uir-symbol? c) (uir-var? c))
+                 (string=? (uir-symbol-name
+                            (if (uir-var? c) (uir-var-name c) c))
+                           "__withEffects")))
+          (= (length (uir-call-args val)) 2)
+          (uir-effect-row? (first (uir-call-args val))))
+     (first (uir-call-args val))]
+    [else #f]))
+
+(define (statement-effect-row node)
+  (cond
+    [(uir-set!? node) (value-effect-row (uir-set!-value node))]
+    [(uir-fn? node) (uir-fn-effects node)]
+    [(and (uir-call? node)
+          (uir-symbol? (uir-call-callee node))
+          (member (uir-symbol-name (uir-call-callee node))
+                  '("var" "let" "const" "export" "decl"))
+          (pair? (uir-call-args node)))
+     (for/or ([a (in-list (uir-call-args node))]) (statement-effect-row a))]
+    [else #f]))
+
 (define (emit-statement node)
-  (cond [(uir-null? node) "null;"]
+  (define body
+    (cond [(uir-null? node) "null;"]
         [(uir-block? node)
          (string-join (map emit-statement (uir-block-stmts node)) " ")]
         [(and (uir-set!? node)
@@ -426,6 +471,11 @@
         [(uir-var? node)
          (format "~a;" (emit-js node))]
         [else (format "~a;" (emit-js node))]))
+  (define row (statement-effect-row node))
+  (define annotation (and row (render-effect-annotation 'javascript row)))
+  (if annotation
+      (string-append annotation "\n" body)
+      body))
 
 (define (loop-statement? node)
   (and (uir-call? node)
@@ -563,40 +613,10 @@
     [else (format "/* unlowered export */")]))
 
 ;; ── Effect-row runtime guard (gap 4: TypeScript / React emission) ───
-
-(define (emit-effect-entry-obj e)
-  ;; {"modality":"may","max":5,"scope":"...","ops":["query"]}
-  (define base (list (format "~s: ~s" "modality"
-                             (symbol->string (uir-effect-entry-modality e)))))
-  (define with-budget
-    (if (uir-effect-entry-budget e)
-        (cons (format "~s: ~a" "max" (uir-effect-entry-budget e)) base)
-        base))
-  (define with-scope
-    (if (uir-effect-entry-scope e)
-        (cons (format "~s: ~s" "scope" (uir-symbol-name (uir-effect-entry-scope e))) with-budget)
-        with-budget))
-  (define with-ops
-    (if (pair? (uir-effect-entry-ops e))
-        (cons (format "~s: [~a]" "ops"
-                      (string-join
-                       (map (λ (o) (format "~s" (uir-symbol-name o)))
-                            (uir-effect-entry-ops e))
-                       ", "))
-              with-scope)
-        with-scope))
-  (string-append "{" (string-join (reverse with-ops) ", ") "}"))
-
-(define (emit-effect-row row)
-  (string-append
-   "{"
-   (string-join
-    (map (λ (e) (format "~s: ~a"
-                        (uir-symbol-name (uir-effect-entry-name e))
-                        (emit-effect-entry-obj e)))
-         (uir-effect-row-entries row))
-    ", ")
-   "}"))
+;;
+;; The row's spelling is owned by the emit contract (racklr/emit-effects); this
+;; section only places it: a documented `/** @effects {...} */` annotation above
+;; a guarded declaration plus the live `__withEffects(row, fn)` guard.
 
 (define (emit-raw-fn fn)
   (define param-str (string-join (map emit-js (uir-fn-params fn)) ", "))

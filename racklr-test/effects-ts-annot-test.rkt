@@ -112,6 +112,8 @@
                (uir-block (list (uir-set! (sym "summarize") annotated)))))
   (check-true (string-contains? out "__withEffects(")
               "annotated fn emitted through the guard")
+  (check-true (string-contains? out "/** @effects {")
+              "documented @effects annotation emitted")
   (check-true (string-contains? out "\"max\": 5")
               "budget preserved through extraction"))
 
