@@ -21,9 +21,23 @@ From the repository root, with the submodules initialised:
 racket tools/baseline-check.rkt
 ```
 
-Exit 0 prints `baseline OK sha256:<...>`. A mismatch prints the pinned and
-current addresses, the summary counters that changed, and the exact atom lines
-added or removed; it exits 1.
+Pass/fail and coverage are separate verdicts, so a run that matches the pin is
+still not green while unknown effect leaves remain:
+
+| verdict                                      | exit | meaning                                                                                        |
+| -------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `baseline OK sha256:<...>`                   | 0    | graph matches the pin and the unknown-elimination obligation (zero unknown leaves) is discharged |
+| `baseline DRIFT`                             | 1    | the graph moved; changed counters and the exact atom lines added or removed are printed          |
+| `baseline COVERAGE-FAILED sha256:<...>`      | 3    | graph matches the pin, every check can pass, and unknown leaves remain                          |
+| `baseline GATE-FAILED`                       | 4    | a known-bad non-vacuity control was not rejected, or counters disagree with the named witnesses |
+
+`COVERAGE-FAILED` is the jolt-hegel distinction (`:status :coverage-failed`):
+a run that passes every check still fails its coverage obligation, and coverage
+never masks a failure. The coverage counts are cross-checked against the named
+`fn-effect-row` attestations in the graph body, so `COVERAGE-FAILED` names the
+functions that still carry `unknown` instead of reporting a hit rate. Known-bad
+non-vacuity controls (`tools/gate-controls.rkt`) run first; if the gate cannot
+reject a known-bad input it prints `GATE-FAILED` rather than a green verdict.
 
 Prerequisites, the same as the pre-existing baseline command:
 
