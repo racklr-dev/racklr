@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   associativity and idempotence of join, monotonicity and least-fixpoint laws,
   the subtyping laws (reflexivity, transitivity, bottom, join as LUB), and
   handler interpretation.
+- `racklr-test/effects-algebra-prohibitions-test.rkt`: the declared-row
+  prohibition agreement. Algebra rows canonicalize `must-not` to absence, so
+  `declared-prohibited-effects` reads a prohibition from the UIR row and the
+  tests pin that `row-subtype?` still agrees with `effect-subtype?` for rows
+  carrying `must-not` on either side of `≤`.
 
 ### Changed
 

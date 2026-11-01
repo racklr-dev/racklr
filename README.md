@@ -133,6 +133,7 @@ Run each suite directly from inside `racklr-test/`. `raco test racklr-test/*.rkt
 cd racklr-test
 racket effects-infer-test.rkt        # effect inference
 racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
+racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
 racket effects-contract-test.rkt     # contract checking
 racket effects-python-annot-test.rkt # Python effect annotations
 racket effects-clojure-test.rkt      # Clojure effects + Jolt runtime round-trip
