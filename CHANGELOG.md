@@ -215,6 +215,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-trips, class methods, composition with `/`, and serialization of the
   star markers.
 
+- The P6.3 self-emission checker: `tools/self-emit.rkt` (oracle, goldens,
+  verify --tower, tower, gate, selftest) with the canonical UIR-plus-row
+  comparison document (`tools/self-emit/canonical.rkt`), the original-tower
+  oracle (`oracle.rkt`), the shared gate runner (`gate.rkt`) that reports the
+  baseline's separate pass/fail and coverage verdicts, and the P6.2 seam
+  (`tower.rkt`) that runs the emitted compiler and compares translations and
+  effect rows with the original UIR self-image. `docs/self-emit-verification.md`
+  states the emitted-tower contract and the acceptance transcript.
+
 ### Changed
 
 - Effect inference's fixpoint is now expressed in the algebra:

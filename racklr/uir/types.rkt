@@ -12,6 +12,10 @@
          "schema-check.rkt"
          "schema-macro.rkt")
 
-(check-schema! UIR-SCHEMA)
+;; `check-schema!` returns #t; a bare top-level expression in a loaded module
+;; is echoed to stdout, which would prepend "#t" to any program that treats
+;; this module's process stdout as data (e.g. tools/self-emit.rkt oracle).
+;; Discard the value so loading the UIR does not write to stdout.
+(void (check-schema! UIR-SCHEMA))
 
 (define-uir-kinds)
