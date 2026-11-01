@@ -6,7 +6,9 @@
          racklr/effects/imports
          racklr/effects/infer
          racklr/effects/library-tokens
-         racklr/effects/pure-roots)
+         racklr/effects/pure-roots
+         racklr/effects/lexicon
+         racklr/effects/lexicons/javascript)
 
 ;; ── helpers ─────────────────────────────────────────────────────────
 
@@ -2025,7 +2027,26 @@
                                   #:import-env env))
   (define r (hash-ref rows (cons "base.py" 'Base.fetch)))
   (check-equal? (row-names r) '(cache))
-  (check-false (row-lookup r 'unknown)))
+  (check-false (row-lookup r 'unknown))
+  ;; The merge reads the INJECTED lexicon's receiver-modules table, not the
+  ;; Python default: remap these modules to io in a custom token table and the
+  ;; merged parameter classifies io; with the JavaScript lexicon (whose table
+  ;; has no pylibmc/pymemcache entry) the merge is refused instead of borrowing
+  ;; Python's data.
+  (define custom-tokens
+    (struct-copy effect-tokens default-effect-tokens
+                 [receiver-modules (hash "pylibmc" 'io "pymemcache" 'io)]))
+  (define custom-lex (struct-copy lexicon default-lexicon [tokens custom-tokens]))
+  (define r-custom
+    (hash-ref (infer-effects-all (list (cons "base.py" base) (cons "app.py" app))
+                                 #:import-env env #:lexicon custom-lex)
+              (cons "base.py" 'Base.fetch)))
+  (check-equal? (row-names r-custom) '(io))
+  (define r-js
+    (hash-ref (infer-effects-all (list (cons "base.py" base) (cons "app.py" app))
+                                 #:import-env env #:lexicon javascript-lexicon)
+              (cons "base.py" 'Base.fetch)))
+  (check-false (member 'cache (row-names r-js))))
 
 (define (test-projection-property-mro)
   ;; `@cached_property _cache` returning `self._class()` is projected as the
