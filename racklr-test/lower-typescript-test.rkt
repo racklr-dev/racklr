@@ -235,6 +235,33 @@
 (let-values ([(uir emitted) (check-ts "posts[0] += 1;")])
   (check-true (string-contains? emitted "posts[0] += 1")))
 
+;; Mixed binary chains: the operator tail after the subscript is rebuilt and
+;; routed through the normal expression lowering, so precedence is preserved
+;; and no operand is dropped.
+(let-values ([(uir emitted) (check-ts "const scaled = a[0] + b[1] * c[2];")])
+  (check-true (string-contains? emitted "a[0] + b[1] * c[2]")))
+(let-values ([(uir emitted) (check-ts "const both = a[0] && b[1];")])
+  (check-true (string-contains? emitted "a[0] && b[1]")))
+(let-values ([(uir emitted) (check-ts "const sum = a[0] + b[1] + c[2];")])
+  (check-true (string-contains? emitted "a[0] + b[1] + c[2]")))
+
+;; Ternary tail after a subscript.
+(let-values ([(uir emitted) (check-ts "const pick = a[0] ? b[1] : c[2];")])
+  (check-true (string-contains? emitted "a[0] ? b[1] : c[2]")))
+
+;; Nested ternary tail.
+(let-values ([(uir emitted) (check-ts "const pick = a[0] ? b[1] ? c[2] : d[3] : e[4];")])
+  (check-true (string-contains? emitted "a[0] ? b[1] ? c[2] : d[3] : e[4]")))
+
+;; Postfix increment/decrement after a subscript must render as the JS operators,
+;; not as a call to a synthesized `postfix++` symbol.
+(let-values ([(uir emitted) (check-ts "a[0]++;")])
+  (check-true (string-contains? emitted "a[0]++"))
+  (check-false (string-contains? emitted "postfix")))
+(let-values ([(uir emitted) (check-ts "a[0]--;")])
+  (check-true (string-contains? emitted "a[0]--"))
+  (check-false (string-contains? emitted "postfix")))
+
 ;; ── Clean up temp files ─────────────────────────────────────────────
 
 (cleanup)
