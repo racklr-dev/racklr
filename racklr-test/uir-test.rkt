@@ -530,6 +530,16 @@
     (check-true (uir-subtype? u2) "uir-subtype round-trip type")
     (check-equal? (length (uir-effect-row-entries (uir-subtype-right u2))) 1 "uir-subtype round-trip right")))
 
+;; A while loop is the loop-as-data control-flow node; it must round-trip in
+;; both directions (the codec is schema-driven, so this also guards the
+;; `while` node kind's schema entry).
+(define (test-while-roundtrip)
+  (define u1 (uir-while (uir-bool #t)
+                        (uir-set! (uir-symbol "x") (uir-number "1"))
+                        (uir-null)))
+  (check-equal? (sexp->uir (uir->sexp u1)) u1 "uir-while sexp round-trip")
+  (check-equal? (json->uir (uir->json u1)) u1 "uir-while json round-trip"))
+
 ;; ── JSON Serialization Round-Trip ───────────────────────────────────
 
 (define (test-json-roundtrip)
@@ -880,6 +890,7 @@
   (test-effect-row-construction)
   (test-subtype-construction)
   (test-sexp-roundtrip)
+  (test-while-roundtrip)
   (test-json-roundtrip)
   (test-versioned-sexp)
   (test-schema-migration)
