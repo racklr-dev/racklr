@@ -56,6 +56,8 @@
   effect-cap-receiver
   make-callee-site
   make-declared-site
+  ;; effect-name access
+  entry-effect-name
   ;; completeness
   provenance-missing
   provenance-complete?
@@ -73,7 +75,10 @@
     [(and (pair? key) (string? (car key)))
      (format "~a::~a" (car key) (cdr key))]
     [(symbol? key) (symbol->string key)]
-    [else (format "~a" key)]))
+    [else
+     (error 'function-fq
+            "not a call-graph key (symbol or (cons string symbol)): ~s"
+            key)]))
 
 ;; ── records ─────────────────────────────────────────────────────────
 
@@ -208,15 +213,17 @@
   (define missing
     (for*/list ([(key row) (in-hash rows)]
                 [entry (in-list (uir-effect-row-entries row))]
-                [effect (in-value (effect-name entry))]
+                [effect (in-value (entry-effect-name entry))]
                 #:unless (hash-ref (hash-ref reachable effect (hash)) (function-fq key) #f))
       (list (function-fq key) effect)))
   (sort missing (λ (a b) (string<? (format "~a/~a" (car a) (cadr a))
                                    (format "~a/~a" (car b) (cadr b))))))
 
-;; The effect-name symbol of an entry, without requiring the contract module
-;; (whose algebra this record deliberately does not depend on).
-(define (effect-name entry)
+;; The effect-name symbol of a UIR effect entry, without requiring the contract
+;; module (this record deliberately does not depend on the algebra). This is the
+;; one definition; the graph projection reuses it so the two tables can never
+;; disagree about what an entry's effect name is.
+(define (entry-effect-name entry)
   (string->symbol (uir-symbol-name (uir-effect-entry-name entry))))
 
 (define (provenance-complete? rows prov)

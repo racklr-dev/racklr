@@ -155,6 +155,17 @@ racket uir-test.rkt                  # UIR types + serialization
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.
 
+Provenance completeness can also be checked over a real corpus (same submodule
+and grammar prerequisites as the shared baseline):
+
+```bash
+racket tools/provenance-corpus.rkt                 # django/django/core
+racket tools/provenance-corpus.rkt django/django   # wider probe
+```
+
+It prints the effect-edge and provenance counts and exits non-zero if any
+effect edge has no reachable ground; it never re-pins the baseline.
+
 ## Dependencies
 
 - Racket 9.3

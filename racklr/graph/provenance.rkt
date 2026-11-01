@@ -39,7 +39,9 @@
 ;;
 ;; `provenance-graph` refuses to project a row with an effect edge that no ground
 ;; can reach: "no effect edge exists without provenance" is enforced at
-;; construction, not asserted in prose.
+;; construction, by the SAME reachability traversal over the projected atoms
+;; that the query uses. A projection bug that drops a call-site link therefore
+;; fails the construction instead of silently producing an unprovable edge.
 
 (require racklr/uir
          racklr/hypergraph
@@ -54,6 +56,8 @@
   fn-effect-link grounds-link call-site-link site-expression-link
   site-effect-link site-token-link site-receiver-link site-kind-link
   entry->hg-entry
+  ;; reusable parsed index (queries accept atoms or an index)
+  graph-index graph-index? make-graph-index
   ;; queries
   effect-edge
   provenance-paths
@@ -119,10 +123,6 @@
 (define (hg-entry-effect entry)
   (node-name (first (link-out entry))))
 
-;; The effect-name symbol of a UIR effect entry.
-(define (uir-entry-effect e)
-  (string->symbol (uir-symbol-name (uir-effect-entry-name e))))
-
 ;; Deterministic atom order: sort on the printed struct (type + fields), not on
 ;; Atomese rendering (two node types can render to the same ConceptNode text).
 (define (atom-less? a b)
@@ -152,7 +152,7 @@
     (define by-effect (make-hash))
     (for ([e (in-list (uir-effect-row-entries row))])
       (define entry (entry->hg-entry e))
-      (define name (uir-entry-effect e))
+      (define name (entry-effect-name e))
       (hash-set! by-effect name entry)
       (add! (fn-effect-link fq entry)))
     (hash-set! entry-by fq by-effect))
@@ -187,8 +187,11 @@
       (add! (site-expression-link id (prov-call-site call)))))
 
   (define graph (sort (flatten-atoms atoms) atom-less?))
+  ;; Enforcement is the atom-level reachability check, not a promise from the
+  ;; record tables: the graph the consumer will query is the graph that is
+  ;; proven complete.
   (if require?
-      (let ([missing (provenance-missing rows prov)])
+      (let ([missing (unprovenanced-edges graph)])
         (if (null? missing)
             graph
             (error 'provenance-graph
@@ -212,13 +215,16 @@
 ;; function toward the grounding function, then the ground itself.
 (struct walk-path (hops ground) #:transparent)
 
-;; A private parsed view of the graph atoms.
-(struct index (calls grounds edges site-exprs site-tokens site-receivers site-kinds)
+;; A parsed, reusable view of the graph atoms. Building it is O(atoms); every
+;; query below accepts either the atom list or a prebuilt index, so a consumer
+;; that queries many edges (e.g. wiring the type-graph projection) builds the
+;; index once instead of per edge.
+(struct graph-index (calls grounds edges site-exprs site-tokens site-receivers site-kinds)
   #:transparent)
 
 (define (out-name l i) (node-name (list-ref (link-out l) i)))
 
-(define (index-atoms atoms)
+(define (make-graph-index atoms)
   (define calls (make-hash))         ;; fq → (list (list callee-fq site-id))
   (define grounds (make-hash))       ;; fq → (list (list site-id effect entry))
   (define edges (make-hash))         ;; fq → (list entry)
@@ -253,13 +259,17 @@
                          (λ (l) (cons (list-ref (link-out a) 1) l)) '())]
           [else (void)])
         (void)))
-  (index calls grounds edges site-exprs site-tokens site-receivers site-kinds))
+  (graph-index calls grounds edges site-exprs site-tokens site-receivers site-kinds))
+
+;; Queries take atoms or an index; accept both and build the index once.
+(define (ensure-index graph)
+  (if (graph-index? graph) graph (make-graph-index graph)))
 
 ;; The effect edge (hypergraph effect-entry link) for `fq` and `effect-name`, or
 ;; #f when the function carries no such edge.
-(define (effect-edge atoms fq effect-name)
-  (define idx (index-atoms atoms))
-  (for/or ([entry (in-list (hash-ref (index-edges idx) fq '()))])
+(define (effect-edge graph fq effect-name)
+  (define idx (ensure-index graph))
+  (for/or ([entry (in-list (hash-ref (graph-index-edges idx) fq '()))])
     (and (eq? (hg-entry-effect entry) effect-name) entry)))
 
 (define (sort-calls calls)
@@ -271,8 +281,8 @@
 ;; Shortest call-chain paths from `fq` to the grounds of `effect-name`, one per
 ;; ground. Breadth-first so each returned chain is a shortest witness; the graph
 ;; is the provenance, so every step is a typed `call-site` link.
-(define (provenance-paths atoms fq effect-name)
-  (define idx (index-atoms atoms))
+(define (provenance-paths graph fq effect-name)
+  (define idx (ensure-index graph))
   (define want (if (symbol? effect-name) effect-name (string->symbol (format "~a" effect-name))))
   (define results '())
   (define seen (make-hash))
@@ -286,14 +296,14 @@
       (define hops (first item))
       (define fn (second item))
       ;; Every ground at this function proves the edge; the hops are the chain.
-      (for ([ground (in-list (sort-grounds (hash-ref (index-grounds idx) fn '())))])
+      (for ([ground (in-list (sort-grounds (hash-ref (graph-index-grounds idx) fn '())))])
         (define site (first ground))
         (define entry (third ground))
         (if (eq? (hg-entry-effect entry) want)
-            (let* ([tokens (sort (hash-ref (index-site-tokens idx) site '()) string<?)]
-                   [receiver (hash-ref (index-site-receivers idx) site #f)]
-                   [expr (hash-ref (index-site-exprs idx) site site)]
-                   [kind (hash-ref (index-site-kinds idx) site 'inferred)])
+            (let* ([tokens (sort (hash-ref (graph-index-site-tokens idx) site '()) string<?)]
+                   [receiver (hash-ref (graph-index-site-receivers idx) site #f)]
+                   [expr (hash-ref (graph-index-site-exprs idx) site site)]
+                   [kind (hash-ref (graph-index-site-kinds idx) site 'inferred)])
               (set! results
                     (cons (walk-path (reverse hops)
                                      (walk-ground fn expr want tokens receiver
@@ -301,11 +311,11 @@
                           results)))
             (void)))
       ;; Continue along the inferred call graph; the first visit is the shortest.
-      (for ([call (in-list (sort-calls (hash-ref (index-calls idx) fn '())))])
+      (for ([call (in-list (sort-calls (hash-ref (graph-index-calls idx) fn '())))])
         (define callee (first call))
         (unless (hash-ref seen callee #f)
           (hash-set! seen callee #t)
-          (define site (hash-ref (index-site-exprs idx) (second call) (second call)))
+          (define site (hash-ref (graph-index-site-exprs idx) (second call) (second call)))
           (push! (cons (walk-hop fn callee site) hops) callee)))
       (loop)))
   (sort results (λ (a b) (string<? (walk-path->key a) (walk-path->key b)))))
@@ -341,19 +351,43 @@
 ;; ── checking ────────────────────────────────────────────────────────
 
 ;; Every effect edge in the graph whose effect has no ground reachable from it.
-(define (unprovenanced-edges atoms)
-  (define idx (index-atoms atoms))
+;; One reverse reachability pass per effect kind: from every ground owner, walk
+;; the reverse call-site graph and mark the functions that can reach it. This is
+;; the same traversal `provenance-missing` computes over the provenance record,
+;; but over the projected atoms — so it is the check that a broken projection
+;; fails, not a check that merely trusts the tables.
+(define (unprovenanced-edges graph)
+  (define idx (ensure-index graph))
+  (define reverse (make-hash))       ;; callee fq → (listof caller fq)
+  (for ([(caller calls) (in-hash (graph-index-calls idx))])
+    (for ([call (in-list calls)])
+      (hash-update! reverse (first call)
+                    (λ (l) (if (member caller l) l (cons caller l))) '())))
+  (define reachable (make-hash))      ;; effect → (hash fn #t)
+  (define (mark effect fn)
+    (define seen (hash-ref! reachable effect make-hash))
+    (let loop ([work (list fn)])
+      (unless (null? work)
+        (define f (car work))
+        (if (hash-ref seen f #f)
+            (loop (cdr work))
+            (begin
+              (hash-set! seen f #t)
+              (loop (append (cdr work) (hash-ref reverse f '()))))))))
+  (for ([(fn grounds) (in-hash (graph-index-grounds idx))])
+    (for ([ground (in-list grounds)])
+      (mark (second ground) fn)))
   (sort
-   (for*/list ([(fq entries) (in-hash (index-edges idx))]
+   (for*/list ([(fq entries) (in-hash (graph-index-edges idx))]
                [entry (in-list entries)]
-               #:unless (pair? (provenance-paths atoms fq (hg-entry-effect entry))))
+               #:unless (hash-ref (hash-ref reachable (hg-entry-effect entry) (hash)) fq #f))
      (list fq (hg-entry-effect entry)))
    (λ (a b) (string<? (format "~a/~a" (car a) (cadr a))
                       (format "~a/~a" (car b) (cadr b))))))
 
 ;; Raise unless every effect edge in the graph is provable.
-(define (assert-provenance-complete! atoms)
-  (define missing (unprovenanced-edges atoms))
+(define (assert-provenance-complete! graph)
+  (define missing (unprovenanced-edges graph))
   (if (null? missing)
       (void)
       (error 'assert-provenance-complete!

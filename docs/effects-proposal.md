@@ -289,10 +289,14 @@ As built:
   expression. A **provenance path** is a walk from a function along `call-site`
   edges to a `grounds` edge; `provenance-paths` returns the exact
   caller→callee chain (shortest per ground) for a given function/effect edge.
-- "No effect edge exists without provenance" is enforced at projection time:
-  the graph builder raises if any effect edge cannot reach a ground, and
-  `provenance-missing` checks the same property from the row/provenance tables
-  without enumerating paths.
+- "No effect edge exists without provenance" is enforced at projection time by
+  the same atom-level reachability traversal the query uses: the graph builder
+  raises if any effect edge cannot reach a ground. `provenance-missing` checks
+  the same property from the row/provenance tables without enumerating paths,
+  and the test suite cross-checks that the record-level and atom-level answers
+  agree (including a deliberately dropped call-site link, which only the
+  atom-level check detects). `tools/provenance-corpus.rkt` runs the check over
+  the Django corpus without touching the baseline and prints the counts.
 
 ---
 

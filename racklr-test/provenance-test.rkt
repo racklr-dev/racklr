@@ -259,13 +259,124 @@
   (check-equal? (unprovenanced-edges graph) (list (list "g" 'network)))
   (check-exn exn:fail? (λ () (assert-provenance-complete! graph))))
 
-(define (test-real-graph-is-complete)
+(define (test-two-function-graph-is-complete)
   (define p
     (prog (fn "a" (uir-call (v "b") (list)))
           (fn "b" (uir-call (v "open") (list)))))
   (define-values (_rows graph) (infer-graph p))
   (check-equal? (unprovenanced-edges graph) '())
   (check-true (void? (assert-provenance-complete! graph))))
+
+;; ── the record check and the atom check agree ───────────────────────
+
+;; Drop every call-site link from `from` to `to`, simulating a projection bug.
+(define (drop-call-site-link graph from to)
+  (filter-not (λ (a)
+            (and (link? a)
+                 (eq? (link-type a) 'call-site)
+                 (equal? (node-name (first (link-out a))) from)
+                 (equal? (node-name (second (link-out a))) to)))
+              graph))
+
+;; A non-trivial graph: a cross-file inheritance chain, a branch (two effect
+;; grounds), receiver typing, a declared capability, an unresolved leaf, and
+;; recursion.
+(define (non-trivial-graph)
+  (define models
+    (prog (py-class "Helpers"
+                    (list (py-method "helper"
+                                     (uir-block
+                                      (list (uir-call (v "open") (list))
+                                            (uir-call (dot (v "mystery") "m") (list)))))
+                          (py-method "deep"
+                                     (uir-call (dot (v "self") "helper") (list)))))
+          (py-class "Model" (list (py-method "save" (uir-null))))))
+  (define app
+    (prog (py-class/super "Sub" (v "Helpers")
+                          (list (py-method "run"
+                                           (uir-block
+                                            (list (uir-call (dot (v "self") "deep") (list))
+                                                  (uir-call (dot (v "self") "run") (list)))))))
+          (py-class/super "Admin" (v "Model")
+                          (list (py-method "admin_run"
+                                           (uir-call (dot (v "self") "save") (list)))))
+          (fn "typed" (uir-call (dot (v "qs") "filter") (list)))))
+  (define env
+    (import-env (hash "models.py" "django.db.models" "app.py" "app")
+                (hash "app" (hash "qs" (handle 'class "django.db.models" "QuerySet")))
+                (hash "Model.save" (effect-cap 'db (list 'db<Model>.write)))))
+  (define prov-box (box #f))
+  (define rows (infer-effects-all (list (cons "models.py" models)
+                                        (cons "app.py" app))
+                                  #:import-env env #:provenance-record prov-box))
+  (values rows (unbox prov-box) (provenance-graph rows (unbox prov-box))))
+
+(define (test-reachability-checks-agree)
+  (define-values (rows prov graph) (non-trivial-graph))
+  ;; Both the record-level and the atom-level checks agree the graph is complete.
+  (check-equal? (provenance-missing rows prov) '())
+  (check-equal? (unprovenanced-edges graph) '())
+  (check-true (void? (assert-provenance-complete! graph)))
+  ;; And they agree on a known-missing edge injected after inference.
+  (define rows* (hash-copy rows))
+  (hash-set! rows* (cons "orphan.py" 'orphan)
+             (uir-effect-row (list (uir-effect-entry (sym "network") 'may '() #f #f))))
+  (check-equal? (provenance-missing rows* prov) (list (list "orphan.py::orphan" 'network)))
+  (define incomplete (provenance-graph rows* prov #:require-provenance? #f))
+  (check-equal? (unprovenanced-edges incomplete) (list (list "orphan.py::orphan" 'network)))
+  (check-exn exn:fail? (λ () (assert-provenance-complete! incomplete))))
+
+(define (test-projection-bug-is-detected)
+  ;; The atom-level check is the source of truth: dropping a call-site link that
+  ;; a propagated effect travelled through makes the edge unprovable in the
+  ;; graph, even though the record tables still say it is grounded.
+  (define-values (rows prov graph) (non-trivial-graph))
+  (check-equal? (provenance-missing rows prov) '())
+  (check-true (pair? (provenance-paths graph "app.py::Sub.run" 'io)))
+  (define broken (drop-call-site-link graph "app.py::Sub.run" "models.py::Helpers.deep"))
+  (check-equal? (provenance-paths broken "app.py::Sub.run" 'io) '())
+  (check-true (pair? (unprovenanced-edges broken)))
+  (check-exn exn:fail? (λ () (assert-provenance-complete! broken))))
+
+(define (test-reusable-index)
+  ;; A prebuilt index gives the same answers as the atom list, so a per-edge
+  ;; loop can build it once.
+  (define-values (rows prov graph) (non-trivial-graph))
+  (define idx (make-graph-index graph))
+  (check-true (graph-index? idx))
+  (check-equal? (provenance-paths idx "app.py::Sub.run" 'db)
+                (provenance-paths graph "app.py::Sub.run" 'db))
+  (check-equal? (unprovenanced-edges idx) (unprovenanced-edges graph))
+  (check-equal? (effect-edge idx "app.py::Sub.run" 'db)
+                (effect-edge graph "app.py::Sub.run" 'db)))
+
+(define (test-branching-reachability)
+  ;; Two grounds reached through a shared caller: a work-item traversal that
+  ;; stops at an already-visited node can drop the remaining frontier, so this
+  ;; shape guards the graph-level check against a partial reachability set.
+  (define p
+    (prog (fn "a" (uir-call (v "open") (list)))
+          (fn "b" (uir-call (v "open") (list)))
+          (fn "y" (uir-call (v "b") (list)))
+          (fn "z" (uir-call (v "y") (list)))
+          (fn "x" (uir-block (list (uir-call (v "a") (list))
+                                   (uir-call (v "b") (list)))))))
+  (define prov-box (box #f))
+  (define rows (infer-effects p #:provenance-record prov-box))
+  (define graph (provenance-graph rows (unbox prov-box)))
+  (check-equal? (provenance-missing rows (unbox prov-box)) '())
+  (check-equal? (unprovenanced-edges graph) '())
+  ;; Every function above the two grounds has at least one io path.
+  (for ([fq (in-list '("a" "b" "x" "y" "z"))])
+    (check-true (pair? (provenance-paths graph fq 'io)) (format "~a has io" fq))))
+
+(define (test-function-fq-rejects-unknown-keys)
+  ;; An identity that is neither a symbol nor a component-qualified pair is a
+  ;; programming error, not a name to stringify.
+  (check-equal? (function-fq 'f) "f")
+  (check-equal? (function-fq (cons "a.py" 'f)) "a.py::f")
+  (check-exn exn:fail? (λ () (function-fq 42)))
+  (check-exn exn:fail? (λ () (function-fq (list 'a 'b)))))
 
 (module+ main
   (test-direct-effect-ground)
@@ -278,5 +389,10 @@
   (test-recursive-chain)
   (test-multiple-grounds)
   (test-provenance-is-enforced)
-  (test-real-graph-is-complete)
+  (test-two-function-graph-is-complete)
+  (test-reachability-checks-agree)
+  (test-projection-bug-is-detected)
+  (test-reusable-index)
+  (test-branching-reachability)
+  (test-function-fq-rejects-unknown-keys)
   (displayln "All provenance tests passed."))
