@@ -13,9 +13,9 @@
 ;; is refused rather than dropped.
 
 (define (emit-jsx uir [row #f])
-  (if row
-      (refuse-explicit-row 'emit-jsx "jsx" row)
-      (emit-jsx-node uir)))
+  (if (eq? row #f)
+      (emit-jsx-node uir)
+      (refuse-explicit-row 'emit-jsx "jsx" row)))
 
 (define (emit-jsx-node uir)
   (match uir

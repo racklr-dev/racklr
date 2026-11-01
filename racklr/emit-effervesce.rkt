@@ -25,9 +25,9 @@
 ;; renders declarations, so a function-entry row from the contract has no place
 ;; to be reified and is refused rather than dropped.
 (define (emit-effervesce uir [row #f])
-  (if row
-      (refuse-explicit-row 'emit-effervesce "effervesce" row)
-      (emit-effervesce-unit uir)))
+  (if (eq? row #f)
+      (emit-effervesce-unit uir)
+      (refuse-explicit-row 'emit-effervesce "effervesce" row)))
 
 (define (emit-effervesce-unit uir)
   (if (uir-eff-system? uir)

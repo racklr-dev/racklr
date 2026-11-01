@@ -4,14 +4,16 @@
 ;;
 ;; Every target emitter in racklr implements the same contract:
 ;;
-;;     render : uir? × (or/c #f uir-effect-row?) → string?
+;;     render : uir? × (or/c #f uir-effect-row?) × keyword → string?
 ;;
 ;; Input:  the UIR value to render, plus the effect row that describes the
 ;;         emitted unit. `#f` means "the caller supplied no row": the target
 ;;         uses the rows the UIR already carries (and, for Python and
 ;;         JavaScript, effect inference, as before). A `uir-effect-row` is the
 ;;         caller's explicit row; it is authoritative for the unit's entry
-;;         function and must never be silently dropped.
+;;         function and must never be silently dropped. Target-specific keyword
+;;         options (JSON `#:indent`, HTML `#:title`/`#:lang`/`#:external-js`)
+;;         are forwarded by the dispatch in racklr/emit.
 ;; Output: target source text.
 ;;
 ;; Each target declares how it reifies an explicit row in its native effect
@@ -25,9 +27,11 @@
 ;;                        row, so an explicit row is *refused* with an error
 ;;                        instead of being dropped.
 ;;
-;; The contract is enforced where the target table is built: `make-emit-target`
-;; rejects a renderer that does not accept the two contract arguments. The
-;; single dispatch function is `emit` in racklr/emit.rkt.
+;; The target table checks the call shape via `make-emit-target`: a renderer
+;; must accept two positional arguments (an arity-only check — it cannot prove
+;; the row is used). Per-target reification is exercised by
+;; racklr-test/emit-contract-test.rkt. The single dispatch function is `emit`
+;; in racklr/emit.rkt.
 
 (require racklr/uir)
 
@@ -51,12 +55,13 @@
 (struct emit-target (target        ; symbol naming the target ('python, 'koka, ...)
                      vocabulary    ; string: what this target emits
                      row-syntax    ; symbol, one of `row-syntaxes`
-                     render)       ; the contract: (-> uir? (or/c #f uir-effect-row?) string?)
+                     render)       ; the contract: (-> uir? row? keyword ... string?)
   #:transparent)
 
-;; Validate and build a target descriptor. This is the contract check: a
-;; renderer must accept both the UIR and the row argument, so a target cannot
-;; quietly keep the old one-argument shape and lose the row.
+;; Validate and build a target descriptor. The dynamic check is arity-only: it
+;; proves the renderer accepts the UIR and row arguments, not that it reifies
+;; the row (a two-argument renderer could ignore its second argument).
+;; Reification is checked per target by racklr-test/emit-contract-test.rkt.
 (define (make-emit-target target vocabulary row-syntax render)
   (cond
     [(not (symbol? target))
@@ -69,7 +74,7 @@
     [(not (and (procedure? render)
                (procedure-arity-includes? render 2)))
      (error 'make-emit-target
-            "target '~a does not implement the emit contract: render must accept (uir row)"
+            "target '~a does not implement the emit contract shape: render must accept (uir row)"
             target)]
     [else (emit-target target vocabulary row-syntax render)]))
 

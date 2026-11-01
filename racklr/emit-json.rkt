@@ -35,11 +35,11 @@
 ;; explicit effect row in, JSON text out. JSON is a data target with no native
 ;; effect-row vocabulary, so an explicit row is refused rather than dropped.
 (define (emit-json v [row #f] #:indent [indent #f])
-  (if row
-      (refuse-explicit-row 'emit-json "json" row)
+  (if (eq? row #f)
       (let ([out (open-output-string)])
         (emit-node v out (if indent 0 #f) indent)
-        (get-output-string out))))
+        (get-output-string out))
+      (refuse-explicit-row 'emit-json "json" row)))
 
 ;; indent-level: #f = compact, 0,1,2,... = pretty-printed at that level
 (define (emit-node v out level width)

@@ -106,7 +106,7 @@ Both emitters attach the row to the emitted function so it survives round-trips:
 
 ### emit-contract.rkt / emit.rkt
 
-One contract for every target: `render : UIR × (or/c #f uir-effect-row?) → string`. `emit-contract.rkt` defines that call shape, the row-reification strategies a target may declare, and the shared rule that an explicit row is attached to the unit's entry function (`attach-root-row`) or refused. `emit.rkt` is the single dispatch and the target table: `(emit target uir row)` renders any supported target from the same UIR-plus-row input — `python`, `javascript`, `jsx`, `koka`, `clojure`, `dom-js`, `html`, `json`, `effervesce`.
+One contract for every target: `render : UIR × (or/c #f uir-effect-row?) → string`. `emit-contract.rkt` defines that call shape, the row-reification strategies a target may declare, and the shared rule that an explicit row is attached to the unit's entry function (`attach-root-row`) or refused. `emit.rkt` is the single dispatch and the target table: `(emit target uir row)` renders any supported target from the same UIR-plus-row input — `python`, `javascript`, `jsx`, `koka`, `clojure`, `dom-js`, `html`, `json`, `effervesce` — and forwards target-specific keyword options (`#:indent` for JSON, `#:title`/`#:lang`/`#:external-js` for HTML), so it is a drop-in replacement for the direct emitter calls.
 
 A supplied row is rendered in the target's native vocabulary where one exists (Python `@__withEffects({...})`, JavaScript/HTML `__withEffects({...}, fn)`, Koka `fun f() : <llm, db>` / `: total`, Clojure `:__effects__` metadata) and refused with an error where it does not (JSX/DOM/JSON/Effervesce), so it is never silently dropped. Omitting the row keeps the pre-contract one-argument call shape.
 

@@ -50,7 +50,7 @@
 ;; is the `:__effects__` metadata map on the entry defn, which is where the
 ;; reader and Jolt actually keep it.
 (define (emit-clojure uir [row #f])
-  (define source (if row (attach-root-row 'emit-clojure uir row) uir))
+  (define source (attach-root-row 'emit-clojure uir row))
   (if (uir-block? source)
       (string-join (map emit-form (uir-block-stmts source)) "\n")
       (emit-form source)))

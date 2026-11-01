@@ -4,7 +4,7 @@
 ;;
 ;; Every target emitter implements the contract in racklr/emit-contract:
 ;;
-;;     render : uir? × (or/c #f uir-effect-row?) → string?
+;;     render : uir? × (or/c #f uir-effect-row?) × keyword → string?
 ;;
 ;; This module is the target table and the one dispatch function. Any supported
 ;; target renders from the same input pair — the UIR value plus the effect row
@@ -19,6 +19,11 @@
 ;; existing one-argument callers keep working unchanged. Passing a
 ;; `uir-effect-row` makes it explicit input: the target reifies it in its
 ;; native vocabulary, or refuses it when it has none (never drops it).
+;; Target-specific keyword options are forwarded too, so the dispatch is a
+;; drop-in replacement for the direct calls:
+;;
+;;     (emit 'json program #f #:indent 2)
+;;     (emit 'html program row #:title "My App" #:lang "en")
 
 (require racklr/uir
          "emit-contract.rkt"
@@ -88,9 +93,17 @@
 
 ;; Render one supported target from a UIR value plus an explicit effect row.
 ;; The row is `#f` or a `uir-effect-row`; each target either reifies it in its
-;; native vocabulary or refuses it. See racklr/emit-contract for the contract.
-(define (emit target uir [row #f])
-  ((emit-target-render (emit-target-for target)) uir row))
+;; native vocabulary or refuses it. Target-specific keyword options are
+;; forwarded to the target renderer — `#:indent` for JSON,
+;; `#:title`/`#:lang`/`#:external-js` for HTML — so the dispatch is a drop-in
+;; replacement for the direct emitter calls; an option a target does not accept
+;; is an error, as it is on the direct function. See racklr/emit-contract for
+;; the contract.
+(define emit
+  (make-keyword-procedure
+   (λ (keywords keyword-values target . positional)
+     (keyword-apply (emit-target-render (emit-target-for target))
+                    keywords keyword-values positional))))
 
 (module+ main
   (displayln "racklr/emit — single dispatch over every emit-contract target loaded."))

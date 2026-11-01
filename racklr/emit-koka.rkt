@@ -33,7 +33,7 @@
 ;; function effect annotation, so an explicit row is rendered as the entry
 ;; function's `: <effects>` (or `: total` for an empty row).
 (define (emit-koka uir [row #f])
-  (define source (if row (attach-root-row 'emit-koka uir row) uir))
+  (define source (attach-root-row 'emit-koka uir row))
   (if (uir-block? source)
       (string-join (map emit-stmt (uir-block-stmts source)) "\n")
       (emit-expr source)))

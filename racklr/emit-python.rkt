@@ -744,7 +744,7 @@
 ;; guard. The other functions still get their row from the UIR or, when absent,
 ;; from inference, exactly as before the contract existed.
 (define (emit-python uir [row #f])
-  (define source (if row (attach-root-row 'emit-python uir row) uir))
+  (define source (attach-root-row 'emit-python uir row))
   (define annotated (annotate-effects source))
   (define body
     (cond [(uir-block? annotated)

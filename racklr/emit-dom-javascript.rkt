@@ -15,9 +15,9 @@
 ;; is refused rather than dropped.
 
 (define (emit-dom-js uir [row #f])
-  (if row
-      (refuse-explicit-row 'emit-dom-js "dom-js" row)
-      (emit-dom-js-node uir)))
+  (if (eq? row #f)
+      (emit-dom-js-node uir)
+      (refuse-explicit-row 'emit-dom-js "dom-js" row)))
 
 (define (emit-dom-js-node uir)
   (match uir

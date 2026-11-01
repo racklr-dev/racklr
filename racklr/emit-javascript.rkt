@@ -747,7 +747,7 @@
 ;; `__withEffects({...}, fn)` guard. The other functions still get their row
 ;; from the UIR or, when absent, from inference, exactly as before.
 (define (emit-javascript uir [row #f])
-  (define source (if row (attach-root-row 'emit-javascript uir row) uir))
+  (define source (attach-root-row 'emit-javascript uir row))
   (define annotated (annotate-effects source))
   (define body (emit-js annotated))
   (if (program-has-effects? annotated)

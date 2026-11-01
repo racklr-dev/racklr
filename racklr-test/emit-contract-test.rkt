@@ -12,6 +12,7 @@
 ;;   - a target with no native row vocabulary refuses the row instead of
 ;;     silently dropping it;
 ;;   - a row with no function to annotate is an error, not a silent no-op;
+;;   - target-specific keyword options are forwarded by the dispatch;
 ;;   - the row-absent call shape is unchanged from before the contract.
 
 (require rackunit
@@ -175,6 +176,28 @@
              (λ () (emit 'python (program) 'llm))
              "a non-row explicit input is rejected"))
 
+;; ── Target-specific keyword options are forwarded ───────────────────
+
+(define (test-dispatch-forwards-target-keyword-options)
+  ;; The dispatch is a drop-in replacement for the direct emitter calls,
+  ;; including their keyword options.
+  (check-equal? (emit 'json (uir-null) #f #:indent 2)
+                (emit-json (uir-null) #:indent 2))
+  (check-equal? (emit 'json (uir-null) #:indent 2)
+                (emit-json (uir-null) #:indent 2))
+  (check-equal? (emit 'html (program) #:title "My App")
+                (emit-html (program) #:title "My App"))
+  (define html-with-row (emit 'html (program) (llm-row) #:title "My App"))
+  (check-true (string-contains? html-with-row "<title>My App</title>")
+              "the title option reaches the HTML target")
+  (check-true (string-contains? html-with-row "__withEffects(")
+              "the explicit row is still reified next to the keyword options")
+  ;; An option the target does not accept is an error, exactly as it is on the
+  ;; direct function.
+  (check-exn exn:fail?
+             (λ () (emit 'python (program) #:indent 2))
+             "unknown keyword options are rejected by the target"))
+
 ;; ── The pre-contract call shape is unchanged ────────────────────────
 
 (define (test-row-absent-keeps-the-old-call-shape)
@@ -189,7 +212,10 @@
   (check-equal? (emit 'dom-js (uir-string "x")) (emit-dom-js (uir-string "x")))
   (check-equal? (emit 'json (uir-null)) (emit-json (uir-null)))
   (check-equal? (emit 'effervesce (uir-number "1"))
-                (emit-effervesce (uir-number "1"))))
+                (emit-effervesce (uir-number "1")))
+  ;; `attach-root-row` is a no-op for the row-absent case, so row-capable
+  ;; targets can (and do) call it unconditionally.
+  (check-equal? (attach-root-row 'test (program) #f) (program)))
 
 (module+ main
   (test-target-table)
@@ -201,5 +227,6 @@
   (test-entry-function-wrappers-carry-the-row)
   (test-row-with-no-function-is-an-error)
   (test-row-input-must-be-a-row)
+  (test-dispatch-forwards-target-keyword-options)
   (test-row-absent-keeps-the-old-call-shape)
   (displayln "All emit-contract tests passed."))
