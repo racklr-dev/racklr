@@ -89,6 +89,33 @@
 
 ;; ── Sections ──────────────────────────────────────────────────────
 
+;; ── Source-position helpers (embedded in generated lexer) ─────────
+;; A lexer token can span several lines: a multi-line triple-quoted string, a
+;; NEWLINE token carrying the next line's indentation, a multi-line comment or
+;; a template literal. The position after such a token must account for the
+;; newlines inside it; otherwise every following token is reported on the
+;; token's opening line.
+(define (gen-position-helper)
+  "
+;; Advance the (line, column) of a matched token's text by one token.
+;; \\r\\n counts as a single line break; lone \\n and \\r also break the line.
+;; (A form feed is whitespace that the tokenizer skips before any rule matches
+;; it, so it only ever appears inside a token's text and is not a line break.)
+(define (advance-line-col l c text)
+  (define len (string-length text))
+  (let loop ([i 0] [l l] [c c])
+    (cond
+      [(>= i len) (values l c)]
+      [(char=? (string-ref text i) #\\newline)
+       (loop (+ i 1) (+ l 1) 1)]
+      [(char=? (string-ref text i) #\\return)
+       (if (and (< (+ i 1) len) (char=? (string-ref text (+ i 1)) #\\newline))
+           (loop (+ i 2) (+ l 1) 1)
+           (loop (+ i 1) (+ l 1) 1))]
+      [else (loop (+ i 1) l (+ c 1))])))
+"
+  )
+
 (define (gen-header #:indent-tokens? [indent-tokens? #f]
                      #:policy [policy default-language-policy])
   (string-append
@@ -96,6 +123,7 @@
 (require racklr/tree)
 (provide token token? token-type token-value token-start token-end tokenize parse)
 (struct token (type value start end) #:transparent)"
+   (gen-position-helper)
    (let ([layout (language-policy-layout-helper-source policy)])
      (if (and indent-tokens? layout)
          layout
@@ -541,11 +569,25 @@
   (format "               (cons ~a-match (lambda (np v) ~a))"
           mangled cmd-body))
 
+;; Resume the scanner after an accepted token. advance-line-col updates the
+;; line/column across the token's own line breaks (a multi-line string or a
+;; NEWLINE token), while np is the absolute offset after the token.
+(define (gen-token-emit token-expr mode mstack pending)
+  (format "(define-values (nl nc) (advance-line-col l c v)) (define tk (token ~a v (pos l c o) (pos nl nc np))) (loop np nl nc np (cons tk tks) ~a ~a ~a)"
+          token-expr mode mstack pending))
+
+;; Resume the scanner after a token that is not emitted (skip / hidden
+;; channel). Skipped text can still contain line breaks (e.g. a line-joining
+;; continuation), so the position must advance the same way.
+(define (gen-token-skip mode mstack pending)
+  (format "(define-values (nl nc) (advance-line-col l c v)) (loop np nl nc np tks ~a ~a ~a)"
+          mode mstack pending))
+
 (define (gen-command-body commands token-expr raw-name preserve-comments?
                           [policy default-language-policy])
   (define inner-body
     (if (null? commands)
-        (format "(define sl (string-length v)) (define tk (token ~a v (pos l c o) (pos l (+ c sl) (+ o sl)))) (loop np l (+ c sl) (+ o sl) (cons tk tks) ~a ~a ~a)" token-expr "mode" "mstack" "pending")
+        (gen-token-emit token-expr "mode" "mstack" "pending")
         (let loop ([cmds commands]
                    [skip? #f]
                    [more? #f]
@@ -554,10 +596,9 @@
                    [next-mstack "mstack"]
                    [next-pending "pending"])
           (if (null? cmds)
-              (cond [skip? (format "(loop np l c o tks ~a ~a ~a)" next-mode next-mstack next-pending)]
+              (cond [skip? (gen-token-skip next-mode next-mstack next-pending)]
                     [more? (format "(loop np l c o tks ~a ~a ~a)" next-mode next-mstack next-pending)]
-                    [else (format "(define sl (string-length v)) (define tk (token ~a v (pos l c o) (pos l (+ c sl) (+ o sl)))) (loop np l (+ c sl) (+ o sl) (cons tk tks) ~a ~a ~a)"
-                                  emit-type next-mode next-mstack next-pending)])
+                    [else (gen-token-emit emit-type next-mode next-mstack next-pending)])
               (let ([cmd (car cmds)])
                 (define txt (any-tree-text cmd))
                 (cond [(string=? txt "skip")

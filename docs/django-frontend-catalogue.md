@@ -228,7 +228,10 @@ fragment does not allow `_` inside the literal, so `_000` lexes as an identifier
 ## 6. Multi-line triple-quoted strings (PARSE-FAIL)
 
 **Resolved.** `LONG_STRING` in `grammars/python3/Python3Lexer.g4` spans newlines, so
-multi-line docstrings tokenize as a single STRING.
+multi-line docstrings tokenize as a single STRING. The generated lexer also
+advances line/column across the literal's embedded newlines, so the tokens
+after a multi-line docstring carry their real source position instead of the
+line the literal opened on (`racklr-test/python-multiline-strings-test.rkt`).
 
 **Reproducers (PARSE-FAIL):**
 

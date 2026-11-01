@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literal-value independence, the structural receiver chain, graph display
   separation, whole-program and declared origins, the line forward path, drift
   localisation, per-file/whole-program agreement, and record/graph agreement.
+- Effect-row subtyping under a row-valued handler interpretation:
+  `racklr/effects/algebra/subtyping` generalizes the bridge checker's
+  capability → effect-names table to typed rows, so a handler can bound the
+  modality, budget and ops of the effects it interprets, and handler
+  chains compose (`Store via Db`, `Db via db`). The identity interpretation
+  recovers `row-subtype?`, the name-set table is recovered exactly by the
+  general relation, and `racklr-test/effects-subtyping-handlers-test.rkt` pins
+  both plus the bridge checker's verdicts as this subtyping check.
 - Confidence and coverage labels on effect edges, and transitive effect
   profiles. Every provenance ground now carries a coverage label
   (`universal` for-all structural evidence, `census-param` for a worked
@@ -257,6 +265,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tag was missing from the JSON tag set, so any function with parameters failed
   to round-trip through JSON. The tag set is now derived from the schema
   layouts, covering every declared kind.
+- The generated lexer advances line and column across a token that contains
+  line breaks (multi-line triple-quoted strings, `NEWLINE` tokens, multi-line
+  comments), so tokens after a multi-line docstring report their real source
+  position instead of the line the literal opened on. Covered by
+  `racklr-test/python-multiline-strings-test.rkt`, which also pins the
+  catalogue's multi-line triple-quoted string reproducers as a single STRING
+  token through parse, lower and emit.
 
 ## [0.1.0rc1] - 2026-06-23
 

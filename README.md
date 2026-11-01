@@ -197,6 +197,7 @@ cd racklr-test
 racket effects-infer-test.rkt        # effect inference
 racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
 racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
+racket effects-subtyping-handlers-test.rkt # subtyping laws + row-valued handler interpretation + bridge equivalence
 racket provenance-test.rkt           # effect-edge provenance + graph query
 racket provenance-origin-test.rkt    # stable site origins: stability, drift diff
 racket effect-profile-test.rkt       # confidence/coverage labels + transitive profiles
@@ -209,6 +210,7 @@ racket lower-typescript-test.rkt     # TypeScript lowering
 racket tsx-integration-test.rkt      # TSX/React end-to-end
 racket lower-python-test.rkt         # Python lowering + emit
 racket modern-python-test.rkt        # modern Python: walrus, positional-only, type alias
+racket python-multiline-strings-test.rkt # multi-line triple-quoted strings: lexing, positions, emit
 racket lower-javascript-test.rkt     # JavaScript lowering + emit
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
