@@ -77,6 +77,17 @@
         (findf (λ (r) (eq? (loss-rule-feature r) 'effect-rows))
                (loss-model-rules m))
         (format "effect-rows rule for ~a" (loss-model-source m)))))
+   (test-case "every model declares every feature exactly once"
+     (for ([m (in-list supported-loss-models)])
+       (check-equal? (missing-features m) '()
+                     (format "missing features for ~a→~a"
+                             (loss-model-source m) (loss-model-target m)))
+       (check-equal? (duplicate-features m) '()
+                     (format "duplicate features for ~a→~a"
+                             (loss-model-source m) (loss-model-target m)))
+       (check-true (loss-model-complete? m))
+       (check-equal? (sort (declared-features m) symbol<?)
+                     (sort loss-features symbol<?))))
    (test-case "rules use known features and dispositions"
      (for ([m (in-list supported-loss-models)])
        (for ([r (in-list (loss-model-rules m))])
@@ -136,9 +147,30 @@
      (check-equal? (erase-js-types
                     '(fn (symbol "f") ((typed-param (symbol "x") (symbol "number") #f))
                          (block ()) (symbol "int") #f))
-                   '(fn (symbol "f") ((symbol "x")) (block ()) #f #f))
+                   '(fn (symbol "f") ((typed-param (symbol "x") #f #f))
+                        (block ()) #f #f))
      (check-equal? (erase-js-types '(interface (symbol "I") ())) '(null))
      (check-equal? (erase-js-types '(type-alias (symbol "T") () (symbol "int"))) '(null)))
+   (test-case "erase-js-types preserves a typed-param kind field"
+     ;; Schema v2 appends an optional parameter-kind element. Erasing the type
+     ;; must not rebuild the narrower legacy payload and drop the kind.
+     (define (erase-params params)
+       (call-with-values
+           (λ () (fn-node-fields
+                  (erase-js-types
+                   (list 'fn '(symbol "f") params '(block ()) #f #f))))
+         (λ (_name ps _body _ret _effects) ps)))
+     (check-equal? (erase-params '((typed-param (symbol "a") (symbol "number") #f kw-only)))
+                   '((typed-param (symbol "a") #f #f kw-only)))
+     (check-equal? (erase-params '((typed-param (symbol "args") (symbol "int") #f var-positional)))
+                   '((typed-param (symbol "args") #f #f var-positional))))
+   (test-case "fn rebuild preserves fields appended after the current schema"
+     (define fn-with-future-field
+       '(fn (symbol "f") () (block ()) #f
+            (effect-row (effect-entry (symbol "io") may () #f #f))
+            future-field))
+     (check-equal? (strip-effect-guards fn-with-future-field)
+                   '(fn (symbol "f") () (block ()) #f #f future-field)))
    (test-case "normalize applies only declared transforms"
      (define model (loss-model-for 'python 'python))
      (define sexp (uir->sexp uir-sample))
@@ -279,6 +311,14 @@
      (check-false (report-within-model? r))
      (check-not-false (member 'definitions (map loss-violation-feature
                                                 (loss-report-violations r)))))
+   (test-case "an incomplete model is rejected, not silently accepted"
+     (define incomplete
+       (loss-model 'python 'python 'projected '() '()
+                   (list (preserved 'definitions "only one rule declared"))))
+     (check-exn exn:fail?
+                (λ () (verify-round-trip incomplete uir-sample uir-sample)))
+     (check-equal? (missing-features incomplete)
+                   (remove* '(definitions) loss-features)))
    (test-case "violations serialize with evidence"
      (define r (report-for 'python 'python uir-sample uir-renamed))
      (define js (report->jsexpr r))

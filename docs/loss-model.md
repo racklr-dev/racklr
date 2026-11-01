@@ -25,6 +25,13 @@ For each supported source→target pair the model lists rules. A rule names a
 - `refused` — the feature is dropped on purpose. If the target UIR still carries
   it, the model is stale and that is a violation.
 
+Every model declares *every* feature below exactly once. A feature that does not
+apply to the pair is declared `refused` with a detail that says so; an omission
+is a coverage-gate error, not a silently unverified dimension. This matters most
+in `projected` mode, where nothing but the declared `preserved` features is
+checked: before the gate, a feature with no rule (for example `imports`, or
+`control-flow` for TypeScript → JavaScript) was accepted without being verified.
+
 Features currently understood by the verifier:
 
 | feature | projection |
@@ -52,6 +59,11 @@ Features currently understood by the verifier:
 - **projected** — a lossy one-way translation (TypeScript/TSX → JavaScript).
   Only the features the model declares `preserved` must match; declared
   approximations are recorded but do not fail the pair.
+
+`loss-model-coverage-check` (run by the harness, the model test, and again
+before every verification) requires every model to declare every feature
+exactly once and validates the mode, normalizations, and duplicate rules. An
+incomplete model makes `verify-round-trip` raise instead of verifying a subset.
 
 A model also lists *normalizations* the verifier applies to both sides before
 comparing, each corresponding to a declared loss:
@@ -109,7 +121,9 @@ and a `loss-violation` for:
    diff paths as evidence);
 2. a `preserved` feature's projection changed;
 3. a rule declared `refused` but the target UIR still carries the feature
-   (stale model).
+   (stale model);
+4. a model that does not declare every feature (an incomplete declaration is
+   rejected, never silently accepted).
 
 `loss-artifacts/round-trip.json` records the model digest, every pair's declared
 rules and corpus coverage, every file's per-feature observations, and every
@@ -133,5 +147,9 @@ model edit and the result reviewable together.
   assignment and operator chains differently. The model declares that under
   `statement-shape` and does not require structural identity for those pairs;
   declarations, signatures, classes, and effect rows still are checked.
-- The JSON front end ships a generated parser; its escaped-codepoint character
-  class was corrected by hand (see the comment in `racklr/gen-json-parser.rkt`).
+- The JSON front end ships a checked-in generated parser that predates the
+  current `gend-parser` char-class unescaping. Its escaped-codepoint character
+  class is corrected by hand as a stopgap (see the comment in
+  `racklr/gen-json-parser.rkt` and follow-up #96); the generator at HEAD decodes
+  `\uXXXX` escapes in both character classes and string literals, and
+  `racklr-test/gend-parser-test.rkt` pins that behavior.

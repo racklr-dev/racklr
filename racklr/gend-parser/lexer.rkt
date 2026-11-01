@@ -304,9 +304,40 @@
   s3)
 
 ;; Convert ANTLR4 escape sequences in literal strings to actual chars.
-;; E.g. "\\n" → "\n" (actual newline), "\\\\" → "\\", "\\'" → "'"
+;; E.g. "\\n" -> newline, "\\\\" -> backslash, "\\'" -> "'", "\\u0041" -> "A".
+;; A left-to-right scan (rather than nested regexp replacements) is what makes
+;; \\uXXXX safe: an escaped backslash before a `u` must not be read as a
+;; Unicode escape.
+(define (hex-digit? c)
+  (or (char-numeric? c) (char<=? #\a c #\f) (char<=? #\A c #\F)))
+
 (define (unescape-g4-literal s)
-  (regexp-replace* #rx"\\\\n" (regexp-replace* #rx"\\\\r" (regexp-replace* #rx"\\\\t" (regexp-replace* #rx"\\\\f" (regexp-replace* #rx"\\\\\\\\" (regexp-replace* #rx"\\\\'" s "'") "\\\\") "") "\t") "\r") "\n"))
+  (define n (string-length s))
+  (define out (open-output-string))
+  (let loop ([i 0])
+    (cond
+      [(>= i n) (get-output-string out)]
+      [(and (char=? (string-ref s i) #\\) (< (add1 i) n))
+       (define c (string-ref s (add1 i)))
+       (cond
+         [(and (char=? c #\u)
+               (<= (+ i 6) n)
+               (for/and ([k (in-range (+ i 2) (+ i 6))])
+                 (hex-digit? (string-ref s k))))
+          (write-char (integer->char (string->number (substring s (+ i 2) (+ i 6)) 16)) out)
+          (loop (+ i 6))]
+         [else
+          (write-char (case c
+                        [(#\n) #\newline]
+                        [(#\r) #\return]
+                        [(#\t) #\tab]
+                        [(#\f) #\page]
+                        [else c])
+                      out)
+          (loop (+ i 2))])]
+      [else
+       (write-char (string-ref s i) out)
+       (loop (add1 i))])))
 
 (define (gen-match-helpers)
   "

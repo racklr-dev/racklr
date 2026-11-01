@@ -17,6 +17,14 @@
          generated-name?
          all-nodes
          sexp-diff
+         fn-node?
+         fn-node-fields
+         fn-node-map
+         typed-param-node?
+         typed-param-node-fields
+         typed-param-erase-type
+         sexp-replace-at
+         ann-set-node->set!
          (struct-out sexp-path-diff))
 
 (define (tag x) (and (pair? x) (car x)))
@@ -66,3 +74,62 @@
           [else (record! path a b)]))
   (walk a b '())
   (reverse out))
+
+;; ── Serialized struct shapes ────────────────────────────────────────
+;;
+;; UIR structs gain fields by appending, so their serialized lists gain
+;; trailing elements. The helpers below name the current slots and preserve
+;; every element beyond them, so a schema addition (for example the
+;; typed-param `kind` field) survives normalization instead of being silently
+;; rebuilt away. These are the only places that know positional field order.
+
+(define (sexp-replace-at lst changes)
+  (for/list ([v (in-list lst)] [i (in-naturals)])
+    (define c (hash-ref changes i #f))
+    (cond [(procedure? c) (c v)]
+          [c c]
+          [else v])))
+
+;; (fn name params body return-type effects [future fields...])
+(define (fn-node? x) (list-tag? x 'fn))
+
+(define (fn-node-fields x)
+  (values (list-ref x 1)   ; name
+          (list-ref x 2)   ; params
+          (list-ref x 3)   ; body
+          (list-ref x 4)   ; return-type
+          (list-ref x 5))) ; effects
+
+;; Transform only the named slots; #f means "leave this slot alone". Every
+;; other element, including fields added by a later schema, is preserved.
+(define (fn-node-map x
+                     #:name [name #f]
+                     #:params [params #f]
+                     #:body [body #f]
+                     #:ret [ret #f]
+                     #:effects [effects #f])
+  (define changes (make-hash))
+  (when name (hash-set! changes 1 name))
+  (when params (hash-set! changes 2 params))
+  (when body (hash-set! changes 3 body))
+  (when ret (hash-set! changes 4 ret))
+  (when effects (hash-set! changes 5 effects))
+  (sexp-replace-at x changes))
+
+;; (typed-param name type default [kind ...]) — kind is optional (schema v2).
+(define (typed-param-node? x) (list-tag? x 'typed-param))
+
+(define (typed-param-node-fields x)
+  (values (list-ref x 1) (list-ref x 2) (list-ref x 3)))
+
+;; Erase only the type slot; the default, any parameter-kind marker, and any
+;; future field stay in place.
+(define (typed-param-erase-type x)
+  (sexp-replace-at x (hash 2 (λ (_) #f))))
+
+;; (ann-set! lhs type value [future fields...]) → (set! lhs value [future...]).
+;; The type slot is the intentional erasure; other fields are carried over.
+(define (ann-set-node->set! x)
+  (define lhs (list-ref x 1))
+  (define value (list-ref x 3))
+  (list* 'set! lhs (if value value '(null)) (drop x 4)))

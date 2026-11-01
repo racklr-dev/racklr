@@ -55,8 +55,10 @@
          (or (and (generated-name? n) (not (member n user-names)))
              (and (list-tag? stmt 'import) (member n injected)))))
   (cond [(list-tag? x 'block)
-         (list 'block (for/list ([s (in-list (cadr x))] #:unless (drop? s))
-                        (strip-generated injected user-names s)))]
+         (list* 'block
+                (for/list ([s (in-list (cadr x))] #:unless (drop? s))
+                  (strip-generated injected user-names s))
+                (drop x 2))]
         [(pair? x) (map (λ (y) (strip-generated injected user-names y)) x)]
         [else x]))
 
@@ -70,7 +72,9 @@
     ;; A guarded call lowers as a thunk: Python lambda / JS function
     ;; expression. Recover the original call.
     (define body
-      (cond [(list-tag? th 'fn) (list-ref th 3)]
+      (cond [(fn-node? th)
+             (call-with-values (λ () (fn-node-fields th))
+               (λ (_name _params body _ret _effects) body))]
             [else #f]))
     (define last-stmt
       (cond [(and (list-tag? body 'block))
@@ -80,18 +84,18 @@
      (cond [(list-tag? last-stmt 'return) (cadr last-stmt)]
            [else last-stmt])))
   (cond
-    [(list-tag? x 'fn)
-     (list 'fn (cadr x) (map strip-effect-guards (caddr x))
-           (strip-effect-guards (cadddr x))
-           (strip-effect-guards (list-ref x 4))
-           #f)]
+    [(fn-node? x)
+     (fn-node-map x #:params (λ (ps) (map strip-effect-guards ps))
+                    #:body strip-effect-guards
+                    #:ret strip-effect-guards
+                    #:effects (λ (_) #f))]
     [(list-tag? x 'decorated)
      (define decos (cadr x))
      (define keep (filter (λ (d) (not (and (list-tag? d 'call) (guard-callee? (cadr d)))))
                           decos))
      (define inner (strip-effect-guards (caddr x)))
      (cond [(null? keep) inner]
-           [else (list 'decorated keep inner)])]
+           [else (list* 'decorated keep inner (drop x 3))])]
     [(and (list-tag? x 'call) (guard-callee? (cadr x)))
      (define name (ref-name (cadr x)))
      (cond [(string=? name "__perform") (unwrap-thunk (last (caddr x)))]
@@ -109,27 +113,23 @@
 ;; records that the erasure is intentional.
 (define (erase-js-types x)
   (define (erase-param p)
-    (cond [(list-tag? p 'typed-param)
-           (define nm (cadr p))
-           (define default-arg (let ([d (cadddr p)]) (and d (erase-js-types d))))
-           (if default-arg
-               (list 'typed-param nm #f default-arg)
-               nm)]
+    (cond [(typed-param-node? p)
+           ;; Erase only the type slot: a default value and any parameter-kind
+           ;; marker must survive for the signature projection and the schema.
+           (typed-param-erase-type p)]
           [(list-tag? p 'symbol) p]
           [(list-tag? p 'var) p]
-          [(list-tag? p 'list) (map erase-param (cadr p))]  ; rest/pattern markers
+          [(list-tag? p 'list) (cons 'list (map erase-param (cdr p)))]  ; rest/pattern markers
           [else (erase-js-types p)]))
   (cond
-    [(list-tag? x 'fn)
-     (list 'fn (cadr x) (map erase-param (caddr x))
-           (erase-js-types (cadddr x))
-           #f
-           (erase-js-types (list-ref x 5)))]
+    [(fn-node? x)
+     (fn-node-map x #:params (λ (ps) (map erase-param ps))
+                    #:body erase-js-types
+                    #:ret (λ (_) #f))]
     [(list-tag? x 'interface) '(null)]
     [(list-tag? x 'enum) '(null)]
     [(list-tag? x 'type-alias) '(null)]
     [(list-tag? x 'ann-set!)
-     (define v (cadddr x))
-     (list 'set! (cadr x) (if v (erase-js-types v) '(null)))]
+     (ann-set-node->set! (sexp-replace-at x (hash 3 (λ (v) (erase-js-types v)))))]
     [(pair? x) (map erase-js-types x)]
     [else x]))

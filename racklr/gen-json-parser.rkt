@@ -64,11 +64,13 @@
 (define (ESC-match p in) (mseq (list (lambda (p i) (mlit "\\\\" p i)) (lambda (p i) (malt (list (lambda (p in) ((lambda (p i) (mcclass "[\"\\\\/bfnrt]" p i)) p in)) (lambda (p in) (UNICODE-match p in))) p in))) p in))
 (define (UNICODE-match p in) (mseq (list (lambda (p i) (mlit "u" p i)) HEX-match HEX-match HEX-match HEX-match) p in))
 (define (HEX-match p in) ((lambda (p i) (mcclass "[0-9a-fA-F]" p i)) p in))
-;; Hand-corrected after generation: the grammar's SAFECODEPOINT class uses the
-;; escaped range \u0000-\u001F, which the generator's mcclass does not decode;
-;; it mis-read the class and rejected 'u', 'A'-'Z', and '0'-'9' inside JSON
-;; strings. JSON's safe codepoints are anything except '"', '\\', and U+0000
-;; through U+001F.
+;; Hand-corrected after generation (stopgap; follow-up #96 regenerates this
+;; file). This checked-in parser predates the current racklr/gend-parser
+;; char-class unescaping: the grammar's SAFECODEPOINT class uses the escaped
+;; range \u0000-\u001F, which the old generator emitted raw, so 'u', 'A'-'Z',
+;; and '0'-'9' were rejected inside JSON strings. The generator at HEAD decodes
+;; \uXXXX escapes in classes and literals; JSON's safe codepoints here are
+;; anything except '"', '\\', and U+0000 through U+001F.
 (define (SAFECODEPOINT-match p in)
   (if (>= p (string-length in))
       #f

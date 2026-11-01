@@ -88,16 +88,24 @@
 ;;   * a Python `@__withEffects({...})` decorator on a named function
 ;;   * a JavaScript `__withEffects({...}, fn)` expression bound to a name
 ;;   * a Clojure `(defn name {:__effects__ {...}} ...)` attr-map
+(define (fn-name x)
+  (call-with-values (λ () (fn-node-fields x))
+    (λ (name _params _body _ret _effects) name)))
+
+(define (fn-effects x)
+  (call-with-values (λ () (fn-node-fields x))
+    (λ (_name _params _body _ret effects) effects)))
+
 (define (extract-effect-rows sexp)
   (define acc (make-hash))
   (define (record! name row)
     (when (and name row) (hash-set! acc name row)))
   (define (walk x)
     (cond
-      [(and (list-tag? x 'fn) (sym-name (cadr x)))
-       (define slot (list-ref x 5))
+      [(and (fn-node? x) (sym-name (fn-name x)))
+       (define slot (fn-effects x))
        (when (list-tag? slot 'effect-row)
-         (record! (sym-name (cadr x)) (canonical-row slot)))
+         (record! (sym-name (fn-name x)) (canonical-row slot)))
        (for ([y (in-list x)]) (walk y))]
       [(list-tag? x 'decorated)
        (define decos (cadr x))
@@ -112,8 +120,8 @@
       [(and (member (tag x) '(set! let)) (ref-name (cadr x)))
        (define name (ref-name (cadr x)))
        (define v (caddr x))
-       (cond [(and (list-tag? v 'fn) (list-tag? (list-ref v 5) 'effect-row))
-              (record! name (canonical-row (list-ref v 5)))]
+       (cond [(and (fn-node? v) (list-tag? (fn-effects v) 'effect-row))
+              (record! name (canonical-row (fn-effects v)))]
              [(and (list-tag? v 'call) (equal? (ref-name (cadr v)) "__withEffects"))
               (record! name (row-value (car (caddr v))))])
        (for ([y (in-list x)]) (walk y))]

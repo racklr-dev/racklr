@@ -52,6 +52,14 @@
 (define (verify-round-trip model u1 u2)
   (unless (loss-model? model)
     (error 'verify-round-trip "not a loss model: ~a" model))
+  ;; A model that omits a feature would leave that dimension silently
+  ;; unverified in projected mode. Refuse to verify against an incomplete
+  ;; declaration instead of accepting the omission.
+  (unless (loss-model-complete? model)
+    (error 'verify-round-trip
+           "loss model for ~a→~a is incomplete (missing=~s duplicates=~s)"
+           (loss-model-source model) (loss-model-target model)
+           (missing-features model) (duplicate-features model)))
   (define norms (loss-model-normalizations model))
   ;; The emitters infer effect rows at emit time, so the absorbed UIR the
   ;; emitted artifact was produced from is the annotated one.

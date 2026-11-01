@@ -123,8 +123,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JavaScript front end: `export default function`, `export default async
   function`, and `export default class` re-absorb into UIR instead of lowering
   to `null`; multi-parameter arrow functions keep every parameter.
-- JSON front end: corrected the generated parser's safe-codepoint character
-  class, which rejected `u`, `A`–`Z`, and `0`–`9` inside JSON strings.
+- JSON front end: corrected the checked-in generated parser's safe-codepoint
+  character class (a stopgap; regeneration tracked in #96), which rejected `u`,
+  `A`–`Z`, and `0`–`9` inside JSON strings.
+- `gend-parser` now decodes `\uXXXX` escapes in string literals (character
+  classes already did), so generated parsers match the grammar's characters
+  instead of the escape text. `gend-parser-test.rkt` pins escaped class and
+  literal behavior.
+- The loss-model coverage gate now requires every model to declare every loss
+  feature exactly once (explicitly `refused` when it does not apply), and
+  `verify-round-trip` rejects an incomplete model instead of silently verifying
+  only the declared dimensions.
+- Loss-model normalizations rebuild serialized `fn`/`typed-param`/`ann-set!`
+  nodes through shape helpers that preserve appended schema fields, so a
+  parallel schema addition (such as the `typed-param` kind) cannot be silently
+  dropped.
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.

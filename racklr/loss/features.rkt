@@ -54,8 +54,14 @@
   (define (add n params)
     (when (and n params)
       (set! acc (cons (list n (length params) (filter identity (map param-name params))) acc))))
+  (define (fn-params fn)
+    (call-with-values (λ () (fn-node-fields fn))
+      (λ (_name params _body _ret _effects) params)))
+  (define (fn-name-of fn)
+    (call-with-values (λ () (fn-node-fields fn))
+      (λ (name _params _body _ret _effects) name)))
   (define (params-of v)
-    (cond [(list-tag? v 'fn) (caddr v)]
+    (cond [(fn-node? v) (fn-params v)]
           [(and (list-tag? v 'call)
                 (member (ref-name (cadr v)) '("=>" "function")))
            (define args (caddr v))
@@ -66,7 +72,7 @@
           [else #f]))
   (define (top-level x)
     (cond [(list-tag? x 'block) (for ([s (in-list (cadr x))]) (top-level s))]
-          [(list-tag? x 'fn) (add (sym-name (cadr x)) (caddr x))]
+          [(fn-node? x) (add (sym-name (fn-name-of x)) (fn-params x))]
           [(member (tag x) '(let set!))
            (add (ref-name (cadr x)) (params-of (caddr x)))
            (top-level (caddr x))]
@@ -142,8 +148,16 @@
     [(classes) (class-inventory sexp)]
     [(literals) (literal-inventory sexp)]
     [(control-flow) (control-census sexp)]
+    [(types) (type-decl-inventory sexp)]
     [(imports) (import-inventory sexp)]
     [else '()]))
+
+;; An "empty" projection: for the control-flow census every tag count is zero
+;; rather than the list being null.
+(define (feature-empty? feature v)
+  (case feature
+    [(control-flow) (and (list? v) (for/and ([p (in-list v)]) (zero? (cdr p))))]
+    [else (null? v)]))
 
 (define (compare-observed a b)
   (cond [(equal? a b) 'preserved]
@@ -157,22 +171,28 @@
     (loss-observation feature declared observed detail))
   (cond
     [(eq? feature 'effect-rows) 'deferred]
-    [(eq? feature 'types)
-     (define c (length (type-decl-inventory raw2)))
-     (make (if (positive? c) 'present 'untested)
-           (if (positive? c)
-               (format "~a type declaration(s) reached the target UIR" c)
-               "no type-level declarations in source or target"))]
     [(eq? feature 'jsx)
+     ;; The element tree is measured on the emitted-then-absorbed side, which is
+     ;; where JSX lowering has already changed it.
      (define n (jsx-density raw2))
-     (if (positive? n)
-         (make 'approximated (format "~a JSX element(s) lowered before emit" n))
-         (make 'untested "no JSX in source"))]
+     (define observed
+       (cond [(positive? n) (if (eq? declared 'refused) 'present 'approximated)]
+             [(eq? declared 'refused) 'refused]
+             [else 'untested]))
+     (make observed
+           (if (positive? n)
+               (format "~a JSX element(s) reached the target UIR after lowering" n)
+               "no JSX elements in the re-absorbed target UIR"))]
     [(eq? feature 'runtime-guards)
      (define n (guard-density user-names raw2))
-     (if (positive? n)
-         (make 'approximated (format "~a injected guard declaration(s)/call(s) stripped" n))
-         (make 'untested "no effectful call in this file, so no guard runtime was injected"))]
+     (define observed
+       (cond [(positive? n) (if (eq? declared 'refused) 'present 'approximated)]
+             [(eq? declared 'refused) 'refused]
+             [else 'untested]))
+     (make observed
+           (if (positive? n)
+               (format "~a injected guard declaration(s)/call(s) stripped" n)
+               "no effect-guard runtime in the re-absorbed target"))]
     [(eq? feature 'formatting)
      (make 'untested "layout is not representable in UIR")]
     [(eq? feature 'statement-shape)
@@ -199,11 +219,11 @@
                           (+ (length (filter (λ (x) (not (member x p2))) p1))
                              (length (filter (λ (x) (not (member x p1))) p2)))))]
              [else
-              (if (null? p2)
+              (if (feature-empty? feature p2)
                   (format "~a dropped as declared" feature)
                   (format "~a present in the target although the model refuses it" feature))]))
      (make (cond [(eq? declared 'preserved) (if same? 'preserved 'changed)]
                  [(eq? declared 'approximated) (if same? 'preserved 'approximated)]
-                 [(eq? declared 'refused) (if (null? p2) 'refused 'present)]
+                 [(eq? declared 'refused) (if (feature-empty? feature p2) 'refused 'present)]
                  [else 'untested])
            detail)]))
