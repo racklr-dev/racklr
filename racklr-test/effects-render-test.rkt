@@ -86,4 +86,4 @@
   (check-true (string-contains? (render-effect-row 'python r) "llm")
               "the concrete part of the row still renders"))
 
-(displayln "All emit-contract tests passed.")
+(displayln "All emit-effects rendering tests passed.")

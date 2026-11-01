@@ -43,8 +43,11 @@
 
 ;; The one UIR-plus-row input used for every target: a run with a single named
 ;; function, so the explicit entry row has a function to annotate everywhere.
+;; The function declares a result type because Koka can only type an effect row
+;; in front of one; with no result type the row is emitted as the documented
+;; `// @effects` annotation (that shape is covered by effects-koka-annot-test).
 (define (program)
-  (uir-block (list (uir-fn (sym "summarize") '() (uir-null) #f #f))))
+  (uir-block (list (uir-fn (sym "summarize") '() (uir-null) (sym "int") #f))))
 
 ;; Targets whose native vocabulary can carry a row, plus the check that the
 ;; rendered source actually contains it in that vocabulary.
