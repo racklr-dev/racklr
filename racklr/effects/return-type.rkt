@@ -123,6 +123,11 @@
                          #:known [known #f]
                          #:comp-supers [comp-supers #f])
   (define (value-class value)
+    ;; The all-tables guard is the intentional mode switch: a caller without the
+    ;; whole-program relation tables (single-file inference passes none of them)
+    ;; gets the structural value projection only. One missing table therefore
+    ;; downgrades the whole call-result rule rather than silently mixing it with
+    ;; a partial relation.
     (or (and (uir-call? value) return-types methods fn-defs known comp-supers
              (call-result-return-class (uir-call-callee value) comp class-defs
                                        owner rt methods fn-defs known comp-supers
