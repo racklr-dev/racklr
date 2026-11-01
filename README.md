@@ -198,6 +198,7 @@ racket lower-javascript-test.rkt     # JavaScript lowering + emit
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
 racket uir-test.rkt                  # UIR types + serialization
+racket scan-python-test.rkt          # full-tree scanner bucket classification
 ```
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.
@@ -212,6 +213,22 @@ racket tools/provenance-corpus.rkt django/django   # wider probe
 
 It prints the effect-edge and provenance counts and exits non-zero if any
 effect edge has no reachable ground; it never re-pins the baseline.
+
+### Full-corpus measurement
+
+`tools/scan-python.rkt` scans a directory tree through the Python3 front end
+using the tracked `grammars/python3/` grammar and reports, per file, which
+pipeline stage fails (`ok`, `INDENT-ERROR`, `PARSE-FAIL`, `LOWER-ERROR`,
+`FALLBACK`). From the repository root, with the `django/` submodule
+initialised:
+
+```bash
+racket tools/scan-python.rkt django/django            # aggregate
+racket tools/scan-python.rkt django/django --verbose  # per-file failures + effects
+```
+
+It exits 0 only when every file lowers cleanly. The latest Django run is
+907/907 `ok` with 0 blockers; see `docs/django-frontend-catalogue.md`.
 
 ## Dependencies
 

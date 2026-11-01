@@ -45,8 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `racklr-test/emit-contract-test.rkt` covering the target table, the native
   row rendering for every row-capable target, refusal for the targets without a
   native row vocabulary, and the unchanged row-less call shape.
+- `tools/scan-python.rkt`: full-tree Python front-end scan over a directory
+  tree (`racket tools/scan-python.rkt django/django`). It generates the parser
+  from the tracked `grammars/python3/` grammar and reports `ok` /
+  `INDENT-ERROR` / `PARSE-FAIL` / `LOWER-ERROR` / `FALLBACK` per file, with an
+  exit code that gates on zero blockers. Re-run over the 907-file Django
+  corpus: 907 `ok`, 0 blockers.
+- `racklr-test/scan-python-test.rkt` covering the scanner's bucket
+  classification and fallback detection on a fixture tree.
 
 ### Changed
+
+- `docs/django-frontend-catalogue.md` is now the re-run record, not a list of
+  open blockers: all twelve front-end blockers are marked resolved, the latest
+  whole-tree scan is 907/907 `ok` with 0 blockers, and the measurement command
+  runs from the tracked grammar instead of the untracked `grammars-v4/` tree.
 
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
