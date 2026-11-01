@@ -158,6 +158,7 @@
   (define basicexpr (find-node node 'basicexpr))
   (define witheff (find-node node 'witheff))
   (define opclause (find-node node 'opclause))
+  (define opclauses-node (find-node node 'opclauses))
   (define override (find-node node 'override))
   (cond
     ;; with <basicexpr>
@@ -169,6 +170,15 @@
      (apply-with-value ((lower-basicexpr-fn) basicexpr)
                        (or body (uir-block '()))
                        (list (binder-param binder)))]
+    ;; with <override> <witheff> { clauses }  (anonymous-handler sugar:
+    ;; `with { .. }; rest` is a handler over the rest of the enclosing block)
+    [(and opclauses-node (not binder))
+     (define override? (and override
+                            (for/or ([t (in-list (tokens override))]) (tok? t 'OVERRIDE))))
+     (make-handler 'with (lower-witheff witheff) #f '()
+                   (lower-opclauses opclauses-node)
+                   (or body (uir-block '()))
+                   #f (and override? #t))]
     ;; with <override> <witheff> <opclause>  (single-operation shorthand)
     [(and opclause (not binder))
      (define override? (and override
@@ -181,7 +191,9 @@
     [else
      (define override? (and override
                             (for/or ([t (in-list (tokens override))]) (tok? t 'OVERRIDE))))
-     (make-handler 'with-bind (lower-witheff witheff) #f
+     ;; `with-bind` only when there is a binder; a binderless form is a plain
+     ;; `with` handler (never a with-bind with empty locals).
+     (make-handler (if binder 'with-bind 'with) (lower-witheff witheff) #f
                    (if binder (list (binder-param binder)) '())
                    (if opclause (list (lower-opclause opclause)) '())
                    (or body (uir-block '()))

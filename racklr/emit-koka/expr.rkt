@@ -306,10 +306,17 @@
     [(handle) (format "~ahandle~a(~a) ~a"
                       prefix effect (emit-expr (uir-handler-body h)) ops)]
     [(with-bind)
-     (format "(with ~a <- ~a in ~a)"
-             (emit-param (first (uir-handler-locals h)))
-             (emit-expr (uir-handler-value h))
-             (emit-blockexpr (uir-handler-body h)))]
+     ;; A with-bind always has a binder (the lowering only uses this sort when a
+     ;; binder exists); fall back to the plain form instead of crashing on an
+     ;; empty locals list.
+     (if (pair? (uir-handler-locals h))
+         (format "(with ~a <- ~a in ~a)"
+                 (emit-param (first (uir-handler-locals h)))
+                 (emit-expr (uir-handler-value h))
+                 (emit-blockexpr (uir-handler-body h)))
+         (format "(with ~ahandler~a ~a in ~a)"
+                 prefix effect ops
+                 (emit-blockexpr (uir-handler-body h))))]
     [else
      (format "(with ~ahandler~a ~a in ~a)"
              prefix effect ops
@@ -342,7 +349,8 @@
                    (if e (format "<~a>" (emit-type e)) "")))
   (define ops (format "{ ~a }"
                       (join-semis (map emit-handler-op (uir-handler-ops inner)))))
-  (if (memq (uir-handler-sort inner) '(with-bind))
+  (if (and (eq? (uir-handler-sort inner) 'with-bind)
+           (pair? (uir-handler-locals inner)))
       (format "with ~a <- ~ahandler~a ~a"
               (emit-param (first (uir-handler-locals inner)))
               (if (and named? #t) "named " "")

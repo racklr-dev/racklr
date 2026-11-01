@@ -117,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema-version bump. The committed `tools/koka-corpus.rkt` scorer plus
   `racklr-test/koka-fixtures/` and `koka-real-world-test.rkt` measure the front
   end over a real checkout; on koka-lang/koka 3.3.0 dev (1144 `.kk` files) the
-  full absorb -> emit -> re-parse battery goes from 12/1144 `ok` to 1010/1144
+  full absorb -> emit -> re-parse battery goes from 12/1144 `ok` to 1031/1144
   and parse-only coverage from 12/1144 to 1035/1144, with no tokenizer or
   lowering failures. Remaining limits and the before/after taxonomy are
   recorded in `docs/koka-real-world-battery.md` and the loss model in

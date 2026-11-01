@@ -6,17 +6,16 @@ where the lowering/emission layer covers the construct, round-trips through UIR
 capability battery, committed as `tools/koka-corpus.rkt`; this document is the
 record of the before/after numbers and the failure taxonomy.
 
-**Status (2026-11-01): AFTER captured — `ok=1010/1144` (88.3%) full
+**Status (2026-11-01): AFTER captured — `ok=1031/1144` (90.1%) full
 absorb/emit/re-parse, `parse-ok=1035/1144` (90.5%) parse-only; BEFORE was
 `ok=12/1144`. The grammar rewrite (`grammars/koka/Koka.g4`, a Koka 3.x
 lexer/parser port with the `koka` layout policy in
 `racklr/gend-parser/language-policy.rkt`) and the lowering/emission
 modernization have landed; the after numbers below come from one
 `--parse-only` run and one full run of the same tool on the frozen tree. The
-remaining 134 full-pipeline failures are 109 legacy/experimental parse gaps
-(no `lib/std` file), 21 emitter/effect-inference errors, 2 re-parse failures
-and 2 watchdog timeouts — see the failure tables and "Remaining lowering
-gaps".
+remaining 113 full-pipeline failures are 109 legacy/experimental parse gaps
+(no `lib/std` file), 2 re-parse failures and 2 watchdog timeouts — see the
+failure tables and "Remaining lowering gaps".
 
 Corpus: `/tmp/koka-corpus/koka` (koka-lang/koka dev branch, version 3.3.0,
 revision `d23ee7cd73737c1da7a7a5fa837a2806facc3d6b`, **1144 `.kk` files**, all
@@ -118,12 +117,12 @@ Full AFTER (parse -> lower -> emit -> re-parse):
 
 | status | files |
 | ------ | ----- |
-| ok | 1010 |
+| ok | 1031 |
 | tokenize-error | 0 |
 | parse-fail | 109 |
 | lower-error | 0 |
 | fallback | 0 |
-| emit-error | 21 |
+| emit-error | 0 |
 | emit-empty | 0 |
 | reparse-fail | 2 |
 | timeout | 2 |
@@ -134,15 +133,15 @@ Remaining failure messages (AFTER), grouped, one sample file each:
 | status | count | message | sample |
 | ------ | ----- | ------- | ------ |
 | parse-fail | 109 | `match-define: no matching clause for #f` (generated parser entry returned #f) | `test/misc/...` (legacy/experimental set above) |
-| emit-error | 21 | `first: contract violation / expected: (and/c list? (not/c empty?)) / given: '()` | `test/async/async5b.kk` |
 | reparse-fail | 2 | `match-define: no matching clause for #f` (emitted text did not re-parse) | `test/algeff/reactive1.kk` |
 | timeout | 2 | `pipeline exceeded 60000 ms` (single-file watchdog) | `test/static/shadow3a.kk` |
 
-The 21 `emit-error`s are one class (all the same message): 14 in `test/algeff`
-(control-effect programs), 3 in `test/mask` (`inject*`), 2 in `test/async`, 2 in
-`test/misc/instance`; lowering itself succeeds on every one of them
-(`lower-error=0`), so this is emitter/effect-inference coverage, not the
-grammar. The 2 `reparse-fail`s are `test/algeff/reactive1.kk` and
+A first AFTER run had 21 `emit-error`s (one `first: contract violation ...
+'()` class) caused by one lowering gap: the anonymous-handler sugar
+`with { return (x) { ... }; fun get() { ... } }` was parsed but not lowered as a
+handler, so emission saw an empty locals list. That is fixed
+(`racklr/lower-koka/handler.rkt` + `racklr/emit-koka/expr.rkt`), and this table
+is the re-run after the fix: `emit-error=0`. The 2 `reparse-fail`s are `test/algeff/reactive1.kk` and
 `test/mask/inject-behind1.kk`. The 2 `timeout`s are `test/static/shadow3a.kk`
 and `shadow3b.kk`: both parse in ~1 ms and lower in 0 ms, but effect inference
 (`annotate-effects`, called by `emit-koka`) does not terminate on their nested
@@ -152,9 +151,9 @@ layer, exposed by these two test programs; the per-file watchdog reports it
 (default 60 s, `--timeout-ms`) instead of hanging the scan. Files that exceed
 the watchdog are reported separately and are not counted as `ok`.
 
-Comparison: BEFORE `ok=12/1144` (1.0%); AFTER `ok=1010/1144` (88.3%), with
-`parse-fail=109`, `emit-error=21`, `reparse-fail=2`, `timeout=2`, and no
-tokenizer/lowerer/fallback/empty-emit failures. Parse-only BEFORE
+Comparison: BEFORE `ok=12/1144` (1.0%); AFTER `ok=1031/1144` (90.1%), with
+`parse-fail=109`, `reparse-fail=2`, `timeout=2`, and no
+tokenizer/lowerer/emitter/fallback/empty-emit failures. Parse-only BEFORE
 `parse-ok=12/1144` — the old lexer rejected 542 files before the parser ran —
 AFTER `parse-ok=1035/1144` (90.5%).
 
@@ -232,17 +231,10 @@ lowering gap:
    `overload`, `async`, `perf`, `syntax`, ...), 14 in `lib/v1` (legacy demos)
    and 2 samples. No `lib/std` file remains. These are tracked as grammar
    coverage, not lowering work.
-2. **Emit/effect-inference errors, 21 files** — one message:
-   `first: contract violation / expected: (and/c list? (not/c empty?)) /
-   given: '()`. Concentrated in `test/algeff` control-effect programs (14),
-   `test/mask` `inject*` (3), `test/async` (2) and a named-handler/scoped
-   instance case (2). The CST lowers cleanly; the failures are in
-   emission/effect-row inference for effects whose handlers/rows are empty or
-   scoped.
-3. **Re-parse failures, 2 files** — `test/algeff/reactive1.kk`,
+2. **Re-parse failures, 2 files** — `test/algeff/reactive1.kk`,
    `test/mask/inject-behind1.kk`: emitted text does not parse. These are
    emitter output-shape gaps for reactive/behind-mask constructs.
-4. **Watchdog timeouts, 2 files** — `test/static/shadow3a.kk` / `shadow3b.kk`:
+3. **Watchdog timeouts, 2 files** — `test/static/shadow3a.kk` / `shadow3b.kk`:
    both parse (~1 ms) and lower (0 ms), but effect inference (`annotate-effects`
    inside `emit-koka`) does not terminate on their nested local `fun id`
    shadowing the enclosing `fun id`. This is an engine-side effects-inference
