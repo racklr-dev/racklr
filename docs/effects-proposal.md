@@ -297,6 +297,69 @@ As built:
   agree (including a deliberately dropped call-site link, which only the
   atom-level check detects). `tools/provenance-corpus.rkt` runs the check over
   the Django corpus without touching the baseline and prints the counts.
+- The atom vocabulary, the reusable parsed index, and the completeness check are
+  separate modules (`racklr/graph/provenance-atoms.rkt`,
+  `racklr/graph/provenance-index.rkt`, `racklr/graph/provenance-check.rkt`),
+  re-exported from `racklr/graph/provenance.rkt` so consumers see one API.
+
+### 6.2 Confidence, coverage, and transitive profiles
+
+Provenance says *why* an effect edge exists. Two labels say *how strongly* and
+*how generally* the claim is made, and every function exposes the transitive
+closure of its effects with those labels. The model is Rainbow's: every result
+carries a label set by its weakest link, and every theorem exposes a transitive
+axiom profile.
+
+**Confidence** — how the edge was established (strongest first):
+
+| Label | Evidence |
+|---|---|
+| `inferred` | a classifying call site or call-graph edge inference observed |
+| `declared` | a capability asserted by the DATA config at a method definition |
+| `unknown` | the tracked elimination obligation (classification kind `unresolved`) |
+
+**Coverage** — how far the claim generalizes (strongest first):
+
+| Label | Evidence |
+|---|---|
+| `universal` | for-all structural evidence: a call-graph edge, literal/library call site, declared capability, self/MRO dispatch, or imported handle |
+| `census-param` | a worked instance: the receiver type came from parameter dataflow (the census's `param` receiver shape), so the claim holds for the actual call arguments |
+| `local-literal` | a worked instance: the receiver type came from a tracked local / self-attribute / call-result value in the body |
+
+Labels combine with the **weakest link** (`racklr/effects/labels.rkt`): a profile
+that reaches one unknown or one worked-instance-only edge cannot claim a
+stronger label as a whole. Both label orders and the combining functions are
+exported and unit-tested.
+
+As built:
+
+- Every ground records its coverage (`prov-site` gains a coverage field and the
+  projection adds a `site-coverage` atom per site). `infer-effects` labels
+  structural grounds `universal` and unresolved sites `local-literal`;
+  `infer-effects-all` distinguishes a parameter-rooted site (`census-param`)
+  from a tracked local/attribute/chain/call-result site (`local-literal`) using
+  the classifier's evidence side channel (`classify-call-all` reports whether
+  the classification needed receiver-type dataflow or was a structural rule;
+  the classification result is unchanged). The classification kind maps to the
+  confidence label; no separate flag is stored.
+- `racklr/graph/profile.rkt` answers `transitive-profile`: a breadth-first walk
+  from a function along the call-site edges, one shortest witness chain per
+  ground, then per effect the weakest-link confidence and coverage with those
+  witnesses. `transitive-profiles` returns every function's profile.
+- The eliminate-unknown obligation is data: `effect-profile-obligations` lists
+  every unresolved ground reachable from the function, with its chain and
+  coverage evidence kind, and `effect-profile-complete?` is
+  `(null? obligations)`. A consumer can report or drive down each obligation
+  without re-deriving the call graph.
+- `tools/provenance-corpus.rkt` reports the ground-site coverage histogram,
+  and `--profiles` adds the transitive-profile report: complete vs incomplete
+  functions, profile entries by effect and by confidence/coverage, and the open
+  obligation count, over a real corpus.
+- `racklr-test/effect-profile-test.rkt` covers the label orders, the
+  weakest-link combination, the kind→confidence map, coverage derivation for
+  structural / parameter / local evidence in both inference drivers, declared
+  grounds, transitive witnesses, mixed-confidence aggregation, and the
+  unknown-obligation data structure.
 
 ---
 

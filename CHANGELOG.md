@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Confidence and coverage labels on effect edges, and transitive effect
+  profiles. Every provenance ground now carries a coverage label
+  (`universal` for-all structural evidence, `census-param` for a worked
+  instance resolved through parameter dataflow, `local-literal` for one
+  resolved from a tracked local/attribute/call-result value); the
+  classification kind maps to the confidence label (`inferred` / `declared` /
+  `unknown`). `racklr/effects/labels.rkt` owns the two weakest-link orders and
+  the evidence derivation, and `racklr/graph/profile.rkt` exposes
+  `transitive-profile` / `transitive-profiles`: per function, every reachable
+  effect edge with weakest-link confidence and coverage plus the exact witness
+  chains, and the unresolved leaves as data (`effect-profile-obligations`)
+  rather than a boolean flag.
+- The provenance graph gains a `site-coverage` atom per ground, and its atom
+  vocabulary, reusable index, and completeness check are split into
+  `racklr/graph/provenance-atoms.rkt`, `provenance-index.rkt`, and
+  `provenance-check.rkt` (re-exported from `racklr/graph/provenance.rkt`).
+- `tools/provenance-corpus.rkt` reports ground-site coverage and, with
+  `--profiles`, the per-corpus transitive-profile report (complete vs
+  incomplete functions, entries by effect and label, open obligations).
+- `racklr-test/effect-profile-test.rkt` covering the label orders and
+  weakest-link combination, coverage derivation in both inference drivers,
+  declared grounds, transitive witnesses, mixed-confidence aggregation, and
+  the unknown-obligation data structure.
+
 - Effect-edge provenance is first-class in the graph substrate. Inference
   (`infer-effects`, `infer-effects-all`) optionally records every classifying
   call site (tokens, receiver type, classification kind) and the inferred call

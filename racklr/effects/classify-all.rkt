@@ -339,10 +339,18 @@
                            (imported-parent-effect comp p mname import-env)
                            (and (exception-name? p) (pure-dunder-name? mname) 'pure)))))))))
 
-(define (classify-call-all callee known methods class-defs fn-defs comp-supers class-attrs comp owner [import-env #f] [rt #f] [return-types #f])
+(define (classify-call-all callee known methods class-defs fn-defs comp-supers class-attrs comp owner [import-env #f] [rt #f] [return-types #f] [cov-box #f])
   (define nm (callee-name callee))
   (define keys (method-callee-keys callee comp owner methods class-defs comp-supers))
   (define key (for/or ([k (in-list keys)] #:when (hash-has-key? known k)) k))
+  ;; Side channel for the coverage label (racklr/effects/labels): what evidence
+  ;; classified this call. 'dataflow means the receiver class came from
+  ;; receiver-type dataflow (locals, self-attributes, chains, call results);
+  ;; 'structural means a DATA rule, import handle, class attribute, or MRO rule
+  ;; classified it. It is reset per call, so a caller that reuses one box never
+  ;; reads a previous call's evidence. The classification result is unchanged.
+  (define (note-evidence! kind) (when cov-box (set-box! cov-box kind)))
+  (note-evidence! 'structural)
   (cond
     [(and key (hash-has-key? known key)) (cons 'edge key)]
     [(bare-function-key nm comp fn-defs known) => (λ (k) (cons 'edge k))]
@@ -387,7 +395,15 @@
                             (receiver-effect comp rcls mname class-defs import-env))))
         (cond
           [(eq? re 'pure) (cons 'pure #f)]
-          [(effect-cap? re) (cons 'effect re)]
+          [(effect-cap? re)
+           ;; A module-receiver / module-path rule is structural; a
+           ;; class-domain receiver effect needed the resolved receiver class.
+           (note-evidence!
+            (if (or (module-receiver-effect rcls)
+                    (module-path-marker-effect rcls mname import-env))
+                'structural
+                'dataflow))
+           (cons 'effect re)]
           [else
            ;; stdlib/builtin receiver type: a call-result chain
            ;; (`Path(...).is_absolute`) or a tracked local (`x = open(...)`)
@@ -395,7 +411,10 @@
            (define sre (and rcls mname (stdlib-type-method-effect rcls mname)))
            (cond
              [(eq? sre 'pure) (cons 'pure #f)]
-             [sre (cons 'effect sre)]
+             [sre
+              ;; A stdlib receiver method needed the resolved receiver type.
+              (note-evidence! 'dataflow)
+              (cons 'effect sre)]
              [else
               ;; `super().m()` with no corpus edge: parent-type classification.
               (define sfe (super-stdlib-fallback callee comp owner comp-supers class-defs import-env))

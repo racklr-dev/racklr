@@ -35,6 +35,7 @@
          racklr/effects/collect
          racklr/effects/rows
          racklr/effects/classify
+         racklr/effects/labels
          racklr/effects/provenance
          racklr/effects/whole-program)
 
@@ -118,9 +119,16 @@
                (when direct-prov
                  (sites-add! (hash-ref! direct-prov n make-hash) 'unknown site))
                (when prov
+                 ;; Per-file inference has no whole-program receiver
+                 ;; environment, so an unresolved site's evidence is the local
+                 ;; call expression: a worked instance (local/literal). The
+                 ;; whole-program pass refines a parameter-rooted site to
+                 ;; 'census-param.
                  (provenance-add-ground! prov
                                          (make-callee-site (function-fq n) 'unknown callee
-                                                           #:kind 'unresolved)))]))
+                                                           #:kind 'unresolved
+                                                           #:coverage
+                                                           (unresolved-coverage callee))))]))
           (void)))
     (walk-body body visit!)
     (hash-set! direct-rows n (effects->algebra-row effects))

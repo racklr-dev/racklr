@@ -93,7 +93,7 @@ JSON pipeline proof-of-concept: parse JSON → lower to UIR → emit JSON text �
 
 ### Effects (racklr/effects/)
 
-Effect rows give generated code a readable boundary: a function declares which capabilities it may use, how often, and in what scope. Four pieces are implemented and tested:
+Effect rows give generated code a readable boundary: a function declares which capabilities it may use, how often, and in what scope. The pieces implemented and tested:
 
 - `infer.rkt`: effect inference; composes rows up the call graph from annotations and known effects, and defers higher-order calls whose callee is not statically known.
 - `contract.rkt`: contract checking; subtyping between rows, budgets as upper bounds, and prohibitions.
@@ -103,6 +103,12 @@ Effect rows give generated code a readable boundary: a function declares which c
   substrate; `provenance-paths` answers "why is this function `db`" with the
   exact caller→callee chain, and the projection refuses an effect edge with no
   ground.
+- `labels.rkt` + `graph/profile.rkt`: each effect edge carries a confidence
+  (`inferred` / `declared` / `unknown`) and a coverage (`universal` /
+  `census-param` / `local-literal`) label, combined by the weakest link;
+  `transitive-profile` exposes every function's effect closure with the exact
+  witness chains and the unresolved leaves as data (`effect-profile-obligations`)
+  rather than a boolean flag.
 - `python-annot.rkt`: Python annotation surface (`__effects__` attribute / decorator) extracted into a UIR effect row.
 - `clojure-annot.rkt`: Clojure annotation surface (`^{:effects ...}` metadata) extracted into a UIR effect row.
 
@@ -187,6 +193,7 @@ racket effects-infer-test.rkt        # effect inference
 racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
 racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
 racket provenance-test.rkt           # effect-edge provenance + graph query
+racket effect-profile-test.rkt       # confidence/coverage labels + transitive profiles
 racket effects-contract-test.rkt     # contract checking
 racket emit-contract-test.rkt        # emit contract + single dispatch
 racket effects-python-annot-test.rkt # Python effect annotations
@@ -211,10 +218,12 @@ and grammar prerequisites as the shared baseline):
 ```bash
 racket tools/provenance-corpus.rkt                 # django/django/core
 racket tools/provenance-corpus.rkt django/django   # wider probe
+racket tools/provenance-corpus.rkt --profiles      # also transitive profiles
 ```
 
-It prints the effect-edge and provenance counts and exits non-zero if any
-effect edge has no reachable ground; it never re-pins the baseline.
+It prints the effect-edge and provenance counts (and, with `--profiles`, the
+transitive-profile label report) and exits non-zero if any effect edge has no
+reachable ground; it never re-pins the baseline.
 
 ### Full-corpus measurement
 

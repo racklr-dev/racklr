@@ -9,124 +9,49 @@
 ;; the typed-hypergraph substrate (racklr/hypergraph) so that "why is this
 ;; function db" is answered by walking edges, not by reading a side comment.
 ;;
-;; Atom vocabulary
-;; ---------------
-;;   (node 'function fq)     a function, fq = "component::name" or "name"
-;;   (node 'effect name)     an effect kind (db, io, network, ...)
-;;   (node 'site id)         one classifying call occurrence (owner-qualified)
-;;   (node 'expression s)    the call expression a site classified, e.g. "open"
-;;   (node 'token s)         a source token that grounded the classification
-;;   (node 'receiver s)      the receiver class the dataflow resolved
-;;   (node 'kind k)          'inferred | 'unresolved | 'declared
-;;
-;; Link vocabulary
-;; ---------------
-;;   (call-site caller callee site)          caller's call to callee, carrying
-;;                                           the callee expression classified
-;;   (site-expression site expression)       the readable site expression
-;;   (site-effect site effect)               the effect a site grounded
-;;   (site-token site token)                 a grounding token
-;;   (site-receiver site receiver)           the receiver type, when resolved
-;;   (site-kind site kind)                   how the site was classified
-;;   (fn-effect function entry)              an effect edge (the row entry)
-;;   (grounds function site entry)           direct evidence for that effect edge
-;;
 ;; An effect edge `(fn-effect f entry)` is PROVEN by a path: start at `f`, follow
 ;; call-site links, and end at a function with a `grounds` link whose entry has
 ;; the same effect name. `provenance-paths` returns exactly those paths (one
 ;; shortest path per ground), so the query result IS the call chain — every hop
 ;; names the caller, the callee, and the call expression that carried the effect.
+;; Each ground also carries the edge's labels: the classification kind (which
+;; maps to the confidence label) and the coverage label.
 ;;
 ;; `provenance-graph` refuses to project a row with an effect edge that no ground
 ;; can reach: "no effect edge exists without provenance" is enforced at
 ;; construction, by the SAME reachability traversal over the projected atoms
 ;; that the query uses. A projection bug that drops a call-site link therefore
 ;; fails the construction instead of silently producing an unprovable edge.
+;;
+;; This module is the projection and the query. The atom vocabulary
+;; (provenance-atoms.rkt), the parsed index (provenance-index.rkt), and the
+;; completeness check (provenance-check.rkt) live in sibling modules, and are
+;; re-exported here so consumers only require racklr/graph/provenance.
 
 (require racklr/uir
          racklr/hypergraph
          racklr/effects/provenance
-         data/queue)
+         data/queue
+         "provenance-atoms.rkt"
+         "provenance-index.rkt"
+         "provenance-check.rkt")
 
 (provide
   ;; projection
   provenance-graph
-  ;; atom constructors (for consumers that extend the projection)
-  function-node effect-node site-node token-node receiver-node kind-node
-  fn-effect-link grounds-link call-site-link site-expression-link
-  site-effect-link site-token-link site-receiver-link site-kind-link
-  entry->hg-entry
-  ;; reusable parsed index (queries accept atoms or an index)
-  graph-index graph-index? make-graph-index
   ;; queries
   effect-edge
   provenance-paths
   walk-hop walk-hop? walk-hop-from walk-hop-to walk-hop-site
   walk-ground walk-ground? walk-ground-fn walk-ground-site walk-ground-effect
-  walk-ground-tokens walk-ground-receiver walk-ground-kind walk-ground-entry
+  walk-ground-tokens walk-ground-receiver walk-ground-kind walk-ground-coverage
+  walk-ground-entry
   walk-path walk-path? walk-path-hops walk-path-ground
   walk-path->string
-  ;; checking
-  unprovenanced-edges
-  assert-provenance-complete!)
-
-;; ── atom constructors ───────────────────────────────────────────────
-
-(define (function-node fq) (node 'function fq))
-(define (effect-node name) (node 'effect name))
-(define (site-node id) (node 'site id))
-(define (token-node token) (node 'token token))
-(define (receiver-node receiver) (node 'receiver receiver))
-(define (kind-node kind) (node 'kind kind))
-
-;; A site identity is the classifying function plus the expression, so the same
-;; expression classified differently in two functions stays two distinct sites.
-(define (site-id owner expression)
-  (format "~a::@~a" owner expression))
-
-(define (fn-effect-link fq entry)
-  (link 'fn-effect (list (function-node fq) entry)))
-
-(define (grounds-link fq site entry)
-  (link 'grounds (list (function-node fq) (site-node site) entry)))
-
-(define (call-site-link caller callee site)
-  (link 'call-site (list (function-node caller) (function-node callee) (site-node site))))
-
-(define (site-expression-link site expression)
-  (link 'site-expression (list (site-node site) (node 'expression expression))))
-
-(define (site-effect-link site effect)
-  (link 'site-effect (list (site-node site) (effect-node effect))))
-
-(define (site-token-link site token)
-  (link 'site-token (list (site-node site) (token-node token))))
-
-(define (site-receiver-link site receiver)
-  (link 'site-receiver (list (site-node site) (receiver-node receiver))))
-
-(define (site-kind-link site kind)
-  (link 'site-kind (list (site-node site) (kind-node kind))))
-
-;; ── UIR effect entry → hypergraph effect-entry hyperedge ─────────────
-
-(define (entry->hg-entry e)
-  (effect-entry
-   (string->symbol (uir-symbol-name (uir-effect-entry-name e)))
-   (uir-effect-entry-modality e)
-   (map (λ (o) (string->symbol (uir-symbol-name o))) (uir-effect-entry-ops e))
-   (uir-effect-entry-budget e)
-   (and (uir-effect-entry-scope e)
-        (string->symbol (uir-symbol-name (uir-effect-entry-scope e))))))
-
-;; The effect-name symbol of a hypergraph effect entry link.
-(define (hg-entry-effect entry)
-  (node-name (first (link-out entry))))
-
-;; Deterministic atom order: sort on the printed struct (type + fields), not on
-;; Atomese rendering (two node types can render to the same ConceptNode text).
-(define (atom-less? a b)
-  (string<? (format "~s" a) (format "~s" b)))
+  ;; re-exported submodule APIs (kept stable for existing consumers)
+  (all-from-out "provenance-atoms.rkt")
+  (all-from-out "provenance-index.rkt")
+  (all-from-out "provenance-check.rkt"))
 
 ;; ── projection ──────────────────────────────────────────────────────
 
@@ -158,7 +83,7 @@
     (hash-set! entry-by fq by-effect))
 
   ;; Grounds: the direct evidence for an effect edge, with its tokens, receiver
-  ;; type, and kind.
+  ;; type, classification kind, and coverage label.
   (for ([(fq by-effect) (in-hash (provenance-grounds prov))])
     (for ([(effect sites) (in-hash by-effect)])
       (define entry (hash-ref (hash-ref entry-by fq (hash)) effect #f))
@@ -176,7 +101,10 @@
         (if (prov-site-receiver site)
             (add! (site-receiver-link id (prov-site-receiver site)))
             (void))
-        (add! (site-kind-link id (prov-site-kind site))))))
+        (add! (site-kind-link id (prov-site-kind site)))
+        (if (prov-site-coverage site)
+            (add! (site-coverage-link id (prov-site-coverage site)))
+            (void)))))
 
   ;; Call graph: each edge carries the callee expression the classifier saw, so
   ;; a path step names WHY the effect travelled that hop.
@@ -208,62 +136,14 @@
 
 ;; The grounding site a path ends at: the classifying call expression, the
 ;; effect it grounded, its tokens, the receiver type (when resolved), the
-;; classification kind, and the effect edge entry it proves.
-(struct walk-ground (fn site effect tokens receiver kind entry) #:transparent)
+;; classification kind (confidence evidence), the coverage label, and the effect
+;; edge entry it proves.
+(struct walk-ground (fn site effect tokens receiver kind coverage entry)
+  #:transparent)
 
 ;; A complete provenance path for one effect edge: the hops from the queried
 ;; function toward the grounding function, then the ground itself.
 (struct walk-path (hops ground) #:transparent)
-
-;; A parsed, reusable view of the graph atoms. Building it is O(atoms); every
-;; query below accepts either the atom list or a prebuilt index, so a consumer
-;; that queries many edges (e.g. wiring the type-graph projection) builds the
-;; index once instead of per edge.
-(struct graph-index (calls grounds edges site-exprs site-tokens site-receivers site-kinds)
-  #:transparent)
-
-(define (out-name l i) (node-name (list-ref (link-out l) i)))
-
-(define (make-graph-index atoms)
-  (define calls (make-hash))         ;; fq → (list (list callee-fq site-id))
-  (define grounds (make-hash))       ;; fq → (list (list site-id effect entry))
-  (define edges (make-hash))         ;; fq → (list entry)
-  (define site-exprs (make-hash))    ;; site-id → expression
-  (define site-tokens (make-hash))   ;; site-id → (list token)
-  (define site-receivers (make-hash));; site-id → receiver
-  (define site-kinds (make-hash))    ;; site-id → classification kind
-  (for ([a (in-list atoms)])
-    (if (link? a)
-        (case (link-type a)
-          [(site-expression)
-           (hash-set! site-exprs (out-name a 0) (node-name (list-ref (link-out a) 1)))]
-          [(site-token)
-           (hash-update! site-tokens (out-name a 0)
-                         (λ (l) (cons (out-name a 1) l)) '())]
-          [(site-receiver)
-           (hash-set! site-receivers (out-name a 0) (out-name a 1))]
-          [(site-kind)
-           (hash-set! site-kinds (out-name a 0) (out-name a 1))]
-          [(call-site)
-           (hash-update! calls (out-name a 0)
-                         (λ (l) (cons (list (out-name a 1) (out-name a 2)) l)) '())]
-          [(grounds)
-           (hash-update! grounds (out-name a 0)
-                         (λ (l) (cons (list (out-name a 1)
-                                            (node-name (first (link-out (list-ref (link-out a) 2))))
-                                            (list-ref (link-out a) 2))
-                                      l))
-                            '())]
-          [(fn-effect)
-           (hash-update! edges (out-name a 0)
-                         (λ (l) (cons (list-ref (link-out a) 1) l)) '())]
-          [else (void)])
-        (void)))
-  (graph-index calls grounds edges site-exprs site-tokens site-receivers site-kinds))
-
-;; Queries take atoms or an index; accept both and build the index once.
-(define (ensure-index graph)
-  (if (graph-index? graph) graph (make-graph-index graph)))
 
 ;; The effect edge (hypergraph effect-entry link) for `fq` and `effect-name`, or
 ;; #f when the function carries no such edge.
@@ -303,11 +183,12 @@
             (let* ([tokens (sort (hash-ref (graph-index-site-tokens idx) site '()) string<?)]
                    [receiver (hash-ref (graph-index-site-receivers idx) site #f)]
                    [expr (hash-ref (graph-index-site-exprs idx) site site)]
-                   [kind (hash-ref (graph-index-site-kinds idx) site 'inferred)])
+                   [kind (hash-ref (graph-index-site-kinds idx) site 'inferred)]
+                   [coverage (hash-ref (graph-index-site-coverages idx) site #f)])
               (set! results
                     (cons (walk-path (reverse hops)
                                      (walk-ground fn expr want tokens receiver
-                                                  kind entry))
+                                                  kind coverage entry))
                           results)))
             (void)))
       ;; Continue along the inferred call graph; the first visit is the shortest.
@@ -326,14 +207,15 @@
 ;; ── rendering ───────────────────────────────────────────────────────
 
 (define (walk-ground->string g)
-  (format "~a [~a; tokens: ~a~a; ~a]"
+  (format "~a [~a; tokens: ~a~a; ~a/~a]"
           (walk-ground-site g)
           (walk-ground-effect g)
           (string-join (walk-ground-tokens g) ",")
           (if (walk-ground-receiver g)
               (format "; receiver: ~a" (walk-ground-receiver g))
               "")
-          (walk-ground-kind g)))
+          (walk-ground-kind g)
+          (or (walk-ground-coverage g) 'unknown)))
 
 ;; Render a path as the exact call chain: `a -[b()]-> b => open [io; tokens: ...]`.
 (define (walk-path->string p)
@@ -347,50 +229,3 @@
                      (for/list ([hop (in-list hops)])
                        (format " -[~a]-> ~a" (walk-hop-site hop) (walk-hop-to hop))))
               (walk-ground->string ground))))
-
-;; ── checking ────────────────────────────────────────────────────────
-
-;; Every effect edge in the graph whose effect has no ground reachable from it.
-;; One reverse reachability pass per effect kind: from every ground owner, walk
-;; the reverse call-site graph and mark the functions that can reach it. This is
-;; the same traversal `provenance-missing` computes over the provenance record,
-;; but over the projected atoms — so it is the check that a broken projection
-;; fails, not a check that merely trusts the tables.
-(define (unprovenanced-edges graph)
-  (define idx (ensure-index graph))
-  (define reverse (make-hash))       ;; callee fq → (listof caller fq)
-  (for ([(caller calls) (in-hash (graph-index-calls idx))])
-    (for ([call (in-list calls)])
-      (hash-update! reverse (first call)
-                    (λ (l) (if (member caller l) l (cons caller l))) '())))
-  (define reachable (make-hash))      ;; effect → (hash fn #t)
-  (define (mark effect fn)
-    (define seen (hash-ref! reachable effect make-hash))
-    (let loop ([work (list fn)])
-      (unless (null? work)
-        (define f (car work))
-        (if (hash-ref seen f #f)
-            (loop (cdr work))
-            (begin
-              (hash-set! seen f #t)
-              (loop (append (cdr work) (hash-ref reverse f '()))))))))
-  (for ([(fn grounds) (in-hash (graph-index-grounds idx))])
-    (for ([ground (in-list grounds)])
-      (mark (second ground) fn)))
-  (sort
-   (for*/list ([(fq entries) (in-hash (graph-index-edges idx))]
-               [entry (in-list entries)]
-               #:unless (hash-ref (hash-ref reachable (hg-entry-effect entry) (hash)) fq #f))
-     (list fq (hg-entry-effect entry)))
-   (λ (a b) (string<? (format "~a/~a" (car a) (cadr a))
-                      (format "~a/~a" (car b) (cadr b))))))
-
-;; Raise unless every effect edge in the graph is provable.
-(define (assert-provenance-complete! graph)
-  (define missing (unprovenanced-edges graph))
-  (if (null? missing)
-      (void)
-      (error 'assert-provenance-complete!
-             "effect edges without provenance: ~a"
-             (string-join (map (λ (m) (format "~a/~a" (car m) (cadr m))) missing)
-                          ", "))))
