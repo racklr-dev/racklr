@@ -249,6 +249,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classifier's DATA verb tables (`racklr/effects/guard-vocabulary.rkt`) instead
   of hand-written lists, and a scope encoding other than `reads=...` or
   `writes=...` now fails at guard construction rather than silently no-oping.
+- Tracked pass-1 Haskell grammar `grammars/haskell/Haskell.g4`, an authored
+  subset of the Haskell 2010 rule set written for the generator's
+  NEWLINE/INDENT/DEDENT layout contract. The vendored `antlr/grammars-v4`
+  `haskell/` pair generates but cannot parse: its `OCURLY`/`VOCURLY`/`SEMI`/
+  `CCURLY` tokens come from the Java `HaskellBaseLexer` layout preprocessor,
+  whose lexer actions racklr compiles as no-ops, and its `NEWLINE` rule does not
+  carry the next line's indentation, so no `INDENT`/`DEDENT` is inserted.
+  `grammars/haskell/README.md` records the acquisition evidence, the pass-1
+  limits, and the upstream BSD-3-Clause attribution.
+- Tracked pass-1 OCaml grammar pair `grammars/ocaml/OCamlLexer.g4` +
+  `grammars/ocaml/OCamlParser.g4`, authored from the OCaml 5.2 manual because
+  `antlr/grammars-v4` ships no OCaml grammar. Nested `(* ... *)` comments use
+  the generator's lexer mode stack; `grammars/ocaml/README.md` records the
+  generator constraints worked around and the pass-1 limits.
+- `racklr-test/gen-haskell-test.rkt` (15 test cases) and
+  `racklr-test/gen-ocaml-test.rkt` (25 test cases) load the tracked grammars and
+  assert tokenizer, layout/precedence, and Phase-1 fixture parsing plus reject
+  cases. Each suite also asserts the loaded grammar path is under tracked
+  `grammars/<lang>/` and never the gitignored `grammars-v4/` tree, so it runs in
+  a clean checkout; both READMEs record the authored grammars' generated-module
+  cost. Both suites exit 0 with zero failures or errors.
 
 ### Notes
 

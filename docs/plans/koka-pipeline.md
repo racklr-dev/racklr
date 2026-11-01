@@ -6,6 +6,17 @@ Add Koka as a source and target language: `lower-koka.rkt` (Koka CST to UIR) and
 
 Koka is the one language in this trio with genuine first-class typed effects, which makes it the natural "native" target for racklr's effect-row work. Its `effect` declarations, `with` handlers, and `resume` map directly onto the effect layer's `uir-effect-row` and `uir-effect-entry`, but the current UIR has no representation of effect operations or handlers. This plan adds those.
 
+## Status (verified 2026-11-01)
+
+**Phases 1-3 landed in earlier PRs and were re-verified for this ticket.** The
+tracked pass-1 grammar is `grammars/koka/Koka.g4`
+(`racklr-test/gen-koka-test.rkt`, observed 2/2, exit 0); lowering and emission
+are `racklr/lower-koka.rkt` and `racklr/emit-koka.rkt`, round-tripped by
+`racklr-test/lower-koka-test.rkt` (observed 10/10, exit 0). Effect
+declarations, handlers, and `uir-fn` effect rows lower there. Deeper
+effect-layer fixtures beyond the current round-trip suite remain open. The
+`Current State` section below records the pre-work survey.
+
 ## Effect-System Status (read this first)
 
 Koka is a strongly typed functional language whose central feature is effect typing. Every function type records its effects, effects are row-polymorphic, and effect handlers are a core language feature rather than a library.
