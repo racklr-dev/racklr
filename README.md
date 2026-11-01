@@ -239,6 +239,7 @@ racket koka-real-world-test.rkt      # real-world Koka 3.x fixture corpus (parse
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
 racket uir-test.rkt                  # UIR types + serialization
+racket uir-koka-test.rkt             # Koka 3.x additive UIR kinds (sexp + JSON)
 racket scan-python-test.rkt          # full-tree scanner bucket classification
 racket self-seed-test.rkt            # seed compiler as a UIR program (emit + run)
 racket self-emit-test.rkt            # self-emit driver, CLI, native rows, P6.1 seam
