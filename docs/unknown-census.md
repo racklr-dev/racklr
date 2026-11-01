@@ -200,10 +200,15 @@ After:
   lexicon removes the `bare-call-lexicon` / `import-handle-lexicon` share of
   them, it does not eliminate the dataflow work.
 
-The pinned Django baseline is unaffected by the framework data: `baseline
-COVERAGE-FAILED sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2`
-still reports the graph matches the pin (231 unknown functions / 64 unknown
-files, the open Phase-0.3 obligation).
+The shared Django baseline is unaffected by the framework data: `racket
+tools/baseline-check.rkt` printed
+`baseline COVERAGE-FAILED sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2`
+— graph matches the pin, 231 unknown functions / 64 unknown files — on both the
+base commit and this branch, and `effects-non-django-python-test.rkt` pins the
+112-file Django module-name projection digest plus the historical derivation as
+an oracle. A later, independent re-pin on `main`
+(`sha256:78cc470af372edd7d04664cc05b4419c7be01fbba9788e99a02453d3175ba79e`,
+merged into the branch by the operator) keeps the same 231 / 64 counters.
 
 ## Determinism
 

@@ -32,6 +32,7 @@
          racklr/effects/library-tokens
          racklr/effects/lexicons/python
          racklr/effects/lexicons/javascript
+         "../tools/sha256.rkt"
          effervesce/check/host-python)
 
 ;; ── helpers ─────────────────────────────────────────────────────────
@@ -293,23 +294,31 @@
   out)
 
 (define (test-django-baseline-module-paths-unchanged)
-  ;; The committed content address of the pinned graph. A ranking/classification
-  ;; change on the shared Django path must show up as a deliberate `--update`
-  ;; whose snapshot diff is the review; this expectation makes the re-pin
-  ;; explicit instead of silent.
-  (check-equal? (string-trim (file->string
-                              (build-path ".." "baseline" "type-graph.sha256")))
-                "sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2")
+  ;; Pin the exact property the shared resolve.rkt change could move: the
+  ;; module-NAME projection of the pinned Django corpus. The full graph hash is
+  ;; the baseline gate's job (`racket tools/baseline-check.rkt`, verified
+  ;; bit-identical before/after this change); this digest is scoped to the
+  ;; module paths, so an unrelated deliberate re-pin does not invalidate it,
+  ;; while a single changed Django module name does.
   (define corpus-root
     (simplify-path (path->complete-path (build-path ".." "django" "django" "core")) #f))
   (cond
     [(directory-exists? corpus-root)
-     (define files (py-files-under corpus-root))
-     (check-true (pair? files) "the pinned django core corpus is present")
+     (define files (sort (py-files-under corpus-root)
+                         (λ (a b) (string<? (path->string a) (path->string b)))))
+     (check-equal? (length files) 112 "the pinned django core corpus file count")
      (for ([f (in-list files)])
        (check-equal? (path->module-path "django.core" corpus-root f)
                      (historical-path->module-path "django.core" corpus-root f)
-                     (path->string f)))]
+                     (path->string f)))
+     (define projection
+       (for/list ([f (in-list files)])
+         (format "~a\t~a"
+                 (path->string (find-relative-path corpus-root f))
+                 (path->module-path "django.core" corpus-root f))))
+     (check-equal? (sha256-hex (string->bytes/utf-8 (string-join projection "\n")))
+                   "eb9812292ab8d45bf74c7e5257ead93fdce499d7af2791e020550041651df97b"
+                   "django module-name projection digest")]
     [else
      ;; The django submodule is not initialized for this checkout; the baseline
      ;; gate itself always requires it, so this is an explicit environment skip.
