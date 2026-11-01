@@ -262,7 +262,7 @@
      (for/list ([p (in-list x)])
        (unless (and (proper-list? p) (= (length p) 2))
          (error 'json->uir "invalid UIR JSON pair: ~e" p))
-       (cons (jsexpr->node-sexp (car p) layouts)
+       (list (jsexpr->node-sexp (car p) layouts)
              (jsexpr->node-sexp (cadr p) layouts)))]
     [(catch-list)
      (for/list ([t (in-list x)])

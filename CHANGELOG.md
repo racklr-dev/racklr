@@ -93,6 +93,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grounded/conflicting/unrooted scopes, and the new region combinators.
 
  (P0.3))
+
+- Koka 3.x front end rebuilt for real-world source. `grammars/koka/Koka.g4` is
+  an authored port of the Koka compiler's own grammar
+  (`doc/spec/grammar/parser.y`) and lexer (`src/Syntax/Lexer.x`), and Koka's
+  layout pass (`src/Syntax/Layout.hs`) is injected as data: `koka-layout-policy`
+  in `racklr/gend-parser/language-policy.rkt`, selected by a grammar
+  declaration `options { layout = koka; }` that `gen-and-load-layout` resolves
+  (an unknown policy name is an error). The grammar covers `pub` visibility,
+  modules and conditional/target-guarded/`@open` imports, extern
+  declarations/imports/includes, type/struct/alias/effect declarations with
+  type parameters and `::` kinds, fixity, functions and lambdas with pattern
+  parameters, implicit `?x` parameters, `match` with guards and arrowless case
+  bodies, `if`/`elif`/`else`, effect handlers (`handler`/`handle`/`named`/
+  `override`/`scoped`, `fun`/`ctl`/`final`/`raw`/`return`/`finally`/
+  `initially` clauses), `mask`/`inject` (multi-effect lists), `ctx`/`hole`,
+  named arguments, multi-line raw strings and nested block comments. Lowering
+  and emission are rewritten against the new CST (`racklr/lower-koka/`,
+  `racklr/emit-koka/`; public call shapes unchanged) with additive UIR node
+  kinds (`struct`, `fixity`, `extern-value/fun/import`, `handler`,
+  `handler-op`, `mask`, `named-arg`, `char`, `type-params`, `import-alias`,
+  `ascribe`, `index`, `implicit-ref`) and no existing-kind field change or
+  schema-version bump. The committed `tools/koka-corpus.rkt` scorer plus
+  `racklr-test/koka-fixtures/` and `koka-real-world-test.rkt` measure the front
+  end over a real checkout; on koka-lang/koka 3.3.0 dev (1144 `.kk` files) the
+  full absorb -> emit -> re-parse battery goes from 12/1144 `ok` to 1010/1144
+  and parse-only coverage from 12/1144 to 1035/1144, with no tokenizer or
+  lowering failures. Remaining limits and the before/after taxonomy are
+  recorded in `docs/koka-real-world-battery.md` and the loss model in
+  `docs/plans/koka-pipeline.md`.
+
 - Stable site origins for effect-edge provenance (nc-4A19):
   `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural
   receiver chain (from the UIR callee, never a rendered expression), and a

@@ -163,6 +163,94 @@
       (uir-node-kind 'eff-invariant 'uir-eff-invariant #f (list (uir-schema-field 'expr 'uir 'required)))
       (uir-node-kind 'eff-policy 'uir-eff-policy #f
         (list (uir-schema-field 'kind 'symbol 'required) (uir-schema-field 'predicate 'uir 'required)))
+      ;; ── Koka 3.x source constructs ──
+      ;;
+      ;; Additive kinds for the modern Koka surface whose syntax has no
+      ;; existing UIR representation. Every field is required (these kinds have
+      ;; no legacy payloads), every type expression is a normalized `uir-symbol`
+      ;; text like the Rust front end's types, and declaration modifiers / type
+      ;; parameter binders / imports aliases travel on `uir-decorated` or the
+      ;; `type-params` node below so no existing kind's field list changes.
+      (uir-node-kind 'struct 'uir-struct #f
+        (list (uir-schema-field 'name 'uir 'required)
+              (uir-schema-field 'type-params 'list-uir 'required)
+              (uir-schema-field 'fields 'list-uir 'required)
+              (uir-schema-field 'visibility 'symbol 'required)))
+      (uir-node-kind 'fixity 'uir-fixity #f
+        (list (uir-schema-field 'kind 'symbol 'required)
+              (uir-schema-field 'precedence 'int 'required)
+              (uir-schema-field 'names 'list-uir 'required)))
+      ;; `extern name : <typescheme> { ... }` (the scheme form).
+      (uir-node-kind 'extern-value 'uir-extern-value #f
+        (list (uir-schema-field 'name 'uir 'required)
+              (uir-schema-field 'type 'uir 'required)
+              (uir-schema-field 'entries 'list-pair-uir 'required)
+              (uir-schema-field 'visibility 'symbol 'required)
+              (uir-schema-field 'modifiers 'list-uir 'required)))
+      ;; `extern name<tpars>(params) : <result> { ... }` (the parameters form).
+      (uir-node-kind 'extern-fun 'uir-extern-fun #f
+        (list (uir-schema-field 'name 'uir 'required)
+              (uir-schema-field 'type-params 'list-uir 'required)
+              (uir-schema-field 'params 'list-uir 'required)
+              (uir-schema-field 'result 'optional-uir 'required)
+              (uir-schema-field 'entries 'list-pair-uir 'required)
+              (uir-schema-field 'visibility 'symbol 'required)
+              (uir-schema-field 'modifiers 'list-uir 'required)))
+      ;; `extern import <target> { <key> = "<value>" ... }`; each target group is
+      ;; one node, so a multi-target block lowers to several sibling nodes.
+      (uir-node-kind 'extern-import 'uir-extern-import #f
+        (list (uir-schema-field 'target 'optional-uir 'required)
+              (uir-schema-field 'entries 'list-pair-uir 'required)))
+      ;; `handler` / `handle(action)` / `with ...` / `with x <- h` / single-op
+      ;; `with fun op() ...`; `ops` holds `uir-handler-op` nodes.
+      (uir-node-kind 'handler 'uir-handler #f
+        (list (uir-schema-field 'sort 'symbol 'required)
+              (uir-schema-field 'effect 'optional-uir 'required)
+              (uir-schema-field 'value 'optional-uir 'required)
+              (uir-schema-field 'locals 'list-uir 'required)
+              (uir-schema-field 'ops 'list-uir 'required)
+              (uir-schema-field 'body 'optional-uir 'required)))
+      (uir-node-kind 'handler-op 'uir-handler-op #f
+        (list (uir-schema-field 'kind 'symbol 'required)
+              (uir-schema-field 'name 'optional-uir 'required)
+              (uir-schema-field 'type 'optional-uir 'required)
+              (uir-schema-field 'params 'list-uir 'required)
+              (uir-schema-field 'body 'uir 'required)))
+      ;; `mask<e, ...> body` / `with mask<e> ...` (form 'apply or 'with).
+      (uir-node-kind 'mask 'uir-mask #f
+        (list (uir-schema-field 'effects 'list-uir 'required)
+              (uir-schema-field 'behind 'bool 'required)
+              (uir-schema-field 'form 'symbol 'required)
+              (uir-schema-field 'body 'uir 'required)))
+      ;; `f(name = value)` named argument.
+      (uir-node-kind 'named-arg 'uir-named-arg #f
+        (list (uir-schema-field 'name 'uir 'required)
+              (uir-schema-field 'value 'uir 'required)))
+      ;; A character literal, kept as its source text including quotes.
+      (uir-node-kind 'char 'uir-char #f
+        (list (uir-schema-field 'value 'string 'required)))
+      ;; `<a, e :: E>` declaration binder, used as a declaration decorator.
+      (uir-node-kind 'type-params 'uir-type-params #f
+        (list (uir-schema-field 'params 'list-uir 'required)))
+      ;; `import alias = source` (no names in Koka).
+      (uir-node-kind 'import-alias 'uir-import-alias #f
+        (list (uir-schema-field 'alias 'uir 'required)
+              (uir-schema-field 'source 'uir 'required)
+              (uir-schema-field 'names 'list-uir 'required)))
+      ;; `(expr : type)` expression type ascription.
+      (uir-node-kind 'ascribe 'uir-ascribe #f
+        (list (uir-schema-field 'expr 'uir 'required)
+              (uir-schema-field 'type 'uir 'required)))
+      ;; An implicit-parameter reference (`?show`, `?(==)`): Koka's `?name`
+      ;; surface is not a plain identifier, so it gets its own node instead of
+      ;; a `?`-prefixed symbol (which the capability battery treats as an
+      ;; unknown-node fallback marker).
+      (uir-node-kind 'implicit-ref 'uir-implicit-ref #f
+        (list (uir-schema-field 'name 'uir 'required)))
+      ;; `base[index]` index expression.
+      (uir-node-kind 'index 'uir-index #f
+        (list (uir-schema-field 'base 'uir 'required)
+              (uir-schema-field 'index 'uir 'required)))
       ;; ── the bootstrap vocabulary the schema is written in ──
       (uir-node-kind 'schema 'uir-schema #t
         (list (uir-schema-field 'version 'int 'required) (uir-schema-field 'kernel-version 'int 'required) (uir-schema-field 'node-kinds 'list-uir 'required)))

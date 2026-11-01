@@ -201,7 +201,7 @@ Recursive descent with backtracking. Each grammar rule becomes a `parse-XXX` fun
 
 1. Find or create ANTLR4 `.g4` grammar files. Pristine vendored grammars live in the untracked `grammars-v4/<lang>/` checkout; authored or modified grammars are tracked in `grammars/<lang>/` (see `grammars/koka/` and `grammars/python3/`)
 2. If using separate lexer/parser grammars, ensure `tokenVocab = <LexerName>` is set in the parser grammar
-3. If the language has layout or template-literal lexing conventions, add a `language-policy` value (see `racklr/gend-parser/language-policy.rkt`) and pass it as `#:policy`
+3. If the language has layout or template-literal lexing conventions, add a `language-policy` value (see `racklr/gend-parser/language-policy.rkt`) and either pass it as `#:policy` or declare `options { layout = <policy-name>; }` in the grammar so `gen-and-load-layout` resolves it by name
 4. Generate and test: `(parse-g4-file "grammars-v4/<lang>/<Lang>Parser.g4")` → `(generate-parser-module cst #:source-path path #:policy policy)`
 5. Write lowering pass: CST → UIR
 6. Write a host lexicon under `racklr/effects/lexicons/`: token tables (`effect-tokens`), the host dialect (implicit receiver names, exception/constructor conventions, front-end construct encodings), import-tag rules, and the operation vocabulary. The default is the Python/Django lexicon; `infer-effects` / `infer-effects-all` / `classify-call` take it as `#:lexicon`. No engine edits.
@@ -232,6 +232,10 @@ racket modern-python-test.rkt        # modern Python: walrus, positional-only, t
 racket python-multiline-strings-test.rkt # multi-line triple-quoted strings: lexing, positions, emit
 racket lower-python-params-test.rkt  # Python parameter star markers: *, *args, **kwargs
 racket lower-javascript-test.rkt     # JavaScript lowering + emit
+racket gen-koka-test.rkt             # Koka 3.x grammar, layout post-pass, lexer, parse
+racket lower-koka-test.rkt           # Koka lowering + emit round-trip per construct
+racket effects-koka-annot-test.rkt   # Koka typed effect-row annotations
+racket koka-real-world-test.rkt      # real-world Koka 3.x fixture corpus (parse + round-trip)
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
 racket uir-test.rkt                  # UIR types + serialization
@@ -276,6 +280,25 @@ racket tools/scan-python.rkt django/django --verbose  # per-file failures + effe
 
 It exits 0 only when every file lowers cleanly. The latest Django run is
 907/907 `ok` with 0 blockers; see `docs/django-frontend-catalogue.md`.
+
+### Koka real-world corpus measurement
+
+`tools/koka-corpus.rkt` is the Koka slice of the capability battery: it runs the
+real front end (`tokenize` -> `parse` -> `lower` -> `emit` -> re-parse) over a
+Koka checkout and reports the capability of the tracked `grammars/koka/`
+grammar and lowering layer. `--parse-only` measures the grammar alone. The
+corpus is not vendored; point it at a `koka-lang/koka` checkout:
+
+```bash
+racket tools/koka-corpus.rkt /path/to/koka            # absorb -> emit -> re-parse
+racket tools/koka-corpus.rkt /path/to/koka --parse-only
+racket tools/koka-corpus.rkt /path/to/koka --json /tmp/koka.json
+```
+
+It exits 0 only when every file in the selected mode succeeds, and prints
+grouped failure messages. The latest run (koka-lang/koka 3.3.0 dev, 1144 `.kk`
+files) and its before/after taxonomy are recorded in
+`docs/koka-real-world-battery.md`.
 
 ### Real host-code bridge sample
 
