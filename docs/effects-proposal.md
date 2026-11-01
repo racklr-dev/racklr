@@ -392,10 +392,15 @@ Import resolution, receiver-type dataflow, and the whole-program fixpoint are
 built and green (§6). Remaining: drive the Django corpus to zero `unknown`
 leaves and make provenance per-edge and first-class (§6.1).
 
-**Phase 1 — contract algebra (planned).**
-Extract the effect algebra as a standalone typed library: join as the fixpoint
-operation, sequence / choose / scope combinators, effect polymorphism, and
-subtyping (Pass 4 in §9).
+**Phase 1 — effect algebra (rows, fixpoint, subtyping built; polymorphism planned).**
+`racklr/effects/algebra/` is a standalone library: effect rows as sets of
+(effect, provenance) pairs, join / sequence / choose / scope over them, a
+generic monotone fixpoint driver that `infer.rkt` and `whole-program.rkt` now
+run the inference fixpoint on, and row subtyping with handler interpretation
+(the bridge checker's capability table generalized to rows). Property tests in
+`racklr-test/effects-algebra-property-test.rkt` cover the algebra laws, fixpoint
+monotonicity, and the subtyping laws. Remaining for the phase: effect
+polymorphism (row holes) and the Pass-4 contract check over the new relation.
 
 **Phase 2 — annotation extraction (planned).**
 Recognize `@effects(...)` / `withEffects(...)` / JSDoc `@effects` in the front

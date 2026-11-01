@@ -15,6 +15,7 @@
          racklr/effects/collect
          racklr/effects/walk
          racklr/effects/rows
+         (prefix-in alg: racklr/effects/algebra/main)
          racklr/effects/shape
          racklr/effects/receiver-type
          racklr/effects/classify-all
@@ -210,23 +211,16 @@
                                  (unbox unknown-tally))))]))
           (void)))
     (walk-body body visit!)
-    (hash-set! direct-rows k (effects->row effects))
+    (hash-set! direct-rows k (effects->algebra-row effects))
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
                                                             (string<? (format "~a.~a" (car a) (cdr a))
                                                                       (format "~a.~a" (car b) (cdr b)))))))
 
-  (define rows (make-hash))
-  (for ([k (in-list all-keys)]) (hash-set! rows k (hash-ref direct-rows k)))
-  (let loop ()
-    (define changed? #f)
-    (for ([k (in-list all-keys)])
-      (define current (hash-ref rows k))
-      (define callee-rows
-        (map (λ (g) (hash-ref rows g (empty-row))) (hash-ref edges k)))
-      (define new-row
-        (foldl infer-row-union (hash-ref direct-rows k) callee-rows))
-      (if (equal? current new-row)
-          (void)
-          (begin (set! changed? #t) (hash-set! rows k new-row))))
-    (if changed? (loop) (void)))
-  rows)
+  ;; The whole-program fixpoint is the algebra's: iterate `join` (the least
+  ;; upper bound over rows) from the direct rows until the table stops
+  ;; changing. Same operation as the single-file pass, same driver, so the two
+  ;; fixpoints cannot drift apart.
+  (define rows (alg:least-fixpoint direct-rows edges))
+  ;; Materialize the algebra rows back to the UIR row contract.
+  (for/hash ([(k r) (in-hash rows)])
+    (values k (alg:algebra-row->uir r))))

@@ -18,9 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type Name[T] = value`.
 - `racklr-test/modern-python-test.rkt` covering parse, lower and emit
   round-trips for the new syntax.
+- Effect algebra (`racklr/effects/algebra/`): provenance-carrying rows as sets
+  of (effect, evidence) pairs, the `join` / `sequence` / `choose` / `scope`
+  combinators, a generic monotone fixpoint driver, and row subtyping with
+  handler interpretation (the bridge checker's capability table generalized to
+  rows).
+- `racklr-test/effects-algebra-property-test.rkt`: property tests for
+  associativity and idempotence of join, monotonicity and least-fixpoint laws,
+  the subtyping laws (reflexivity, transitivity, bottom, join as LUB), and
+  handler interpretation.
 
 ### Changed
 
+- Effect inference's fixpoint is now expressed in the algebra:
+  `infer.rkt` and `whole-program.rkt` run `algebra/least-fixpoint` over
+  `algebra/join`, and `rows.rkt` is the algebra adapter. The refactor is
+  behavior-preserving: the `type-graph.rkt django/django/core` baseline is
+  unchanged (`sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`).
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.

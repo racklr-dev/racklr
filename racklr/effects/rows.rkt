@@ -2,15 +2,25 @@
 
 ;; racklr/effects/rows.rkt
 ;;
-;; The effect-row algebra: building rows from classified items, canonical
-;; ordering, and the fixpoint union that preserves the deferred `unknown`
-;; modality.
+;; The inference-side effect-row helpers: building rows from classified items,
+;; canonical ordering, and the fixpoint union that preserves the deferred
+;; `unknown` modality.
+;;
+;; The row algebra itself is `racklr/effects/algebra/` (Phase 1): a row is an
+;; algebra row — the canonical UIR row plus first-class provenance — and the
+;; fixpoint operation is `algebra/join`, the least upper bound over rows. This
+;; module is the thin inference-facing adapter: classified items in, canonical
+;; UIR rows / algebra rows out. Materializing an algebra row to a UIR row
+;; preserves every entry field; only the provenance side table, which the UIR
+;; row has no slot for, is dropped.
 
 (require racklr/uir
          racklr/effects/contract
-         racklr/effects/imports)
+         racklr/effects/imports
+         (only-in racklr/effects/algebra/main
+                  join algebra-row-of algebra-row->uir))
 
-(provide empty-row effects->row infer-row-union)
+(provide empty-row effects->row effects->algebra-row infer-row-union)
 
 (define (empty-row)
   (uir-effect-row '()))
@@ -46,12 +56,16 @@
        #f
        #f)))))
 
-;; Union that keeps the deferred 'unknown modality (contract's union
-;; collapses unknown→may for same-name merges).
+;; The same classification as an algebra row, ready for the fixpoint. No
+;; provenance is attached here: inference records direct-call evidence in its
+;; own provenance table (the `#:provenance-table` box), which is threaded per
+;; call site rather than per row entry.
+(define (effects->algebra-row items)
+  (algebra-row-of (effects->row items)))
+
+;; The fixpoint's accumulation step: join two rows, keeping the deferred
+;; 'unknown modality. `join` is the algebra's least upper bound and is
+;; idempotent/associative/commutative, so iterating it converges.
 (define (infer-row-union r1 r2)
-  (canonical-row
-   (uir-effect-row
-    (for/list ([e (in-list (uir-effect-row-entries (effect-row-union r1 r2)))])
-      (if (eq? (effect-name-symbol e) 'unknown)
-          (struct-copy uir-effect-entry e [modality 'unknown])
-          e)))))
+  (algebra-row->uir
+   (join (algebra-row-of r1) (algebra-row-of r2))))
