@@ -8,6 +8,11 @@
 ;;
 ;;   racket tools/provenance-corpus.rkt                 # django/django/core
 ;;   racket tools/provenance-corpus.rkt django/django   # explicit probe
+;;   racket tools/provenance-corpus.rkt --record-only   # skip graph projection
+;;
+;; `--record-only` is for probes too large to project (the full django tree
+;; builds ~100k atoms); it still runs the record-level reachability check, which
+;; is the same property the graph projection enforces.
 ;;
 ;; It scans every .py file under the probe directories, resolves imports, runs
 ;; whole-program effect inference with `#:provenance-record`, and then checks:
@@ -193,6 +198,7 @@
 
 (define (main)
   (define args (vector->list (current-command-line-arguments)))
+  (define record-only? (pair? (member "--record-only" args)))
   (define dirs (filter (λ (a) (not (string-prefix? a "--"))) args))
   (define probe-dirs (if (null? dirs) default-probe-dirs dirs))
   (define root (repo-root))
@@ -209,6 +215,14 @@
     (printf "edges without provenance (record reachability): ~a\n" (length missing))
     (for ([m (in-list (take missing (min 20 (length missing))))])
       (printf "  MISSING ~a / ~a\n" (car m) (cadr m)))
+
+    (if record-only?
+        (begin
+          (printf "record-only: skipped graph projection/query\n")
+          (if (null? missing)
+              (begin (printf "provenance OK (record level): every effect edge is grounded\n") (exit 0))
+              (begin (printf "provenance FAILED\n") (exit 1))))
+        (void))
 
     ;; 2. atom-level projection; provenance-graph raises if an edge is unprovable.
     (define graph
