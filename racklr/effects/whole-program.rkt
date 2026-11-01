@@ -29,12 +29,24 @@
 
 (provide infer-effects-all classify-call-all)
 
-;; Binding-kind helpers for the `#:unknown-tally` diagnostic: what kind of
-;; value a local variable was bound from, so the census can attribute a
-;; `local` receiver to the lever that would resolve it (call-result
-;; projection, attribute copy, alias, loop variable, function value, or
-;; literal). `unbound` means the name is not assigned in the body (a global,
-;; import, closure capture, or class-level name).
+;; Binding-kind helpers for the `#:unknown-tally` census: what kind of value a
+;; local variable was bound from, so the census can attribute a `local`
+;; receiver to the lever that would resolve it (call-result projection,
+;; attribute copy, alias, loop variable, function value, or literal).
+;; `unbound` means the name is not assigned in the body (a global, import,
+;; closure capture, or class-level name).
+;;
+;; Each tally record is one call site that the REAL classification (whole
+;; program, import-aware, receiver-typed) left `unknown`:
+;;
+;;   (component function shape op receiver binding-kind site higher-order?)
+;;
+;; shape/op/receiver/binding-kind are the aiming data (classify-all.rkt's
+;; receiver-shape); `site` is the exact callee site string (shape.rkt's
+;; callee-site-string), so a census names a call site instead of an aggregate
+;; count; `higher-order?` is #t when a bare callee names one of the enclosing
+;; function's parameters (the row-hole lever) rather than an unknown free name
+;; (the lexicon lever).
 
 (define (var-symbol v)
   (cond
@@ -281,15 +293,52 @@
                                                           #:file comp
                                                           #:position position)))
               (when unknown-tally
+                (define shape (receiver-shape callee param-names tokens))
+                ;; Receiver root of a member-access chain (`x` in x.m(),
+                ;; `self` in self.cache.m()) so a site names the object whose
+                ;; type must flow; a bare call has no receiver.
                 (define rx
-                  (and (uir-get? callee)
-                       (var-symbol (uir-get-base callee))))
+                  (and (member-access-callee? callee) (dotted-root callee)))
+                ;; The binding kind refines a `local` receiver and, for a bare
+                ;; call, tells the parameter-callback and function-value levers
+                ;; apart from a genuinely free name. For `bare-call`:
+                ;;   'param    the callee names one of the enclosing
+                ;;             function's parameters (row-hole lever)
+                ;;   'fn       the callee is a local bound from a function
+                ;;             value (function-value-typing lever)
+                ;;   'unbound  a free/global/imported name (lexicon lever)
+                (define immediate-base
+                  (and (uir-get? callee) (var-symbol (uir-get-base callee))))
+                (define bare-name
+                  (cond
+                    [(uir-var? callee)
+                     (string->symbol (uir-symbol-name (uir-var-name callee)))]
+                    [(uir-symbol? callee)
+                     (string->symbol (uir-symbol-name callee))]
+                    [else #f]))
+                (define binding-kind
+                  (cond
+                    [(eq? shape 'param) 'param]
+                    [(and (eq? shape 'bare-call) bare-name param-names
+                          (memq bare-name param-names))
+                     'param]
+                    [(and (eq? shape 'bare-call) bare-name)
+                     (hash-ref local-kinds bare-name 'unbound)]
+                    [immediate-base (hash-ref local-kinds immediate-base 'unbound)]
+                    [else #f]))
+                ;; `higher-order?` marks the callback-parameter lever (row
+                ;; holes); a bare call to a function-valued local is the
+                ;; separate function-value-typing lever.
+                (define higher-order?
+                  (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
                 (set-box! unknown-tally
                           (cons (list (car k) (cdr k)
-                                      (receiver-shape callee param-names tokens)
+                                      shape
                                       (effect-op-of-callee callee)
                                       rx
-                                      (and rx (hash-ref local-kinds rx 'unbound)))
+                                      binding-kind
+                                      site
+                                      higher-order?)
                                 (unbox unknown-tally))))]))]
         [else (void)]))
     (walk-body body visit!)
