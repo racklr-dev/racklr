@@ -19,13 +19,15 @@
 ;;   effect-roots.rkt  — effect name tables + direct-effect-of-callee
 ;;   pure-roots.rkt    — pure name tables
 ;;   collect.rkt       — program-surface collection + MRO
-;;   rows.rkt          — effect-row algebra
+;;   rows.rkt          — effect-row construction + algebra adapter
+;;   algebra/          — the effect algebra: rows, join, fixpoint, subtyping
 ;;   classify.rkt      — classify-call / classify-nonedge
 ;;   provenance.rkt    — structured effect-edge provenance (grounds + call graph)
 ;;   whole-program.rkt — cross-file fixpoint (infer-effects-all)
 
 (require racklr/uir
          racklr/effects/contract
+         (prefix-in alg: racklr/effects/algebra/main)
          racklr/effects/ts-annot
          racklr/effects/walk
          racklr/effects/shape
@@ -70,7 +72,7 @@
 (define (compute-effect-rows fns methods class-names supers known
                              #:provenance-table [prov-box #f]
                              #:provenance-record [rec-box #f])
-  (define direct-rows (make-hash))  ;; name → uir-effect-row (direct only)
+  (define direct-rows (make-hash))  ;; name → algebra-row (direct entries only)
   (define edges (make-hash))        ;; name → (listof name-symbol)
   (define direct-prov (and prov-box (make-hash)))  ;; name → hash effect → sites
   (define prov (and rec-box (make-provenance)))
@@ -121,30 +123,27 @@
                                                            #:kind 'unresolved)))]))
           (void)))
     (walk-body body visit!)
-    (hash-set! direct-rows n (effects->row effects))
+    (hash-set! direct-rows n (effects->algebra-row effects))
     (hash-set! edges n (sort (remove-duplicates callees) symbol<?)))
 
-  (define rows (make-hash))
-  (define prov-strings (and direct-prov (make-hash)))
-  (for ([n (in-list all-names)])
-    (hash-set! rows n (hash-ref direct-rows n))
-    (when prov-strings
-      (hash-set! prov-strings n (hash-copy (hash-ref direct-prov n (make-hash))))))
+  ;; The fixpoint is the algebra's: iterate `join` (the least upper bound over
+  ;; rows) from the direct rows until the table stops changing. This is exactly
+  ;; the implicit union the pass used to fold by hand, now the algebra's
+  ;; monotone operation, so the result is the least fixed point over the call
+  ;; graph and inference results are unchanged.
+  (define rows (alg:least-fixpoint direct-rows edges))
 
-  (let loop ()
-    (define changed? #f)
+  ;; Legacy table: a second monotone fixpoint over the rendered call-site
+  ;; strings, independent of the rows. A propagated entry keeps the callee's
+  ;; classifying sites, prefixed with the callee it came through (the rendered
+  ;; call chain).
+  (define prov-strings (and direct-prov (make-hash)))
+  (when prov-strings
     (for ([n (in-list all-names)])
-      (define current (hash-ref rows n))
-      (define callee-rows
-        (map (λ (g) (hash-ref rows g (empty-row))) (hash-ref edges n)))
-      (define new-row
-        (foldl infer-row-union (hash-ref direct-rows n) callee-rows))
-      (unless (equal? current new-row)
-        (set! changed? #t)
-        (hash-set! rows n new-row))
-      ;; Legacy table: a propagated entry keeps the callee's classifying sites,
-      ;; prefixed with the callee it came through (the rendered call chain).
-      (when prov-strings
+      (hash-set! prov-strings n (hash-copy (hash-ref direct-prov n (make-hash)))))
+    (let loop ()
+      (define changed? #f)
+      (for ([n (in-list all-names)])
         (define np (hash-copy (hash-ref direct-prov n (make-hash))))
         (for ([g (in-list (hash-ref edges n))])
           (for ([(e sites) (in-hash (hash-ref prov-strings g (make-hash)))])
@@ -152,12 +151,17 @@
               (sites-add! np e (format "~a::~a" g s)))))
         (unless (equal? np (hash-ref prov-strings n))
           (set! changed? #t)
-          (hash-set! prov-strings n np))))
-    (if changed? (loop) (void)))
+          (hash-set! prov-strings n np)))
+      (if changed? (loop) (void))))
 
   (when prov-box (set-box! prov-box prov-strings))
   (when rec-box (set-box! rec-box prov))
-  rows)
+
+  ;; Materialize the algebra rows back to the UIR row contract: entries
+  ;; unchanged, provenance side table dropped (the UIR row has no slot for it).
+  (for/hash ([(n r) (in-hash rows)])
+    (values n (alg:algebra-row->uir r))))
+
 
 ;; Compute the fixpoint effect rows for a single program: name-symbol →
 ;; uir-effect-row. Only calls into functions/methods defined in `program` (or a

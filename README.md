@@ -184,6 +184,8 @@ Run each suite directly from inside `racklr-test/`. `raco test racklr-test/*.rkt
 ```bash
 cd racklr-test
 racket effects-infer-test.rkt        # effect inference
+racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
+racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
 racket provenance-test.rkt           # effect-edge provenance + graph query
 racket effects-contract-test.rkt     # contract checking
 racket emit-contract-test.rkt        # emit contract + single dispatch

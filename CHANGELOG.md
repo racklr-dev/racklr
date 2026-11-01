@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type Name[T] = value`.
 - `racklr-test/modern-python-test.rkt` covering parse, lower and emit
   round-trips for the new syntax.
+- Effect algebra (`racklr/effects/algebra/`): provenance-carrying rows as sets
+  of (effect, evidence) pairs, the `join` / `sequence` / `choose` / `scope`
+  combinators, a generic monotone fixpoint driver, and row subtyping with
+  handler interpretation (the bridge checker's capability table generalized to
+  rows).
+- `racklr-test/effects-algebra-property-test.rkt`: property tests for
+  associativity and idempotence of join, monotonicity and least-fixpoint laws,
+  the subtyping laws (reflexivity, transitivity, bottom, join as LUB), and
+  handler interpretation.
+- `racklr-test/effects-algebra-prohibitions-test.rkt`: the declared-row
+  prohibition agreement. Algebra rows canonicalize `must-not` to absence, so
+  `declared-prohibited-effects` reads a prohibition from the UIR row and the
+  tests pin that `row-subtype?` still agrees with `effect-subtype?` for rows
+  carrying `must-not` on either side of `≤`.
 - One emit contract (`racklr/emit-contract.rkt`) and a single dispatch
   (`racklr/emit.rkt`): every target emitter takes UIR plus an optional explicit
   effect row, and `(emit target uir row)` renders any supported target from
@@ -69,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Effect inference's fixpoint is now expressed in the algebra:
+  `infer.rkt` and `whole-program.rkt` run `algebra/least-fixpoint` over
+  `algebra/join`, and `rows.rkt` is the algebra adapter. The refactor is
+  behavior-preserving: the `type-graph.rkt django/django/core` baseline is
+  unchanged (`sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`).
 - `docs/django-frontend-catalogue.md` is now the re-run record, not a list of
   open blockers: all twelve front-end blockers are marked resolved, the latest
   whole-tree scan is 907/907 `ok` with 0 blockers, and the measurement command
