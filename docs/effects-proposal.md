@@ -264,10 +264,35 @@ classified. An effect entry's provenance is the triple that produced it:
 | **Tokens** | the source tokens that grounded the classification (module root, method name) | the DATA lexicon rule / import handle that matched |
 
 `type-graph.rkt` already records file-level provenance (`files-by-name`: which
-components touch each effect). The remaining Phase 0/1 work is to make
-provenance **per-edge and first-class**: the same query shape as effervesce's
-`ask` ("show the exact call chain that makes this function `db`") rather than a
-report column.
+components touch each effect). P4.2 makes provenance **per-edge and
+first-class** in the graph substrate (`racklr/graph/provenance.rkt`), so the
+same query shape as effervesce's `ask` ("show the exact call chain that makes
+this function `db`") is a graph walk rather than a report column.
+
+As built:
+
+- `racklr/effects/provenance.rkt` records one `provenance` value per inference
+  run: the **grounds** (the classifying call site, the tokens it grounded on,
+  the receiver type receiver-type dataflow resolved, and the classification
+  kind `inferred` / `unresolved` / `declared`) and the inferred **call graph**
+  (every caller→callee edge with the callee expression the classifier saw).
+  `infer-effects` and `infer-effects-all` both take `#:provenance-record`, a box
+  filled with that value. `infer-effects` keeps its legacy
+  `#:provenance-table` view (the rendered `name: chain` strings Effervesce's
+  bridge checker reports) alongside the structured record. A blessed capability from the DATA config is grounded
+  at the method definition (`declared`), with the module path, class, and
+  method as its tokens.
+- The projection emits every row entry as a `fn-effect` edge, every ground as a
+  `grounds` edge to its classifying site (with `site-expression`,
+  `site-token`, `site-receiver`, `site-kind`, and `site-effect` atoms), and
+  every call-graph edge as a `call-site` edge carrying the classifier's callee
+  expression. A **provenance path** is a walk from a function along `call-site`
+  edges to a `grounds` edge; `provenance-paths` returns the exact
+  caller→callee chain (shortest per ground) for a given function/effect edge.
+- "No effect edge exists without provenance" is enforced at projection time:
+  the graph builder raises if any effect edge cannot reach a ground, and
+  `provenance-missing` checks the same property from the row/provenance tables
+  without enumerating paths.
 
 ---
 
