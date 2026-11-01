@@ -23,6 +23,7 @@
 (require rackunit
          racket/file
          racket/path
+         racket/string
          racklr/uir
          racklr/effects/contract
          racklr/effects/imports
@@ -250,6 +251,70 @@
                                        'network))
                 '(network<Session>.read)))
 
+;; ── 6. the shared Django path stays pinned ──────────────────────────
+;;
+;; `path->module-path` is shared with the Django scan, so the package-chain walk
+;; must resolve EVERY module of the pinned corpus to exactly the name the
+;; historical root-relative derivation produced; otherwise
+;; `baseline/type-graph.sha256` moves and a real regression could hide as a
+;; re-pin. The full end-to-end hash check remains
+;; `racket tools/baseline-check.rkt` (it runs type-graph over Django); this pins
+;; the module-path half of that invariant cheaply, and carries the committed
+;; content address so a silent snapshot re-pin is visible in review.
+
+(define (historical-path->module-path root-name root-dir p)
+  ;; The derivation before the package-chain change, kept verbatim as the
+  ;; reference oracle.
+  (define rel (path->string (find-relative-path root-dir p)))
+  (define comps (map path->string (explode-path (string->path rel))))
+  (define comps-clean (filter (λ (c) (not (string=? c "."))) comps))
+  (define comps-no-init
+    (cond
+      [(null? comps-clean) '()]
+      [(string=? (last comps-clean) "__init__.py") (drop-right comps-clean 1)]
+      [else comps-clean]))
+  (define base
+    (if (null? comps-no-init)
+        '()
+        (let ([lastc (last comps-no-init)])
+          (append (drop-right comps-no-init 1)
+                  (list (regexp-replace #rx"[.]py$" lastc ""))))))
+  (string-join (cons root-name base) "."))
+
+(define (py-files-under dir)
+  (define out '())
+  (let loop ([d dir])
+    (for ([e (in-list (directory-list d))])
+      (define p (build-path d e))
+      (cond
+        [(directory-exists? p) (loop p)]
+        [(regexp-match? #rx"[.]py$" (path->string e)) (set! out (cons p out))]
+        [else (void)])))
+  out)
+
+(define (test-django-baseline-module-paths-unchanged)
+  ;; The committed content address of the pinned graph. A ranking/classification
+  ;; change on the shared Django path must show up as a deliberate `--update`
+  ;; whose snapshot diff is the review; this expectation makes the re-pin
+  ;; explicit instead of silent.
+  (check-equal? (string-trim (file->string
+                              (build-path ".." "baseline" "type-graph.sha256")))
+                "sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2")
+  (define corpus-root
+    (simplify-path (path->complete-path (build-path ".." "django" "django" "core")) #f))
+  (cond
+    [(directory-exists? corpus-root)
+     (define files (py-files-under corpus-root))
+     (check-true (pair? files) "the pinned django core corpus is present")
+     (for ([f (in-list files)])
+       (check-equal? (path->module-path "django.core" corpus-root f)
+                     (historical-path->module-path "django.core" corpus-root f)
+                     (path->string f)))]
+    [else
+     ;; The django submodule is not initialized for this checkout; the baseline
+     ;; gate itself always requires it, so this is an explicit environment skip.
+     (printf "SKIP django module-path guard: ../django submodule not initialized\n")]))
+
 ;; ── run ─────────────────────────────────────────────────────────────
 
 (module+ main
@@ -259,4 +324,5 @@
   (test-typed-op-through-receiver-dataflow)
   (test-flask-typed-op)
   (test-real-source-frameworks)
+  (test-django-baseline-module-paths-unchanged)
   (displayln "All non-Django Python effect tests passed."))
