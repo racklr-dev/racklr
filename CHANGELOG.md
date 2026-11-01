@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Effect-row subtyping under a row-valued handler interpretation:
+  `racklr/effects/algebra/subtyping` generalizes the bridge checker's
+  capability → effect-names table to typed rows, so a handler can bound the
+  modality, budget and ops of the effects it interprets, and handler
+  chains compose (`Store via Db`, `Db via db`). The identity interpretation
+  recovers `row-subtype?`, the name-set table is recovered exactly by the
+  general relation, and `racklr-test/effects-subtyping-handlers-test.rkt` pins
+  both plus the bridge checker's verdicts as this subtyping check.
 - Confidence and coverage labels on effect edges, and transitive effect
   profiles. Every provenance ground now carries a coverage label
   (`universal` for-all structural evidence, `census-param` for a worked
