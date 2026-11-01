@@ -15,8 +15,13 @@
          racklr/tree
          racklr/gen-test)
 
+;; Only the repository's tracked grammar pair may be loaded. The suite asserts
+;; this path below (under grammars/ocaml/, outside the gitignored grammars-v4/
+;; tree), and it passes with no grammars-v4/ checkout present at all.
+(define grammar-source "../grammars/ocaml/OCamlParser.g4")
+
 (define-values (ocaml-parse ocaml-tokenize tok-type tok-value)
-  (gen-and-load "../grammars/ocaml/OCamlParser.g4"))
+  (gen-and-load grammar-source))
 
 ;; ── Helpers ─────────────────────────────────────────────────────────
 
@@ -25,6 +30,26 @@
 (define (check-token-types in expected)
   (check-equal? (tok-types in) (append expected '(EOF))
                 (format "tokenize ~s" in)))
+
+;; ── Grammar source ──────────────────────────────────────────────────
+
+;; Prove the suite exercises the tracked lexer/parser pair under grammars/ocaml/
+;; and never the untracked grammars-v4/ tree, so it runs in a clean checkout.
+(define (check-grammar-source)
+  (define resolved (simplify-path (path->complete-path grammar-source)))
+  (define as-string (path->string resolved))
+  (check-true (file-exists? resolved) "tracked parser grammar exists")
+  (check-true (regexp-match? #rx"/grammars/ocaml/OCamlParser[.]g4$" as-string)
+              "loaded path is under grammars/ocaml/")
+  (check-false (regexp-match? #rx"grammars-v4" as-string)
+               "loaded path is not under the gitignored grammars-v4/ tree")
+  ;; The parser grammar reads its lexer through tokenVocab, so the sibling
+  ;; tracked lexer must exist too (no other search path).
+  (define lexer-source
+    (string->path
+     (regexp-replace #rx"OCamlParser[.]g4$" as-string "OCamlLexer.g4")))
+  (check-true (file-exists? lexer-source)
+              "tracked lexer grammar sits beside the parser grammar"))
 
 ;; Walk every CST node and every token in the generated tree (children of a
 ;; node are nodes, tokens, or lists produced by star/plus; `none` marks an
@@ -108,6 +133,9 @@
 (define suite
   (test-suite
    "OCaml grammar/tokenizer"
+
+   (test-case "grammar source: tracked grammars/ocaml, not grammars-v4"
+     (check-grammar-source))
 
    (test-case "tokenizer: keywords"
      (for ([c keyword-cases])

@@ -16,8 +16,10 @@ carry the next line's indentation, so no `INDENT`/`DEDENT` is inserted. A
 tracked authored pass-1 grammar now lives at `grammars/haskell/Haskell.g4`;
 `grammars/haskell/README.md` records the acquisition evidence, the coverage
 table, and the pass-1 limits, and `racklr-test/gen-haskell-test.rkt` exercises
-it (14 test cases: tokenizer, layout, 32 Phase-1 parser fixtures, 15 rejects;
-observed 14/14, exit 0). Phases 2-5 (lowering, emission,
+it (15 test cases: tracked-source assertion, tokenizer, layout, 32 Phase-1
+parser fixtures, 15 rejects; observed 15/15, exit 0). The README records the
+authored grammar's generated-module cost (~93 KB / 877 lines) next to the
+vendored pair's (~370 KB / 256 parser rules). Phases 2-5 (lowering, emission,
 typeclass-to-effect mapping, round-trip tests) are open. The `Current State`
 section below records the pre-work survey, not this post-Phase-1 state.
 

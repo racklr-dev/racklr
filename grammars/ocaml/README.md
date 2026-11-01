@@ -29,8 +29,24 @@ attempting all of OCaml.
 
 Tests: `racklr-test/gen-ocaml-test.rkt` loads the parser grammar through
 `gen-and-load` with the tracked relative path `../grammars/ocaml/`, which also
-resolves `options { tokenVocab = OCamlLexer; }` from this directory. The tests
-never read the untracked `grammars-v4/` checkout.
+resolves `options { tokenVocab = OCamlLexer; }` from this directory. The suite
+asserts that the resolved path is under `grammars/ocaml/` and never under the
+untracked `grammars-v4/` tree (including that the tracked `OCamlLexer.g4` sits
+beside the parser), so it runs in a clean checkout with no `grammars-v4/`
+present.
+
+## Generated cost (observed 2026-11-01)
+
+Recorded so a future reader knows the compile cost of the authored pair, using
+the same `generate-parser-module` path as the tests:
+
+| part | source size | rules | generated Racket module |
+| --- | --- | --- | --- |
+| `OCamlLexer.g4` | 172 lines | 75 lexer + 5 fragment + 1 mode | merged into the parser's generated module via `tokenVocab` |
+| `OCamlParser.g4` | 243 lines | 63 parser rules | 88,267 bytes / 717 lines (~86 KB); generation ~5 ms |
+
+The generated module carries both halves (the parser's `tokenVocab` lexer is
+merged), so ~86 KB is the full pair's cost.
 
 ## Why a lexer/parser pair and not a combined grammar
 
@@ -106,12 +122,11 @@ The grammar is written for its actual execution model:
 - An **unterminated** `(* ... *)` comment is not reported: the tokenizer reaches
   EOF in `COMMENT` mode and returns EOF, so the comment is silently dropped.
   A real front end needs a lexer-level EOF-in-COMMENT check before lowering.
-- Comment tokens are `skip`ped without advancing the tokenizer's column/offset
-  bookkeeping, so the recorded positions of tokens after a comment on the same
-  line drift left by the comment length. Line numbers are still advanced by the
-  whitespace handler because comments' newlines are handled there. Fix the
-  skip path (or emit comments on a hidden channel) before using positions as
-  provenance.
+- Comment tokens are `skip`ped, and the generator now advances the recorded
+  line/column across skipped text, so positions after a comment are correct
+  today (verified 2026-11-01: `x (* c *) y` reports `y` at column 11). This was
+  a generator limitation when the grammar was authored; the tokenizer
+  assertions above are the regression guard.
 - Unsupported and listed as Phase-2 gaps: functors and first-class modules,
   `sig`/`val`/`include`, objects/classes/`object ... end`, polymorphic variants
   (`` `Foo ``), GADTs beyond the ordinary variant subset, `@@`/`|>`/`|>>`,

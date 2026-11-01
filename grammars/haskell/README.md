@@ -89,7 +89,9 @@ as `grammars/koka/Koka.g4`, and names the uncovered constructs as Phase-2 gaps.
   lexer rules (no `tokenVocab` split). It is loaded with
   `(gen-and-load-layout "../grammars/haskell/Haskell.g4")` from
   `racklr-test/`, so tests never touch `/tmp` or the untracked `grammars-v4/`
-  checkout.
+  checkout. The suite asserts the loaded path is under `grammars/haskell/` and
+  never `grammars-v4/`, so it runs in a clean checkout with no vendored tree
+  present.
 - **Layout against racklr's token model.** The grammar uses the generator's
   synthetic `NEWLINE`/`INDENT`/`DEDENT` tokens and names its structural tokens
   exactly `OPEN_PAREN`, `CLOSE_PAREN`, `OPEN_BRACK`, `CLOSE_BRACK`,
@@ -141,6 +143,21 @@ as `grammars/koka/Koka.g4`, and names the uncovered constructs as Phase-2 gaps.
 The suite also has 15 reject cases (missing bodies, empty `case`/`do`, unclosed
 brackets/parens, malformed `data`/`instance`/`module`, stray input) so the
 parser is not vacuously accepting everything.
+
+## Generated cost (observed 2026-11-01)
+
+Recorded so a future reader knows the authored grammar's compile cost, and can
+compare it with the vendored pair that could not parse (measured with the same
+`generate-parser-module` path the tests use):
+
+| grammar | source size | rules | generated Racket module | generation |
+| --- | --- | --- | --- | --- |
+| `grammars/haskell/Haskell.g4` (authored) | 485 lines | 74 parser + 72 lexer | 95,328 bytes / 877 lines (~93 KB) | ~5 ms |
+| upstream `haskell/` pair (not usable) | 1,742 lexer + 1,771 parser lines | 256 parser + 141 lexer + 18 fragment | 378,587 bytes / 1,917 lines (~370 KB) | ~120 ms |
+
+The authored module is about a quarter of the vendored module because it
+carries only the pass-1 rule set; the vendored figure is the size that would
+have been paid for a grammar the generator cannot execute.
 
 ## Local modifications relative to upstream
 

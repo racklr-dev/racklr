@@ -240,10 +240,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `antlr/grammars-v4` ships no OCaml grammar. Nested `(* ... *)` comments use
   the generator's lexer mode stack; `grammars/ocaml/README.md` records the
   generator constraints worked around and the pass-1 limits.
-- `racklr-test/gen-haskell-test.rkt` (14 test cases) and
-  `racklr-test/gen-ocaml-test.rkt` (24 test cases) load the tracked grammars and
+- `racklr-test/gen-haskell-test.rkt` (15 test cases) and
+  `racklr-test/gen-ocaml-test.rkt` (25 test cases) load the tracked grammars and
   assert tokenizer, layout/precedence, and Phase-1 fixture parsing plus reject
-  cases. Both exit 0 with zero failures or errors.
+  cases. Each suite also asserts the loaded grammar path is under tracked
+  `grammars/<lang>/` and never the gitignored `grammars-v4/` tree, so it runs in
+  a clean checkout; both READMEs record the authored grammars' generated-module
+  cost. Both suites exit 0 with zero failures or errors.
 
 ### Notes
 

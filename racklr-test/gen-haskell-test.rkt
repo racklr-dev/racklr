@@ -16,8 +16,13 @@
 
 ;; ── Load the tracked grammar (relative to racklr-test/) ─────────────
 
+;; Only the repository's tracked grammar may be loaded. The suite asserts this
+;; path below (under grammars/haskell/, outside the gitignored grammars-v4/
+;; tree), and it passes with no grammars-v4/ checkout present at all.
+(define grammar-source "../grammars/haskell/Haskell.g4")
+
 (define-values (hs-parse hs-tokenize tok-type tok-value)
-  (gen-and-load-layout "../grammars/haskell/Haskell.g4"))
+  (gen-and-load-layout grammar-source))
 
 ;; ── Helpers ─────────────────────────────────────────────────────────
 
@@ -42,6 +47,19 @@
   (reverse (walk (hs-parse src) '())))
 
 (define (has-tag? src tag) (and (member tag (cst-tags src)) #t))
+
+;; ── Grammar source ──────────────────────────────────────────────────
+
+;; Prove the suite exercises the tracked grammar under grammars/haskell/ and
+;; never the untracked grammars-v4/ tree, so it runs in a clean checkout.
+(define (check-grammar-source)
+  (define resolved (simplify-path (path->complete-path grammar-source)))
+  (define as-string (path->string resolved))
+  (check-true (file-exists? resolved) "tracked grammar file exists")
+  (check-true (regexp-match? #rx"/grammars/haskell/Haskell[.]g4$" as-string)
+              "loaded path is under grammars/haskell/")
+  (check-false (regexp-match? #rx"grammars-v4" as-string)
+               "loaded path is not under the gitignored grammars-v4/ tree"))
 
 ;; ── Tokenizer cases ─────────────────────────────────────────────────
 
@@ -307,6 +325,8 @@
 (define suite
   (test-suite
    "Haskell pass-1 grammar (tracked grammars/haskell/Haskell.g4)"
+   (test-case "grammar source: tracked grammars/haskell, not grammars-v4"
+     (check-grammar-source))
    (test-case "tokenizer: keywords" (check-keywords))
    (test-case "tokenizer: literals" (check-literals))
    (test-case "tokenizer: operators" (check-operators))

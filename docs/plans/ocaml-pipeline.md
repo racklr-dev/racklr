@@ -14,9 +14,12 @@ exists (`antlr/grammars-v4` has no `ocaml/` directory), so
 from the OCaml 5.2 manual with no third-party grammar text. `grammars/ocaml/README.md`
 records the acquisition evidence, the generator constraints worked around, and
 the pass-1 limits; `racklr-test/gen-ocaml-test.rkt` exercises the Phase-1
-fixture set (24 test cases; observed 24/24, exit 0). Phases 2-5 (lowering,
-emission, effect inference over handlers, round-trip tests) are open. The
-`Current State` section below records the pre-work survey.
+fixture set (25 test cases incl. the tracked-source assertion; observed 25/25,
+exit 0). `grammars/ocaml/README.md` also records the authored pair's
+generated-module cost (~86 KB / 717 lines from 63 parser + 75 lexer rules).
+Phases 2-5 (lowering, emission, effect inference over handlers, round-trip
+tests) are open. The `Current State` section below records the pre-work
+survey.
 
 ## Effect-System Status (read this first)
 
