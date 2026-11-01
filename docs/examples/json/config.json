@@ -1,0 +1,10 @@
+{
+  "name": "racklr",
+  "version": 3,
+  "enabled": true,
+  "tags": ["uir", "effects", "round-trip"],
+  "limits": {
+    "maxFiles": 907,
+    "timeout": null
+  }
+}

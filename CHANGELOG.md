@@ -39,6 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot; the v1 -> v2 migration is the identity, so version-1 payloads stay
   readable. This is the UIR-layer part of the parameter-marker work landing
   separately; constructors are exact-arity, so call sites pass `#f` explicitly.
+- Declared per-pair loss model (`racklr/loss-model.rkt`): every supported
+  source→target pair states what absorb→emit preserves, approximates, and
+  refuses, plus the normalizations the verifier applies before comparing.
+- Round-trip verifier (`racklr/loss/`): `exact` mode (normalized UIRs must be
+  equal) and `projected` mode (lossy one-way translations), effect-row
+  re-absorption from each target's native form, and `loss-observation` /
+  `loss-violation` records with canonical diff evidence.
+- `racklr-test/examples-roundtrip-test.rkt` now verifies absorb→emit→re-absorb
+  within the declared model and writes `loss-artifacts/round-trip.json`
+  (model digest, pair coverage, per-file observations, violations with
+  evidence); undeclared loss fails the harness.
+- `racklr-test/loss-model-test.rkt` covering model integrity, normalizations,
+  feature projections, native effect-row extraction, and violation
+  classification.
+- `docs/loss-model.md` documenting the declared model and the artifact.
+- Round-trip examples for JSON, JavaScript, and Koka; the Python effects
+  example exercises effect-row carrying.
 - Tracked modern Python 3 grammar in `grammars/python3/` (`Python3Lexer.g4`,
   `Python3Parser.g4`). Adds assignment expressions (`:=`, PEP 572),
   positional-only parameters (`/`, PEP 570) in `def` and `lambda`, and PEP 695
@@ -100,6 +117,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strings (method visibility, effect-entry modality, effect-policy kind,
   node-kind kind, schema-field name/type, and parameter-kind slots). JSON round
   trips now hold for every schema-declared kind.
+- `examples-roundtrip-test.rkt` pipelines now return the absorbed, emitted, and
+  re-absorbed forms, and the harness resolves each source language to its
+  declared loss-model pair. Adds a Koka round-trip pipeline.
+- JavaScript front end: `export default function`, `export default async
+  function`, and `export default class` re-absorb into UIR instead of lowering
+  to `null`; multi-parameter arrow functions keep every parameter.
+- JSON front end: corrected the generated parser's safe-codepoint character
+  class, which rejected `u`, `A`–`Z`, and `0`–`9` inside JSON strings.
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.

@@ -398,32 +398,23 @@
                               params))
             (set! params (cons (uir-spread (lower-single-expression se tk-type tk-value))
                               params))))))
+  ;; Params arrive as formalParameterArg nodes directly, or wrapped in a
+  ;; repeated group/list (`(_req, res) =>` puts `res` in a group inside the
+  ;; parsed repetition). Walk every shape uniformly so no parameter is lost.
+  (define (handle-param-node k)
+    (cond [(and (cst-node? k) (eq? (tag-of k) (quote formalParameterArg)))
+           (extract-param k)]
+          [(and (cst-node? k) (eq? (tag-of k) (quote lastFormalParameterArg)))
+           (extract-rest-param k)]
+          [(and (cst-node? k) (eq? (tag-of k) (quote group)))
+           (for ([g (kids-of k)] #:when (cst-node? g)) (handle-param-node g))]
+          [(pair? k)
+           (for ([g k] #:when (cst-node? g)) (handle-param-node g))]
+          [else (void)]))
   (when params-node
     (define fpl (find-kid params-node (quote formalParameterList)))
     (when fpl
-      (let loop ([ks (kids-of fpl)])
-        (cond [(null? ks) (void)]
-              [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote formalParameterArg)))
-               (extract-param (car ks))
-               (loop (cdr ks))]
-              [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote lastFormalParameterArg)))
-               (extract-rest-param (car ks))
-               (loop (cdr ks))]
-              [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote group)))
-               (for ([g (kids-of (car ks))] #:when (cst-node? g))
-                 (cond [(eq? (tag-of g) (quote formalParameterArg))
-                        (extract-param g)]
-                       [(eq? (tag-of g) (quote lastFormalParameterArg))
-                        (extract-rest-param g)]))
-               (loop (cdr ks))]
-              [(pair? (car ks))
-               (for ([g (car ks)] #:when (cst-node? g))
-                 (when (eq? (tag-of g) (quote formalParameterArg))
-                   (extract-param g))
-                 (when (eq? (tag-of g) (quote lastFormalParameterArg))
-                   (extract-rest-param g)))
-               (loop (cdr ks))]
-              [else (loop (cdr ks))]))))
+      (for ([k (kids-of fpl)]) (handle-param-node k))))
   (define body
     (cond
       [(not body-node) (uir-null)]
