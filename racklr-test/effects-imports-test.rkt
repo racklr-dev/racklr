@@ -208,7 +208,7 @@
   ;; tzdata is version constants + data — definitely effect-free.
   (check-equal? (module-effect-tag "tzdata.zoneinfo") 'pure)
   ;; an unconfigured library stays untagged.
-  (check-equal? (module-effect-tag "requests.api") #f)
+  (check-equal? (module-effect-tag "pandas.core.frame") #f)
   ;; the generic resolver honors a custom config independent of the default.
   (define cfg
     (list (effect-library "foo" (list (effect-rule "foo.bar" 'llm)))))

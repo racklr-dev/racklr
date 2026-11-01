@@ -22,10 +22,20 @@
   (and (positive? (string-length s))
        (char-upper-case? (string-ref s 0))))
 
-;; Filesystem path → dotted module path, relative to a package root. `root-name`
-;; is the top-level package name (e.g. "django"); `root-dir` is the package
-;; directory on disk; `p` is the file. A package's `__init__.py` maps to its
-;; directory name (NOT "...__init__"), so `db/__init__.py` → "django.db".
+;; Filesystem path → dotted module path, relative to a scan root. `root-name`
+;; is the canonical name of the scan root (e.g. "django"); `root-dir` is that
+;; root's directory on disk; `p` is the file. A package's `__init__.py` maps to
+;; its directory name (NOT "...__init__"), so `db/__init__.py` → "django.db".
+;;
+;; A module's dotted name comes from its PACKAGE CHAIN, not from the scan root:
+;; a corpus root is often a repository checkout whose top-level package lives in
+;; a subdirectory (`…/flask/src/flask/app.py` is `flask.app`, not
+;; `flask.src.flask.app`), and imports resolve only when the canonical name
+;; matches the dotted sources in the importing files. So walk up from the file's
+;; directory while each directory is a package. When the scan root is itself a
+;; package directory it contributes `root-name` (which may be dotted, e.g.
+;; scanning `django/django/core` yields "django.core"). A file outside every
+;; package (a script/docs tree) keeps the historical root-relative name.
 (define (path->module-path root-name root-dir p)
   (define rel (path->string (find-relative-path root-dir p)))
   (define comps (map path->string (explode-path (string->path rel))))
@@ -35,13 +45,43 @@
       [(null? comps-clean) '()]
       [(string=? (last comps-clean) "__init__.py") (drop-right comps-clean 1)]
       [else comps-clean]))
+  (define (packaged? d) (file-exists? (build-path d "__init__.py")))
+  (define init-file?
+    (and (pair? comps-clean) (string=? (last comps-clean) "__init__.py")))
+  ;; Directory components of the file relative to the scan root. A package
+  ;; `__init__.py` has no file component of its own; any other module's last
+  ;; component is its name.
+  (define rel-dirs
+    (map string->path
+         (if init-file? comps-no-init (drop-right comps-no-init 1))))
+  (define (dir-under comps)
+    (for/fold ([d root-dir]) ([c (in-list comps)]) (build-path d c)))
+  (define chain
+    (let loop ([i (sub1 (length rel-dirs))] [acc '()])
+      (cond
+        [(< i 0) (if (packaged? root-dir) (cons root-name acc) acc)]
+        [(packaged? (dir-under (take rel-dirs (add1 i))))
+         (loop (sub1 i)
+               (cons (path->string (list-ref rel-dirs i)) acc))]
+        [else acc])))
   (define base
-    (if (null? comps-no-init)
-        '()
-        (let ([lastc (last comps-no-init)])
-          (append (drop-right comps-no-init 1)
-                  (list (regexp-replace #rx"[.]py$" lastc ""))))))
-  (string-join (cons root-name base) "."))
+    (cond
+      [(null? chain)
+       ;; No package chain (a script directory, docs tree, ...): keep the
+       ;; historical root-relative dotted name, under the scan root's name, so
+       ;; every scanned file still gets a stable module path.
+       (cons root-name
+             (if (null? comps-no-init)
+                 '()
+                 (let ([lastc (last comps-no-init)])
+                   (append (drop-right comps-no-init 1)
+                           (list (regexp-replace #rx"[.]py$" lastc ""))))))]
+      [init-file? chain]
+      [(pair? comps-clean)
+       (append chain
+               (list (regexp-replace #rx"[.]py$" (last comps-clean) "")))]
+      [else chain]))
+  (string-join base "."))
 
 ;; Resolve an import source against the importing module's path. Absolute
 ;; sources resolve directly against the module table; relative sources (leading

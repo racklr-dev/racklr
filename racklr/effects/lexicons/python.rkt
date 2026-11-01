@@ -26,6 +26,7 @@
    io-read-verbs
    io-write-verbs
    io-other-verbs
+   domain-op-vocabulary
    builtin-class-methods))
 
 ;; Backward-compatible name for engine defaults: the Python/Django lexicon.
