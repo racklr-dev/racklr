@@ -34,6 +34,11 @@
 ;;   instance.rkt  the single hypergraph instance + typed queries
 ;;   project.rkt   the six projections + vocabulary constructors
 ;;
+;; The UIR/inference-facing adapters live in racklr/hypergraph/uir-project.rkt
+;; (effect-row -> hyperedges, structural call graph, module import graph). They
+;; are not re-exported here on purpose: the facade stays free of UIR and effect
+;; dependencies, and the adapter module carries them where a caller needs them.
+;;
 ;; The public API below is a superset of the pre-P4.1 kernel: every previously
 ;; provided name keeps its shape, so existing consumers (effervesce's graph and
 ;; query suites, the type-graph baseline tool, hypergraph-test) load unchanged.

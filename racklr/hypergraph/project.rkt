@@ -171,7 +171,7 @@
   (link 'capability-interprets (list (hg-capability-node effect) (hg-capability-node ref))))
 
 (define (hg-capability-effect-link cap-name eff-name)
-  (link 'capability-effect (list (node 'capability (cons cap-name '()))
+  (link 'capability-effect (list (hg-capability-node (cons cap-name '()))
                                  (hg-effect-node eff-name))))
 
 (define (hg-given-link ref)
@@ -214,9 +214,9 @@
     [(state) (list (hg-state-node (second d)))]
     [(action)
      (define aname (second d))
-     (define written (rest (rest d)))
+     (define written-states (cddr d))
      (cons (hg-action-node aname)
-           (map (λ (s) (hg-action-writes-link aname s)) written))]
+           (map (λ (s) (hg-action-writes-link aname s)) written-states))]
     [else (error 'capability-graph-atoms
                  "unknown capability declaration: ~a" d)]))
 
@@ -249,7 +249,9 @@
 
 ;; Build ONE hypergraph instance holding all six graphs. Each keyword takes the
 ;; data shape its projector expects; #:schema injects a different typed-edge
-;; vocabulary when a caller adds a graph kind.
+;; vocabulary when a caller adds a graph kind. For a UIR program, the adapter
+;; module racklr/hypergraph/uir-project supplies #:calls, #:effects, and
+;; #:modules from the program and its inferred rows.
 (define (build-hypergraph #:uir [program #f]
                           #:calls [calls '()]
                           #:types [relations '()]

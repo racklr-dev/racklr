@@ -15,9 +15,9 @@
 (require rackunit
          rackunit/text-ui
          racklr/hypergraph
+         racklr/hypergraph/uir-project
          racklr/uir
-         racklr/effects/contract
-         racklr/effects/infer)
+         racklr/effects/contract)
 
 ;; ── UIR fixture helpers (mirror effects-contract-test) ──────────────
 
@@ -222,8 +222,9 @@
 ;; all six graphs with typed, queryable edges": UIR, call, type, effect,
 ;; capability, module. The projections below take real data — the program's
 ;; materialized UIR, the call edges its named functions make, the effect rows
-;; inference computes, type-relation triples, an Effervesce-style capability
-;; declaration set, and the module import graph — and build ONE instance.
+;; inference computes (through the production uir-project adapters), type-
+;; relation triples, an Effervesce-style capability declaration set, and the
+;; module import graph — and build ONE instance.
 
 (define (merged-symbol text) (uir-symbol text))
 (define (merged-fn name body) (uir-fn (merged-symbol name) '() body #f #f))
@@ -242,51 +243,10 @@
     (uir-import (merged-symbol "django.db") (list (merged-symbol "models")))
     (uir-import (merged-symbol "util") '()))))
 
-(define (symbol-name? v)
-  (and (uir-symbol? v) (string->symbol (uir-symbol-name v))))
-
-;; Call-graph edges: track the enclosing named function and record every call
-;; whose callee is a plain symbol.
-(define (program-call-edges program)
-  (define edges '())
-  (define current #f)
-  (define (walk n)
-    (cond
-      [(uir-fn? n)
-       (define prev current)
-       (define nm (symbol-name? (uir-fn-name n)))
-       (when nm (set! current nm))
-       (walk (uir-fn-body n))
-       (set! current prev)]
-      [(uir-call? n)
-       (define callee-name (symbol-name? (uir-call-callee n)))
-       (when (and current callee-name)
-         (set! edges (cons (list current callee-name) edges)))
-       (for ([a (in-list (uir-call-args n))]) (walk a))]
-      [(struct? n) (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
-      [(pair? n) (walk (car n)) (walk (cdr n))]))
-  (walk program)
-  (remove-duplicates (reverse edges)))
-
-(define (program-import-sources program)
-  (define sources '())
-  (let walk ([n program])
-    (cond
-      [(uir-import? n)
-       (define src (symbol-name? (uir-import-source n)))
-       (when src (set! sources (cons src sources)))]
-      [(struct? n) (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
-      [(pair? n) (walk (car n)) (walk (cdr n))]))
-  (remove-duplicates (reverse sources)))
-
-;; Real inference output: name -> the row's effect-entry hyperedges.
-(define (program-effect-rows program)
-  (sort (for/list ([(fn-name r) (in-hash (infer-effects program))])
-          (list fn-name (map entry->link (uir-effect-row-entries r))))
-        (λ (a b) (symbol<? (first a) (first b)))))
-
+;; The production adapters from racklr/hypergraph/uir-project: the same
+;; conversions no longer live in this test file.
 (define merged-call-edges (program-call-edges merged-program))
-(define merged-effect-rows (program-effect-rows merged-program))
+(define merged-effect-rows (effect-rows->graph-rows merged-program))
 
 (define merged-type-relations
   (list (list 'subtype 'Manager 'object)
@@ -305,8 +265,7 @@
         (list 'state "cache")
         (list 'action "Load" "cache")))
 
-(define merged-module-deps
-  (list (append (list 'app) (program-import-sources merged-program))))
+(define merged-module-deps (program-module-deps merged-program 'app))
 
 (define merged-graph
   (build-hypergraph #:uir merged-program
@@ -321,6 +280,18 @@
   (define row-link
     (first (hg-out merged-graph (hg-function-node fn-name) 'fn-effect-row)))
   (sort (map effect-key (rest (link-out row-link))) symbol<?))
+
+;; The production adapters are verified directly, not only through the
+;; projectors they feed: a caller can go from a UIR program and its inference
+;; output to the #:calls / #:effects / #:modules inputs without test-local code.
+(define (test-production-adapters)
+  (check-equal? merged-call-edges
+                '((fetch open) (fetch sleep) (main fetch)))
+  (check-equal? merged-module-deps '((app django.db util)))
+  (check-equal? (map first merged-effect-rows) '(fetch main))
+  (check-equal? (map (λ (row) (sort (map effect-key (second row)) symbol<?))
+                     merged-effect-rows)
+                '((io time) (io time))))
 
 (define (test-merged-substrate)
   ;; one instance, all six graph kinds present
@@ -469,6 +440,7 @@
    (test-case "generic materialization" (test-materialize))
    (test-case "OpenCog-compatible atoms" (test-open-cog-atoms))
    (test-case "instance API" (test-graph-instance-api))
+   (test-case "production UIR/inference adapters" (test-production-adapters))
    (test-case "one instance, all six graphs" (test-merged-substrate))
    (test-case "typed queries across the merged substrate" (test-merged-typed-queries))
    (test-case "typed-edge schema" (test-typed-edge-schema))))
