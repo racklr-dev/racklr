@@ -58,12 +58,12 @@ state.
     edge — every effect edge reaches a ground, and the projection refuses an
     effect edge that has none (it runs the completeness check over the corpus).
   - **Remaining gap: the unknown-elimination obligation.** The gate answers
-    `baseline COVERAGE-FAILED sha256:14bac786…` (exit 3): the graph matches the
-    pin, and unknown functions are 250 across 66 files on the
-    `django/django/core` probe (#73). The full 907-file unknown census now
-    OOMs the harness at 4 GB, so the shared core probe is the tracked bar; the
-    last full-corpus census was 5014 unknown functions / 514 files (2026-10).
-    This is a multi-lever effort, not a single change.
+    `baseline COVERAGE-FAILED sha256:94fcb2b2…` (exit 3): the graph matches the
+    pin, and unknown functions are 236 across 65 files on the
+    `django/django/core` probe (#73, #85). The full 907-file unknown census
+    still OOMs the harness at 4 GB, so the shared core probe is the tracked
+    bar; the last full-corpus census was 5014 unknown functions / 514 files
+    (2026-10). This is a multi-lever effort, not a single change.
   - Increment landed 2026-10 (multi-level receiver chains):
     - `whole-program.rkt`: multi-level receiver-chain resolution. New
       `receiver-chain-class` (walks `a.b.c` get-chains) + `class-attr-lookup`
@@ -95,8 +95,62 @@ state.
       now correct clock reads); full corpus direct-unknown call sites 5666→5445,
       unknown functions 2981→2913. Suites green (racklr infer/imports/contract/
       python-annot/python-emit + effervesce library + check/*).
+  - Increment landed 2026-11 (unresolved-name shapes — PR #85): the missing
+    receiver-TYPE projection for stdlib/framework call chains with no import
+    handle. All new lexical knowledge is DATA; engine changes are small hooks.
+    - `library-stdlib-types.rkt` gains `stdlib-module-class-refs-data` (module
+      path → attribute → receiver TYPE) and
+      `stdlib-type-result-projections-data` (receiver TYPE + call → result
+      TYPE), extends the imported-module function result types
+      (`re.match/search/compile` → Match/Pattern, `ssl.create_default_context`
+      → SSLContext, `logging.getLogger` → Logger, `socket.socket`,
+      `wsgiref.simple_server.make_server`, `xml.dom.pulldom.parse`,
+      `xml.dom.minidom`), and adds receiver method tables for the resulting
+      types (SMTP, SSLContext, socket, Logger, Match/Pattern, email Generator,
+      OrderedDict/defaultdict, BytesIO/StringIO, executors/Future/TaskGroup,
+      DOMEventStream/Document, redis client). The Python lexicon wires these
+      into the token tables; the JS lexicon supplies empty tables.
+    - `racklr/effects/type-projection.rkt` (new engine module): call-result
+      TYPE projection for type-preserving calls — binary operators and
+      value-returning methods keep the receiver type (`Path(...) / f` →
+      `with_suffix(...)` → `.stat()`), and literal VALUES get the host's
+      literal receiver type (`xs = []; xs.append(v)`). The literal→type
+      convention is dialect DATA in `library-dialect.rkt` keyed by UIR node
+      kind, so the engine carries no type-name literals (the P2.2 grep guard
+      still passes).
+    - `class-resolve.rkt`: `imported-module-class-ref` resolves a
+      module-qualified class reference through the import graph
+      (`smtplib.SMTP()`, `concurrent.futures.ThreadPoolExecutor()`);
+      `imported-binding-module-path` normalises a submodule binding
+      (`from email import generator` → "email.generator") while a lowercase
+      class imported from its own module (`from datetime import datetime`)
+      keeps its path; `mro-property-return-type` projects a cached
+      property/method return type across the MRO
+      (`PyLibMCCache.touch` reads the inherited `@cached_property _cache`).
+    - `receiver-type.rkt`: module-qualified class values and imported module
+      results flow through `call-result-type` / `value-class-of`; `with ... as`
+      targets are tracked (`with ThreadPoolExecutor() as executor`); parameter
+      DEFAULT values seed receiver types (`def run(server_cls = WSGIServer)`).
+    - `type-relations.rkt`: a parameter bound at different call sites to
+      several external module receivers with the SAME receiver-modules effect
+      domain (`library=pylibmc | pymemcache | memcache`) gets a deterministic
+      representative; the domain table is read from the INJECTED token tables
+      (`#:tokens` threaded from the lexicon), not the Python default. A latent
+      `for/first` misuse in the parameter-index lookup had silently disabled
+      keyword-argument parameter propagation (Racket's `for/first` observes
+      only the first iteration and returns its value even when #f); fixed to
+      `for/or`.
+    - Tests: 10 new `test-projection-*` cases in
+      `racklr-test/effects-infer-test.rkt` covering every projection path.
+    - Measured (shared core probe): 249 → 215 unknown call sites, 250 → 236
+      unknown functions, 66 → 65 unknown files; shape histogram self-attr
+      39→23, local 75→63 (call-result 44→32), call-result 13→11,
+      self-method 12→11, bare-call 55→53. Baseline snapshot re-pinned to
+      `sha256:94fcb2b2…` (2637 atoms, 112 files); the gate answers
+      `baseline COVERAGE-FAILED sha256:94fcb2b2…` (exit 3) because unknown
+      leaves remain.
   - The unknown surface, tracked by shape (PR #85's census of the core probe;
-    after: 214 unknown call sites, 236 unknown functions, 65 files):
+    after: 215 unknown call sites, 236 unknown functions, 65 files):
     - `param` (36): framework callbacks, `*args` spread, un-annotated external
       callers. Needs tuple/spread parameter typing and container element-type
       dataflow (the `Page(*args, **kwargs)` paginator pattern).
@@ -118,11 +172,9 @@ state.
     - Bare stdlib/framework functions still missing from the DATA lexicons
       (`urlsplit`, `iscoroutinefunction`, `defaultdict`, `functools.*`, Django
       helpers `import_string`, `get_resolver`, `deconstructible`, ...).
-  - In flight: PR #85 projects receiver types through imported stdlib classes
-    and results (its base: 249 → 214 unknown call sites, 250 → 236 unknown
-    functions, 66 → 65 files); PR #81 covers optional-chain/`this` calls and
-    unresolved `self.m()` leaves (drg-c128); PR #80 is the real-context unknown
-    census that aims the next receiver-type levers.
+  - In flight: PR #81 covers optional-chain/`this` calls and unresolved
+    `self.m()` leaves (drg-c128); PR #80 is the real-context unknown census
+    that aims the next receiver-type levers.
 
 ## Phase 1 work landed
 

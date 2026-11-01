@@ -15,7 +15,9 @@
 ;; add a framework class here without touching the classifier.
 
 (provide stdlib-type-methods-data
-         stdlib-module-result-types-data)
+         stdlib-module-result-types-data
+         stdlib-module-class-refs-data
+         stdlib-type-result-projections-data)
 
 (define stdlib-type-methods-data
   (hash
@@ -189,7 +191,83 @@
    "HTTPResponse" (hash "read" 'io "readline" 'io "readlines" 'io "readinto" 'io
                         "getheader" 'pure "getheaders" 'pure "geturl" 'pure
                         "getcode" 'pure "status" 'pure "info" 'pure "msg" 'pure
-                        "version" 'pure "reason" 'pure "closed" 'pure "close" 'io)))
+                        "version" 'pure "reason" 'pure "closed" 'pure "close" 'io)
+   ;; ── type-projection chains (P0.3) ───────────────────────────────
+   ;; Objects whose CONSTRUCTION is resolved through the import graph
+   ;; (`smtplib.SMTP()` is a module-qualified class reference, `re.match(...)`
+   ;; a module function with a result type, `Path(...) / x` an operator call
+   ;; that preserves the receiver type). The method table below is what turns
+   ;; that tracked receiver type into an effect, so `self.connection.sendmail`
+   ;; classifies network instead of `unknown`.
+   "SMTP" (hash "starttls" 'network "login" 'network "sendmail" 'network
+                "quit" 'network "close" 'network "ehlo" 'network "noop" 'network
+                "connect" 'network "mail" 'network "rcpt" 'network
+                "data" 'network "docmd" 'network "send_message" 'network
+                "has_extn" 'network "rset" 'network "set_debuglevel" 'pure)
+   "SSLContext" (hash "load_cert_chain" 'io "load_verify_locations" 'io
+                     "set_default_verify_paths" 'io "wrap_socket" 'network
+                     "set_ciphers" 'pure "check_hostname" 'pure
+                     "set_alpn_protocols" 'pure "set_ecdh_curve" 'pure
+                     "verify_mode" 'pure "minimum_version" 'pure
+                     "maximum_version" 'pure)
+   "socket" (hash "close" 'io "send" 'network "sendall" 'network "recv" 'network
+                  "recv_into" 'network "connect" 'network "connect_ex" 'network
+                  "listen" 'network "accept" 'network "shutdown" 'network
+                  "bind" 'io "setsockopt" 'pure "settimeout" 'pure
+                  "gettimeout" 'pure "fileno" 'pure "makefile" 'pure
+                  "getsockname" 'pure "getpeername" 'pure "detach" 'pure)
+   "Logger" (hash "debug" 'io "info" 'io "warning" 'io "warn" 'io "error" 'io
+                 "critical" 'io "fatal" 'io "exception" 'io "log" 'io
+                 "setLevel" 'pure "getEffectiveLevel" 'pure "isEnabledFor" 'pure
+                 "addHandler" 'pure "removeHandler" 'pure "hasHandlers" 'pure)
+   "Match" (hash "group" 'pure "groups" 'pure "groupdict" 'pure "start" 'pure
+                 "end" 'pure "span" 'pure "expand" 'pure "__getitem__" 'pure)
+   "Pattern" (hash "match" 'pure "search" 'pure "fullmatch" 'pure
+                   "findall" 'pure "finditer" 'pure "split" 'pure
+                   "sub" 'pure "subn" 'pure)
+   ;; email.generator writes the MIME tree to its destination stream.
+   "Generator" (hash "flatten" 'io "write" 'io "clone" 'pure "close" 'io)
+   ;; builtin in-memory containers: mutation touches no external resource.
+   "OrderedDict" (hash "get" 'pure "keys" 'pure "values" 'pure "items" 'pure
+                       "update" 'pure "pop" 'pure "popitem" 'pure
+                       "setdefault" 'pure "clear" 'pure "copy" 'pure
+                       "fromkeys" 'pure "move_to_end" 'pure)
+   "defaultdict" (hash "get" 'pure "keys" 'pure "values" 'pure "items" 'pure
+                       "update" 'pure "pop" 'pure "popitem" 'pure
+                       "setdefault" 'pure "clear" 'pure "copy" 'pure
+                       "fromkeys" 'pure)
+   "BytesIO" (hash "read" 'pure "readline" 'pure "readlines" 'pure
+                   "write" 'pure "writelines" 'pure "getvalue" 'pure
+                   "seek" 'pure "tell" 'pure "truncate" 'pure "close" 'pure
+                   "flush" 'pure "readable" 'pure "writable" 'pure
+                   "seekable" 'pure)
+   "StringIO" (hash "read" 'pure "readline" 'pure "readlines" 'pure
+                    "write" 'pure "writelines" 'pure "getvalue" 'pure
+                    "seek" 'pure "tell" 'pure "truncate" 'pure "close" 'pure
+                    "flush" 'pure "readable" 'pure "writable" 'pure
+                    "seekable" 'pure)
+   ;; executors schedule work; the submitted callable's own effects are its own
+   ;; rows, so scheduling/waiting here is pure.
+   "ThreadPoolExecutor" (hash "submit" 'pure "map" 'pure "shutdown" 'pure
+                              "__enter__" 'pure "__exit__" 'pure)
+   "ProcessPoolExecutor" (hash "submit" 'pure "map" 'pure "shutdown" 'pure
+                               "__enter__" 'pure "__exit__" 'pure)
+   "Future" (hash "result" 'pure "exception" 'pure "done" 'pure "cancel" 'pure
+                  "add_done_callback" 'pure "running" 'pure)
+   "TaskGroup" (hash "create_task" 'pure "__aenter__" 'pure "__aexit__" 'pure)
+   ;; xml.dom.pulldom streams events from an already-open source: reading the
+   ;; stream is io, expanding a parsed node is in-memory work.
+   "DOMEventStream" (hash "getEvent" 'io "expandNode" 'pure "next" 'io)
+   "Document" (hash "toxml" 'pure "toprettyxml" 'pure "writexml" 'io
+                    "getElementsByTagName" 'pure "appendChild" 'pure)
+   ;; redis-py client objects: every command is a cache round trip.
+   "Redis" (hash "set" 'cache "get" 'cache "delete" 'cache "expire" 'cache
+                 "persist" 'cache "exists" 'cache "incr" 'cache "decr" 'cache
+                 "mget" 'cache "mset" 'cache "pipeline" 'cache "flushdb" 'cache
+                 "keys" 'cache "ttl" 'cache "setex" 'cache "hset" 'cache
+                 "hget" 'cache "publish" 'cache "eval" 'cache)
+   "ConnectionPool" (hash "from_url" 'pure "disconnect" 'io "reset" 'io)
+   "DriverInfo" (hash "add_upstream_driver" 'pure)))
 
 ;; module-path -> (function-name -> result-type-name) for stdlib/framework
 ;; functions whose RESULT is a receiver the next call can flow through
@@ -213,4 +291,76 @@
    "datetime" (hash "now" "datetime" "utcnow" "datetime" "today" "datetime"
                     "fromtimestamp" "datetime" "fromordinal" "datetime"
                     "combine" "datetime" "strptime" "datetime")
-   "hmac" (hash "new" "hmac")))
+   "hmac" (hash "new" "hmac")
+   ;; Result types of stdlib module FUNCTIONS whose value is a receiver the next
+   ;; call flows through (`m = re.match(...)` then `m.groups()`,
+   ;; `m = logging.getLogger(...)` then `m.info(...)`). Keys are the module path
+   ;; the import graph resolved for the binding root.
+   "re" (hash "match" "Match" "search" "Match" "fullmatch" "Match"
+              "compile" "Pattern")
+   "ssl" (hash "create_default_context" "SSLContext")
+   "logging" (hash "getLogger" "Logger")
+   "socket" (hash "socket" "socket" "create_connection" "socket")
+   "wsgiref.simple_server" (hash "make_server" "WSGIServer")
+   "xml.dom.pulldom" (hash "parse" "DOMEventStream")
+   "xml.dom.minidom" (hash "parse" "Document" "parseString" "Document")))
+
+;; module-path -> (attribute-name -> receiver-TYPE-name) for module-qualified
+;; CLASS references (`smtplib.SMTP`, `ssl.SSLContext`, `concurrent.futures.
+;; ThreadPoolExecutor`). A member access whose root binding resolves through the
+;; import graph to a module handle is a CLASS VALUE when this table names the
+;; attribute; the result flows through stdlib-type-methods-data exactly like a
+;; `from module import Class` constructor. This is receiver-TYPE data for the
+;; import graph, mirroring stdlib-module-result-types-data for module functions.
+;;
+;; Only entries here are treated as module-qualified class references: an
+;; unknown attribute of an external module is NOT guessed from capitalization,
+;; so a mis-guessed class (a common constant or namespace) cannot be tracked.
+(define stdlib-module-class-refs-data
+  (hash
+   "smtplib" (hash "SMTP" "SMTP" "SMTP_SSL" "SMTP")
+   "ssl" (hash "SSLContext" "SSLContext")
+   "socket" (hash "socket" "socket")
+   "email.generator" (hash "Generator" "Generator" "BytesGenerator" "Generator")
+   "collections" (hash "OrderedDict" "OrderedDict" "defaultdict" "defaultdict")
+   "concurrent.futures" (hash "ThreadPoolExecutor" "ThreadPoolExecutor"
+                              "ProcessPoolExecutor" "ProcessPoolExecutor"
+                              "Future" "Future")
+   "asyncio" (hash "TaskGroup" "TaskGroup" "Task" "Task")
+   "io" (hash "BytesIO" "BytesIO" "StringIO" "StringIO")
+   "xml.dom.pulldom" (hash "DOMEventStream" "DOMEventStream")
+   "xml.dom.minidom" (hash "Document" "Document")
+   "redis" (hash "Redis" "Redis" "ConnectionPool" "ConnectionPool"
+                 "DriverInfo" "DriverInfo")))
+
+;; receiver-TYPE -> call -> result-TYPE for CALLS that preserve the receiver
+;; type: a binary operator (`po_path = Path(dirpath) / f` lowers to
+;; `(call (symbol "/") (list (call Path ...) (str f)))`) or a value-returning
+;; method (`mo_path = po_path.with_suffix(".mo")`). Without this table the
+;; result has no type, so a later `.stat()` / `.parent` stays `unknown`.
+;; pathlib joins/suffix operations return the same path type.
+(define stdlib-type-result-projections-data
+  (hash "Path" (hash "/" "Path" "joinpath" "Path" "with_suffix" "Path"
+                     "with_name" "Path" "with_stem" "Path" "relative_to" "Path"
+                     "resolve" "Path" "absolute" "Path" "expanduser" "Path"
+                     "parent" "Path")
+        "PosixPath" (hash "/" "PosixPath" "joinpath" "PosixPath"
+                          "with_suffix" "PosixPath" "with_name" "PosixPath"
+                          "relative_to" "PosixPath" "resolve" "PosixPath"
+                          "absolute" "PosixPath" "parent" "PosixPath")
+        "WindowsPath" (hash "/" "WindowsPath" "joinpath" "WindowsPath"
+                            "with_suffix" "WindowsPath" "with_name" "WindowsPath"
+                            "relative_to" "WindowsPath" "resolve" "WindowsPath"
+                            "absolute" "WindowsPath" "parent" "WindowsPath")
+        "PurePath" (hash "/" "PurePath" "joinpath" "PurePath"
+                         "with_suffix" "PurePath" "with_name" "PurePath"
+                         "relative_to" "PurePath" "parent" "PurePath")
+        "PurePosixPath" (hash "/" "PurePosixPath" "joinpath" "PurePosixPath"
+                              "with_suffix" "PurePosixPath"
+                              "with_name" "PurePosixPath"
+                              "relative_to" "PurePosixPath" "parent" "PurePosixPath")
+        "PureWindowsPath" (hash "/" "PureWindowsPath" "joinpath" "PureWindowsPath"
+                                "with_suffix" "PureWindowsPath"
+                                "with_name" "PureWindowsPath"
+                                "relative_to" "PureWindowsPath"
+                                "parent" "PureWindowsPath")))

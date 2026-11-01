@@ -28,6 +28,7 @@
  dialect-runtime-primitives dialect-binding-callees
  dialect-method-receiver-offset dialect-init-method-name
  dialect-keyword-arg-callee dialect-annotation-callee
+ dialect-literal-receiver-types
  ;; lexicon
  lexicon? lexicon
  lexicon-name lexicon-tokens lexicon-import-config
@@ -50,7 +51,11 @@
    method-receiver-offset ; exact-nonnegative-integer: implicit param(s) a method takes
    init-method-name       ; string or #f: constructor method name (`__init__`)
    keyword-arg-callee     ; string or #f: keyword-argument encoding callee (`kwarg`)
-   annotation-callee)     ; string or #f: effect-row annotation wrapper callee
+   annotation-callee      ; string or #f: effect-row annotation wrapper callee
+   ;; node-kind symbol -> receiver TYPE name for a literal VALUE (`string` →
+   ;; "str", `record` → "dict"). A literal's receiver type is a host-language
+   ;; convention, so it is DATA here rather than a name literal in the engine.
+   literal-receiver-types) ; hash: symbol -> string
   #:transparent)
 
 ;; The whole host lexicon: token tables, their dialect, import-tag rules, the

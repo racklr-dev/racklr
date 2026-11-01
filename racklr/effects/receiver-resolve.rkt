@@ -266,8 +266,8 @@
         ;; class instead of `unknown`.
         (or (hash-ref (receiver-types-self-attrs rt) attr #f)
             (and owner return-types attr
-                 (hash-ref return-types
-                           (cons comp (qualified-name-symbol owner attr)) #f)))]
+                 (mro-property-return-type comp owner attr return-types
+                                           class-defs comp-supers)))]
        [else
         (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
                                         owner return-types methods fn-defs known import-env

@@ -37,6 +37,7 @@
   effect-tokens-protocol-method-names effect-tokens-string-method-names
   effect-tokens-pure-method-names
   effect-tokens-module-result-types effect-tokens-receiver-modules
+  effect-tokens-module-class-refs effect-tokens-type-result-projections
   effect-tokens-pure-native-builtin-names
   effect-tokens-dialect
   default-effect-tokens)
@@ -62,6 +63,7 @@
    pure-constructor-names pure-builtin-names protocol-method-names
    string-method-names pure-method-names
    module-result-types receiver-modules
+   module-class-refs type-result-projections
    ;; Host-NATIVE pure procedures (the compiler's own Racket front end, from
    ;; library-racket-tokens.rkt). A dedicated table: it must never feed the
    ;; Python/JS value-constructor table receiver typing reads, so a Racket
@@ -273,6 +275,12 @@
    ;; (library=pylibmc) tracks `pylibmc` and `self._lib.get(...)` classifies
    ;; as cache instead of the db method-name fallback.
    (hash "pylibmc" 'cache "pymemcache" 'cache "memcache" 'cache "redis" 'cache)
+   ;; ── module-qualified CLASS references (`smtplib.SMTP`, `ssl.SSLContext`):
+   ;; module path → attribute → receiver TYPE. See library-stdlib-types.rkt.
+   stdlib-module-class-refs-data
+   ;; ── receiver-type → call → result-type for type-preserving projections
+   ;; (pathlib's `/` and `with_suffix` keep the path type).
+   stdlib-type-result-projections-data
    ;; ── host-NATIVE pure procedures (the Racket corpus front end) ──
    racket-pure-builtins
    ;; ── host naming / encoding conventions ──

@@ -53,7 +53,10 @@
    #f
    ;; The JS lowerer does not synthesize keyword-argument calls.
    #f
-   "__withEffects"))
+   "__withEffects"
+   ;; JS literal receiver types are not modeled yet (no String/Array type
+   ;; tables in this lexicon).
+   (hash)))
 
 ;; ── token tables ────────────────────────────────────────────────────
 (define javascript-lexicon
@@ -147,6 +150,10 @@
     (hash)
     ;; module receivers resolved to a domain by receiver-type dataflow
     (hash "fs" 'io "axios" 'network "child_process" 'process)
+    ;; module-qualified class references: none for the JS host yet
+    (hash)
+    ;; type-preserving call projections: none for the JS host yet
+    (hash)
     ;; native pure procedures: none for the JS host (its pure names are the
     ;; whole-module / receiver-type tables above)
     (set)

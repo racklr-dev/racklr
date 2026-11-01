@@ -40,7 +40,8 @@
   tokens-synthetic-callees tokens-comprehension-callees
   tokens-wrapper-callees tokens-runtime-primitives tokens-binding-callees
   tokens-method-receiver-offset tokens-init-method-name
-  tokens-keyword-arg-callee tokens-annotation-callee)
+  tokens-keyword-arg-callee tokens-annotation-callee
+  tokens-literal-receiver-type)
 
 ;; The dialect travels inside the token tables (effect-tokens), so every
 ;; existing optional `[tokens default-effect-tokens]` parameter is a complete
@@ -82,3 +83,9 @@
   (dialect-keyword-arg-callee (effect-tokens-dialect tokens)))
 (define (tokens-annotation-callee tokens)
   (dialect-annotation-callee (effect-tokens-dialect tokens)))
+
+;; Receiver TYPE name (string) a literal VALUE of `kind` has in this host, or
+;; #f. The mapping is dialect DATA (a literal's receiver type is a host
+;; convention), so the engine never carries the type-name literals.
+(define (tokens-literal-receiver-type tokens kind)
+  (hash-ref (dialect-literal-receiver-types (tokens-dialect tokens)) kind #f))

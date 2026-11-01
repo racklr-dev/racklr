@@ -263,7 +263,11 @@
                 (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
           [else #f]))
       (define (param-index ps name)
-        (for/first ([i (in-naturals)] [p (in-list ps)])
+        ;; `for/first` returns the FIRST iteration's value even when it is #f
+        ;; (it does not scan to the first match); `for/or` finds the first
+        ;; non-#f index. Using for/first here silently disabled keyword-argument
+        ;; parameter propagation for every parameter not at index 0.
+        (for/or ([i (in-naturals)] [p (in-list ps)])
           (and (eq? (param-name p) name) i)))
       ;; Record a param binding; `self-offset` skips `self`/`cls` for methods.
       (define (note-positional! key self-offset positional)
@@ -307,11 +311,37 @@
                   (note-positional! ik (tokens-method-receiver-offset tokens) positional)
                   (note-kwargs! ik kwargs))])])))
       (walk-body (body-of k) visit!))
+    ;; One class is the sound projection. Several classes are still usable when
+    ;; every one is an external MODULE receiver with the SAME receiver-modules
+    ;; effect domain (`library=pylibmc | pymemcache | memcache` at different
+    ;; cache-backend call sites): the module-domain fallback classifies every
+    ;; method on any of them identically, so a deterministic representative
+    ;; carries the same coarse domain. Any non-module or mixed-domain candidate
+    ;; stays unresolved. The receiver-modules table is read from the INJECTED
+    ;; token tables (`tokens` threaded from the lexicon), not the Python default,
+    ;; so a non-Python host merges against its own data.
+    (define (module-domain c)
+      (and c
+           (let* ([s (symbol->string c)]
+                  [m (regexp-match #rx"^([^.]+)" s)]
+                  [tbl (effect-tokens-receiver-modules tokens)])
+             (or (hash-ref tbl s #f)
+                 (and m (hash-ref tbl (cadr m) #f))))))
+    (define (resolve-candidate uniq)
+      (cond
+        [(null? uniq) #f]
+        [(= (length uniq) 1) (car uniq)]
+        [else
+         (define doms (map module-domain uniq))
+         (and (andmap values doms)
+              (apply equal? doms)
+              (car (sort uniq symbol<?)))]))
     (define out (make-hash))
     (for ([(kk cls-list) (in-hash cands)])
       (define uniq (remove-duplicates cls-list))
-      (when (and (= (length uniq) 1) (zero? (hash-ref unres kk 0)))
-        (hash-set! out kk (car uniq))))
+      (when (zero? (hash-ref unres kk 0))
+        (define c (resolve-candidate uniq))
+        (when c (hash-set! out kk c))))
     out)
 
   (define (collect-returns!)

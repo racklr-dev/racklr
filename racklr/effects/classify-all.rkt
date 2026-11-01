@@ -65,6 +65,7 @@
      ;; it is a class, even though its body is outside the corpus.
      (define ctor (and (not rcls)
                        (or (constructor-class callee class-defs tokens)
+                           (imported-module-class-ref callee comp import-env tokens)
                            (and nm comp import-env
                                 (imported-class-ref nm comp import-env)))))
      (cond

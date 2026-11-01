@@ -23,7 +23,11 @@
          mro-method-keys
          method-callee-keys
          bare-function-key
-         corpus-call-return-type)
+         corpus-call-return-type
+         imported-module-class-ref
+         imported-binding-module-path
+         member-access-fields
+         mro-property-return-type)
 
 ;; Component defining a class named `class-name`, from the point of view of
 ;; `comp` (the file making the reference). A local definition wins; a
@@ -209,3 +213,84 @@
                            [(not t) (loop (cdr mks) kt)]
                            [(eq? kt t) (loop (cdr mks) t)]
                            [else #f])]))))))))
+
+
+;; ── imported receiver-TYPE projection ────────────────────────────────
+
+;; Effective MODULE PATH of an import binding used as a receiver root. A plain
+;; `import pkg.mod` binds a module handle on the dotted path; a `from pkg import
+;; submod` binding for a lowercase member is synthesized as an fn handle whose
+;; path is the PARENT package and whose name is the submodule, so its effective
+;; module path is parent.submod (`from email import generator` →
+;; "email.generator"). A lowercase class imported from its own module
+;; (`from datetime import datetime`) keeps its path: appending its name would
+;; invent a non-existent "datetime.datetime".
+(define (imported-binding-module-path h root)
+  (and (handle? h) (handle-path h)
+       (cond
+         [(eq? (handle-kind h) 'module) (handle-path h)]
+         [(and (eq? (handle-kind h) 'fn) (handle-name h) root
+               (string=? (handle-name h) (symbol->string root))
+               (not (string=? (handle-name h) (last-component (handle-path h)))))
+          (string-append (handle-path h) "." (handle-name h))]
+         [else (handle-path h)])))
+
+;; Dotted field path of a member-access expression, root first:
+;; `concurrent.futures.ThreadPoolExecutor` → (concurrent futures ThreadPoolExecutor).
+;; Returns #f when any link is not a plain attribute access.
+(define (member-access-fields c)
+  (cond
+    [(uir-get? c)
+     (define f (get-field-symbol (uir-get-field c)))
+     (define rest (member-access-fields (uir-get-base c)))
+     (and f rest (append rest (list f)))]
+    [(uir-var? c) (list (string->symbol (uir-symbol-name (uir-var-name c))))]
+    [(uir-symbol? c) (list (string->symbol (uir-symbol-name c)))]
+    [else #f]))
+
+;; Receiver TYPE named by a module-qualified CLASS reference (`smtplib.SMTP`,
+;; `ssl.SSLContext`, `concurrent.futures.ThreadPoolExecutor`): the callee's root
+;; binding resolves through the import graph to a module handle, its intermediate
+;; fields extend the module path, and the final field is looked up in that
+;; module's class table (stdlib-module-class-refs-data). This is the
+;; module-qualified mirror of `imported-class-ref`: `from x import C` binds a
+;; class handle directly, while `import x; x.C(...)` names the same class
+;; through x's module handle. Unknown attributes are NOT guessed from
+;; capitalization, so a mis-guessed class cannot be tracked.
+(define (imported-module-class-ref callee comp import-env tokens)
+  (and import-env comp (member-access-callee? callee)
+       (let* ([root (dotted-root callee)]
+              [fields (member-access-fields callee)]
+              [attr (effect-op-of-callee callee)]
+              [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+              [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+              [h (and e root (hash-ref e (symbol->string root) #f))]
+              [path0 (imported-binding-module-path h root)])
+         (and path0 (memq (handle-kind h) '(module fn))
+              attr (pair? fields) (>= (length fields) 2)
+              (let* ([middle (drop-right (rest fields) 1)]
+                     [path (if (null? middle)
+                               path0
+                               (string-append path0 "."
+                                              (string-join (map symbol->string middle) ".")))]
+                     [table (hash-ref (effect-tokens-module-class-refs tokens) path #f)]
+                     [t (and table (hash-ref table (symbol->string attr) #f))])
+                (and t (string->symbol t)))))))
+
+;; Projected return class of METHOD `attr` on `owner` (or the nearest class in
+;; its MRO that defines it): a `@cached_property` / `@property` read is projected
+;; to the class its body returns, so a subclass method reading a property
+;; inherited from a base class resolves too.
+(define (mro-property-return-type comp owner attr return-types class-defs comp-supers)
+  (define start (resolve-class-component owner comp class-defs))
+  (define seen (make-hash))
+  (let loop ([c start] [cls owner])
+    (cond
+      [(not (and c cls)) #f]
+      [(hash-has-key? seen (cons c cls)) #f]
+      [else
+       (hash-set! seen (cons c cls) #t)
+       (or (hash-ref return-types (cons c (qualified-name-symbol cls attr)) #f)
+           (for/or ([sr (in-list (hash-ref comp-supers (cons c cls) '()))])
+             (let ([c2 (car sr)] [s (cdr sr)])
+               (and c2 s (loop c2 s)))))])))

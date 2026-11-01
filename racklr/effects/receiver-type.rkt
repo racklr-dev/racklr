@@ -18,6 +18,7 @@
          racklr/effects/class-resolve
          racklr/effects/imports
          racklr/effects/library-tokens
+         racklr/effects/type-projection
          racklr/effects/lexicon)
 
 (provide
@@ -137,14 +138,23 @@
               [func (effect-op-of-callee callee)]
               [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
               [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
-              [h (and e root (hash-ref e (symbol->string root) #f))])
-         (and root func (handle? h) (handle-path h)
-              (let* ([path (handle-path h)]
+              [h (and e root (hash-ref e (symbol->string root) #f))]
+              [path0 (imported-binding-module-path h root)])
+         (and root func path0
+              (let* ([path path0]
                      [table (hash-ref (effect-tokens-module-result-types tokens) path #f)]
                      [t (and table (hash-ref table (symbol->string func) #f))]
-                     [rtn (and t (string->symbol t))])
+                     [rtn (and t (string->symbol t))]
+                     ;; A `from pkg import submod` fn-handle names a MODULE
+                     ;; (`from xml.dom import pulldom`), so its table entries
+                     ;; are trusted like a module handle's.
+                     [module-binding?
+                      (or (eq? (handle-kind h) 'module)
+                          (and (eq? (handle-kind h) 'fn) (handle-name h)
+                               (equal? path (string-append (handle-path h) "."
+                                                           (handle-name h)))))])
                 (and rtn
-                     (or (eq? (handle-kind h) 'module)
+                     (or module-binding?
                          ;; A non-module handle (`from datetime import datetime`,
                          ;; which the lowercase class name synthesizes as an fn
                          ;; handle) may borrow the module's table entry only when
@@ -188,7 +198,11 @@
              nm))
       (let ([nm (callee-name callee)])
         (and nm comp import-env (imported-class-ref nm comp import-env)))
-      (imported-module-result-type callee comp import-env tokens)))
+      (imported-module-class-ref callee comp import-env tokens)
+      (imported-module-result-type callee comp import-env tokens)
+      (method-result-type callee
+                          (λ (base) (receiver-class-of rt base tokens))
+                          tokens)))
 
 ;; Class a VALUE expression resolves to under a receiver-type environment `rt`:
 ;; a tracked call result, a local alias, a self/cls attribute, or a bare class
@@ -221,7 +235,18 @@
                                      tokens import-env comp owner)])
               (and a b (eq? a b) a))))]
     [(uir-call? value)
-     (call-result-type (uir-call-callee value) class-defs tokens rt import-env comp)]
+     (or (operator-result-type
+          value
+          (λ (v) (value-class-of v rt class-defs tokens import-env comp owner))
+          tokens)
+         (call-result-type (uir-call-callee value) class-defs tokens rt import-env comp))]
+    ;; Literal receiver types: a local or self-attr bound to a container /
+    ;; string literal has that host literal type (the mapping is dialect DATA),
+    ;; so `xs = []; xs.append(v)` resolves through the builtin type table
+    ;; instead of `unknown`. A Python bytes literal lowers to uir-string; bytes
+    ;; methods are also in-memory, so the string type keeps the effect
+    ;; classification sound where the exact type is bytes.
+    [(literal-value-type value tokens)]
     [(uir-var? value)
      (define nm (string->symbol (uir-symbol-name (uir-var-name value))))
      (or (and owner (tokens-self-name? tokens nm) owner)
@@ -243,6 +268,9 @@
         ;; domain is the module's domain in classify-all.
         (define bm (receiver-class-of rt (uir-get-base value)))
         (cond
+          ;; `module.Class` where `module` is an imported module handle: the
+          ;; class table names the attribute (smtplib.SMTP → SMTP).
+          [(imported-module-class-ref value comp import-env tokens)]
           [(and attr bm (module-receiver? bm tokens))
            (string->symbol (format "~a.~a" bm attr))]
           ;; A subscript into an imported module/fn singleton
@@ -295,23 +323,30 @@
                               #:comp-supers [comp-supers #f])
   (define locals (make-hash))
   (define self-attrs (hash-copy base-attrs))
-  ;; Seed parameter types from type annotations (`def f(x: QuerySet)`): the
-  ;; annotation names a known corpus / stdlib / imported class, so a later
-  ;; `x.m(...)` resolves through receiver-type dataflow rather than falling to
-  ;; `unknown`. Subscripted annotations (`List[Item]`) are not tracked yet.
+  (define (value-class value)
+    (or (and (uir-call? value) return-types methods fn-defs known comp-supers
+             (corpus-call-return-type (uir-call-callee value) comp class-defs owner
+                                      methods fn-defs known comp-supers return-types
+                                      tokens))
+        (value-class-of value (receiver-types locals self-attrs)
+                        class-defs tokens import-env comp owner)))
+  ;; Seed parameter types: from the annotation (`def f(x: QuerySet)`) when there
+  ;; is one, else from the parameter's DEFAULT VALUE (`def run(server_cls =
+  ;; WSGIServer)`). Both name a known corpus / stdlib / imported class, so a
+  ;; later `x.m(...)` resolves through receiver-type dataflow rather than
+  ;; falling to `unknown`. Subscripted annotations (`List[Item]`) are not
+  ;; tracked yet.
   (for ([p (in-list params)])
     (when (uir-typed-param? p)
       (define pname (and (uir-symbol? (uir-typed-param-name p))
                          (string->symbol (uir-symbol-name (uir-typed-param-name p)))))
-      (define pcls (bare-class-value (uir-typed-param-type p) class-defs
-                                     tokens import-env comp))
-      (when (and pname pcls) (hash-set! locals pname pcls))))
-  (define (value-class value)
-    (or (and (uir-call? value) return-types methods fn-defs known comp-supers
-             (corpus-call-return-type (uir-call-callee value) comp class-defs owner
-                                      methods fn-defs known comp-supers return-types))
-        (value-class-of value (receiver-types locals self-attrs)
-                        class-defs tokens import-env comp owner)))
+      (when pname
+        (define ann (uir-typed-param-type p))
+        (define def (uir-typed-param-default p))
+        (define pcls (or (and ann (bare-class-value ann class-defs
+                                                    tokens import-env comp))
+                         (and (not ann) def (value-class def))))
+        (when pcls (hash-set! locals pname pcls)))))
   (define (process-set! n)
     (define cls (value-class (uir-set!-value n)))
     (when cls
@@ -323,7 +358,27 @@
         [(set!-lhs-symbol lhs)
          => (λ (nm) (hash-set! locals nm cls))]
         [else (void)])))
-  (walk-body body (λ (n) (when (uir-set!? n) (process-set! n))))
+  ;; `with ctx() as name:` binds the context manager's RESULT type: track the
+  ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
+  ;; later `executor.submit(...)` resolves instead of staying `unknown`.
+  (define (process-with! n)
+    (for ([item (in-list (uir-with-items n))])
+      (when (and (pair? item) (pair? (cdr item)))
+        (define target (second item))
+        (define nm (cond
+                     [(uir-var? target)
+                      (string->symbol (uir-symbol-name (uir-var-name target)))]
+                     [(uir-symbol? target)
+                      (string->symbol (uir-symbol-name target))]
+                     [else #f]))
+        (when nm
+          (define cls (value-class (first item)))
+          (when cls (hash-set! locals nm cls))))))
+  (walk-body body (λ (n)
+                    (cond
+                      [(uir-set!? n) (process-set! n)]
+                      [(uir-with? n) (process-with! n)]
+                      [else (void)])))
   (receiver-types locals self-attrs))
 
 ;; Overlay `overlay`'s entries onto `base` (overlay wins on a key collision).
