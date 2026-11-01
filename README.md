@@ -163,6 +163,25 @@ One contract for every target: `render : UIR × (or/c #f uir-effect-row?) → st
 
 A supplied row is rendered in the target's native vocabulary where one exists (Python `@__withEffects({...})`, JavaScript/HTML `__withEffects({...}, fn)`, Koka `fun f() : <llm, db>` / `: total`, Clojure `:__effects__` metadata) and refused with an error where it does not (JSX/DOM/JSON/Effervesce), so it is never silently dropped. Omitting the row keeps the pre-contract one-argument call shape.
 
+### Self-emit: the compiler emits itself into a target (P6.2)
+
+`racklr/self-emit.rkt` is the reflexive step on top of the emit contract: a compiler is a UIR program (a "self-image"), and self-emit takes that program, renders it through `(emit target uir row)`, writes the generated source to disk, runs it when the target has a runtime here, and reports whether the effect rows survived in the target's native vocabulary. It is image-agnostic by design — the self-image is a registry entry (`register-self-image!`) or a serialized UIR file (`load-self-image-file`, s-expression or JSON), so the tower's own lowered UIR plugs into the same path without a driver change.
+
+`racklr/self/seed/` is the runnable self-image that proves the path today: a compiler written entirely as a UIR program — `tokenize`, `parse`, `token_atom`, `emit_expr`, `emit_program`, `compile_source`, `main` — with an explicit effect row on every function: seven named functions, six of them pure stages and `main` carrying the `io` row. Emitted into Python it is a standalone compiler: it reads a small s-expression program, prints a runnable Python program, and that compiled program runs. The rows travel with it: `@__withEffects({})` on the pure stages, `@__withEffects({"io": {"modality": "may"}})` on `main`, and the io calls become `__perform(...)` runtime-guarded operations.
+
+```bash
+# Emit the seed compiler into Python, then run the emitted compiler on a sample.
+racket tools/emit-self.rkt --image kernel --target python --out /tmp/self-emit \
+        --run --stdin '(+ 1 (* 2 3))'
+# emitted python -> /tmp/self-emit/seed-compiler.py
+# rows-native?: #t
+# run: ok (exit 0)
+# output:
+# print((1 + (2 * 3)))
+```
+
+Python is the runnable target wired up today (`python3`); JavaScript/JSX are runnable under `node` for programs whose semantics are portable, and the other targets emit through the same contract but their toolchains are not wired up. The honest loss model lives in `docs/self-emit.md`. This change ships the P6.2 emit half of Phase 6 — verified end-to-end on a compiler-as-UIR program — plus the serialized-UIR seam that the P6.1 self-image (the tower's own modules lowered to UIR, a separate ticket) plugs into without a driver change; the P6.1 lowering itself is not part of this change.
+
 ## Generated Parser Design
 
 ### Lexer (tokenize)
@@ -216,6 +235,9 @@ racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
 racket uir-test.rkt                  # UIR types + serialization
 racket scan-python-test.rkt          # full-tree scanner bucket classification
+racket self-seed-test.rkt            # seed compiler as a UIR program (emit + run)
+racket self-emit-test.rkt            # self-emit driver, CLI, native rows, P6.1 seam
+racket self-emit-integration-test.rkt # P6.2 end-to-end: emit compiler, run it, run its output
 ```
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.

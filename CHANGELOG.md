@@ -175,6 +175,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corpus: 907 `ok`, 0 blockers.
 - `racklr-test/scan-python-test.rkt` covering the scanner's bucket
   classification and fallback detection on a fixture tree.
+- The self-emit path (P6.2): `racklr/self-emit.rkt` takes a compiler-as-UIR
+  program, emits it through the P3 contract (`emit`), writes the generated
+  source, runs it where the target runtime is wired up, and reports whether the
+  effect rows survived in the target's native vocabulary. The self-image is a
+  registry entry or a serialized UIR file (s-expression or JSON), so a lowered
+  compiler self-image plugs in with no driver change.
+  `tools/emit-self.rkt` is the CLI (`--image kernel --target python --run`),
+  and `racklr/self/seed/` is the runnable seed self-image: a compiler written
+  entirely as a UIR program (`tokenize`, `parse`, `token_atom`, `emit_expr`,
+  `emit_program`, `compile_source`, `main`) with an explicit effect row on
+  every function (seven named functions: six pure stages, `main` with the
+  `io` row). Emitted into Python it is a standalone compiler whose own output is runnable Python, and
+  its rows travel as `@__withEffects({...})` with `__perform(...)` runtime
+  guards.
+- `racklr-test/self-seed-test.rkt`, `racklr-test/self-emit-test.rkt` and
+  `racklr-test/self-emit-integration-test.rkt`: the seed program's shape and
+  rows, the driver/CLI and the native-row guarantee, the serialized-UIR seam,
+  and the end-to-end proof (emit the compiler, run it, run the program it
+  compiles) with real `python3` execution.
+- `docs/self-emit.md` documents the self-emit design, the P6.1 seam and the
+  honest loss model (Python is the runnable target today).
+
 
 ### Changed
 
