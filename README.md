@@ -194,6 +194,7 @@ cd racklr-test
 racket effects-infer-test.rkt        # effect inference
 racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
 racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
+racket effects-subtyping-handlers-test.rkt # subtyping laws + row-valued handler interpretation + bridge equivalence
 racket provenance-test.rkt           # effect-edge provenance + graph query
 racket effect-profile-test.rkt       # confidence/coverage labels + transitive profiles
 racket effects-contract-test.rkt     # contract checking
