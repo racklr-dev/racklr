@@ -173,7 +173,8 @@
                                                                comp #f))
                                                 (first parts)
                                                 (last parts)))
-                           (first parts))))
+                           (first parts)
+                           #:file comp)))
     (define callees '())
     (define param-names
       (let ([ps (or (hash-ref fn-params k #f) (hash-ref method-params k #f))])
@@ -183,6 +184,10 @@
                                     (uir-symbol? (uir-typed-param-name p))))
                (string->symbol (uir-symbol-name (uir-typed-param-name p)))))))
     (define local-kinds (make-hash))   ;; var -> binding-kind, maintained in walk order
+    ;; Stable positional discriminator of a site: the ordinal of the call node
+    ;; in this body's pre-order walk (source structure only, identical across
+    ;; runs). Reset per function.
+    (define call-position 0)
     (define (visit! node)
       ;; Track what each local was bound from, so an unknown `local` receiver
       ;; can be attributed to its binding kind (dominant assignment).
@@ -219,64 +224,74 @@
            (define v (and (pair? c) (var-symbol (second c))))
            (when v (hash-set! local-kinds v 'exception)))]
         [else (void)])
-      (if (uir-call? node)
-            (let* ([callee (uir-call-callee node)]
-                   ;; The classifier's coverage side channel (only needed when
-                   ;; provenance is recorded): a reused box is reset per call.
-                   [cov-box (and prov (box 'structural))]
-                   [cls (classify-call-all callee known methods
-                                           class-defs fn-defs comp-supers self-attr comp owner
-                                           import-env rt return-types cov-box
-                                           #:lexicon lex)]
-                   [site (callee-site-string callee)])
-            (case (car cls)
-              [(edge)
-               (set! callees (cons (cdr cls) callees))
-               (when prov
-                 (provenance-add-call! prov
-                                       (prov-call (function-fq k)
-                                                  (function-fq (cdr cls))
-                                                  site)))]
-              [(effect)
-               (set! effects (cons (cdr cls) effects))
-               (when prov
-                 ;; The coverage label records what the classifier needed to
-                 ;; establish this ground: no receiver dataflow (a structural
-                 ;; rule or lexicon hit) is for-all 'universal; a receiver
-                 ;; resolved through a parameter is a 'census-param worked
-                 ;; instance; a receiver resolved from a tracked local /
-                 ;; attribute / call-result value is 'local-literal.
-                 (provenance-add-ground!
-                  prov
-                  (make-callee-site (function-fq k) (cdr cls) callee
-                                    #:coverage (ground-coverage
-                                                callee
-                                                (and cov-box (unbox cov-box))
-                                                param-names
-                                                tokens))))]
-              [(pure) (void)]
-              [(unknown)
-               (set! effects (cons 'unknown effects))
-               (when prov
-                 (provenance-add-ground! prov
-                                         (make-callee-site (function-fq k) 'unknown callee
-                                                           #:kind 'unresolved
-                                                           #:coverage
-                                                           (unresolved-coverage
-                                                            callee param-names
-                                                            tokens))))
-               (when unknown-tally
-                 (define rx
-                   (and (uir-get? callee)
-                        (var-symbol (uir-get-base callee))))
-                 (set-box! unknown-tally
-                           (cons (list (car k) (cdr k)
-                                       (receiver-shape callee param-names tokens)
-                                       (effect-op-of-callee callee)
-                                       rx
-                                       (and rx (hash-ref local-kinds rx 'unbound)))
-                                 (unbox unknown-tally))))]))
-          (void)))
+      (cond
+        [(uir-call? node)
+         (define position call-position)
+         (set! call-position (add1 call-position))
+         (let* ([callee (uir-call-callee node)]
+                ;; The classifier's coverage side channel (only needed when
+                ;; provenance is recorded): a reused box is reset per call.
+                [cov-box (and prov (box 'structural))]
+                [cls (classify-call-all callee known methods
+                                        class-defs fn-defs comp-supers self-attr comp owner
+                                        import-env rt return-types cov-box
+                                        #:lexicon lex)]
+                [site (callee-site-string callee)])
+           (case (car cls)
+             [(edge)
+              (set! callees (cons (cdr cls) callees))
+              (when prov
+                (provenance-add-call! prov
+                                      (prov-call (function-fq k)
+                                                 (function-fq (cdr cls))
+                                                 site
+                                                 (make-call-origin (function-fq k) callee
+                                                                   #:file comp
+                                                                   #:position position))))]
+             [(effect)
+              (set! effects (cons (cdr cls) effects))
+              (when prov
+                ;; The coverage label records what the classifier needed to
+                ;; establish this ground: no receiver dataflow (a structural
+                ;; rule or lexicon hit) is for-all 'universal; a receiver
+                ;; resolved through a parameter is a 'census-param worked
+                ;; instance; a receiver resolved from a tracked local /
+                ;; attribute / call-result value is 'local-literal.
+                (provenance-add-ground!
+                 prov
+                 (make-callee-site (function-fq k) (cdr cls) callee
+                                   #:coverage (ground-coverage
+                                               callee
+                                               (and cov-box (unbox cov-box))
+                                               param-names
+                                               tokens)
+                                   #:file comp
+                                   #:position position)))]
+             [(pure) (void)]
+             [(unknown)
+              (set! effects (cons 'unknown effects))
+              (when prov
+                (provenance-add-ground! prov
+                                        (make-callee-site (function-fq k) 'unknown callee
+                                                          #:kind 'unresolved
+                                                          #:coverage
+                                                          (unresolved-coverage
+                                                           callee param-names
+                                                           tokens)
+                                                          #:file comp
+                                                          #:position position)))
+              (when unknown-tally
+                (define rx
+                  (and (uir-get? callee)
+                       (var-symbol (uir-get-base callee))))
+                (set-box! unknown-tally
+                          (cons (list (car k) (cdr k)
+                                      (receiver-shape callee param-names tokens)
+                                      (effect-op-of-callee callee)
+                                      rx
+                                      (and rx (hash-ref local-kinds rx 'unbound)))
+                                (unbox unknown-tally))))]))]
+        [else (void)]))
     (walk-body body visit!)
     (hash-set! direct-rows k (effects->algebra-row effects))
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)

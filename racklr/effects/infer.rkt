@@ -70,11 +70,18 @@
 ;;                         `prov-call` carrying the callee expression. The record
 ;;                         is filled even when no effect was detected, because the
 ;;                         call graph (edges without direct effects) is what a
-;;                         provenance path walks.
+;;                         provenance path walks. Each ground/call carries a
+;;                         stable site origin (positions are ordinals over the
+;;                         body's call nodes).
+;;   #:source-file       — the source file of `program`, when the caller knows
+;;                         it; it fills the `file` component of every site
+;;                         origin, so per-file inference and whole-program
+;;                         inference agree on a site identity.
 (define (compute-effect-rows fns methods class-names supers known
                              #:provenance-table [prov-box #f]
                              #:provenance-record [rec-box #f]
-                             #:lexicon [lex default-lexicon])
+                             #:lexicon [lex default-lexicon]
+                             #:source-file [source-file #f])
   (define tokens (lexicon-tokens lex))
   (define direct-rows (make-hash))  ;; name → algebra-row (direct entries only)
   (define edges (make-hash))        ;; name → (listof name-symbol)
@@ -94,46 +101,61 @@
     (define owner (owner-of-name methods n))
     (define effects '())
     (define callees '())
+    ;; The stable positional discriminator of a site: the ordinal of the call
+    ;; node in this body's pre-order walk. It resets per function, is derived
+    ;; from source structure only, and is therefore identical across runs.
+    (define call-position 0)
     (define (visit! node)
-      (if (uir-call? node)
-          (let* ([callee (uir-call-callee node)]
-                 [cls (classify-call callee known owner class-names supers
+      (cond
+        [(uir-call? node)
+         (define position call-position)
+         (set! call-position (add1 call-position))
+         (let* ([callee (uir-call-callee node)]
+                [cls (classify-call callee known owner class-names supers
                                     #:lexicon lex)]
-                 [site (callee-site-string callee)])
-            (case (car cls)
-              [(edge)
-               (set! callees (cons (cdr cls) callees))
-               (when prov
-                 (provenance-add-call! prov
-                                       (prov-call (function-fq n)
-                                                  (function-fq (cdr cls))
-                                                  site)))]
-              [(effect)
-               ;; (cdr cls) is the effect-name symbol (effects->row builds the
-               ;; entry), so it keys both provenance views directly.
-               (define e (cdr cls))
-               (set! effects (cons e effects))
-               (when direct-prov
-                 (sites-add! (hash-ref! direct-prov n make-hash) e site))
-               (when prov
-                 (provenance-add-ground! prov (make-callee-site (function-fq n) e callee)))]
-              [(pure) (void)]
-              [(unknown)
-               (set! effects (cons 'unknown effects))
-               (when direct-prov
-                 (sites-add! (hash-ref! direct-prov n make-hash) 'unknown site))
-               (when prov
-                 ;; Per-file inference has no whole-program receiver
-                 ;; environment, so an unresolved site's evidence is the local
-                 ;; call expression: a worked instance (local/literal). The
-                 ;; whole-program pass refines a parameter-rooted site to
-                 ;; 'census-param.
-                 (provenance-add-ground! prov
-                                         (make-callee-site (function-fq n) 'unknown callee
-                                                           #:kind 'unresolved
-                                                           #:coverage
-                                                           (unresolved-coverage callee #f tokens))))]))
-          (void)))
+                [site (callee-site-string callee)])
+           (case (car cls)
+             [(edge)
+              (set! callees (cons (cdr cls) callees))
+              (when prov
+                (provenance-add-call! prov
+                                      (prov-call (function-fq n)
+                                                 (function-fq (cdr cls))
+                                                 site
+                                                 (make-call-origin (function-fq n) callee
+                                                                   #:file source-file
+                                                                   #:position position))))]
+             [(effect)
+              ;; (cdr cls) is the effect-name symbol (effects->row builds the
+              ;; entry), so it keys both provenance views directly.
+              (define e (cdr cls))
+              (set! effects (cons e effects))
+              (when direct-prov
+                (sites-add! (hash-ref! direct-prov n make-hash) e site))
+              (when prov
+                (provenance-add-ground! prov
+                                        (make-callee-site (function-fq n) e callee
+                                                          #:file source-file
+                                                          #:position position)))]
+             [(pure) (void)]
+             [(unknown)
+              (set! effects (cons 'unknown effects))
+              (when direct-prov
+                (sites-add! (hash-ref! direct-prov n make-hash) 'unknown site))
+              (when prov
+                ;; Per-file inference has no whole-program receiver
+                ;; environment, so an unresolved site's evidence is the local
+                ;; call expression: a worked instance (local/literal). The
+                ;; whole-program pass refines a parameter-rooted site to
+                ;; 'census-param.
+                (provenance-add-ground! prov
+                                        (make-callee-site (function-fq n) 'unknown callee
+                                                          #:kind 'unresolved
+                                                          #:coverage
+                                                          (unresolved-coverage callee #f tokens)
+                                                          #:file source-file
+                                                          #:position position)))]))]
+        [else (void)]))
     (walk-body body visit!)
     (hash-set! direct-rows n (effects->algebra-row effects))
     (hash-set! edges n (sort (remove-duplicates callees) symbol<?)))
@@ -182,7 +204,8 @@
 (define (infer-effects program
                        #:provenance-table [prov-box #f]
                        #:provenance-record [rec-box #f]
-                       #:lexicon [lex default-lexicon])
+                       #:lexicon [lex default-lexicon]
+                       #:source-file [source-file #f])
   (define fns (collect-functions program))
   (define methods (collect-methods program))
   (define class-names (collect-class-names program))
@@ -193,7 +216,8 @@
   (compute-effect-rows fns methods class-names supers known
                        #:provenance-table prov-box
                        #:provenance-record rec-box
-                       #:lexicon lex))
+                       #:lexicon lex
+                       #:source-file source-file))
 
 ;; ── write-back ──────────────────────────────────────────────────────
 

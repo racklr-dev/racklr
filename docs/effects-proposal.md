@@ -283,10 +283,11 @@ As built:
   at the method definition (`declared`), with the module path, class, and
   method as its tokens.
 - The projection emits every row entry as a `fn-effect` edge, every ground as a
-  `grounds` edge to its classifying site (with `site-expression`,
-  `site-token`, `site-receiver`, `site-kind`, and `site-effect` atoms), and
-  every call-graph edge as a `call-site` edge carrying the classifier's callee
-  expression. A **provenance path** is a walk from a function along `call-site`
+  `grounds` edge to its stable-origin site (with `site-expression`,
+  `site-token`, `site-receiver`, `site-kind`, `site-effect`, `site-coverage`,
+  `site-file`, `site-chain`, and `site-line` when known atoms), and every
+  call-graph edge as a `call-site` edge carrying the classifier's callee
+  expression and the call site's origin. A **provenance path** is a walk from a function along `call-site`
   edges to a `grounds` edge; `provenance-paths` returns the exact
   caller→callee chain (shortest per ground) for a given function/effect edge.
 - "No effect edge exists without provenance" is enforced at projection time by
@@ -296,11 +297,34 @@ As built:
   and the test suite cross-checks that the record-level and atom-level answers
   agree (including a deliberately dropped call-site link, which only the
   atom-level check detects). `tools/provenance-corpus.rkt` runs the check over
-  the Django corpus without touching the baseline and prints the counts.
+  the Django corpus without touching the baseline and prints the counts, the
+  distinct-origin count, and a sha256 fingerprint of the sorted origin ids
+  (repo-relative components, so the fingerprint is location-independent;
+  `--origins` dumps the ids so two runs diff directly).
 - The atom vocabulary, the reusable parsed index, and the completeness check are
   separate modules (`racklr/graph/provenance-atoms.rkt`,
   `racklr/graph/provenance-index.rkt`, `racklr/graph/provenance-check.rkt`),
   re-exported from `racklr/graph/provenance.rkt` so consumers see one API.
+- **Stable origins (nc-4A19).** Every ground and call hop carries a
+  `prov-origin` (`racklr/effects/origin.rkt`): the **file** component, the
+  enclosing **owner** function, the structural **receiver chain** (the dotted
+  source names taken from the UIR callee, never parsed back out of a rendered
+  expression), and a source-structural **positional discriminator** (the
+  ordinal of the call node in the owner body's pre-order walk) standing in for
+  a line number while UIR carries no source positions; the origin keeps a
+  `line` field that joins the identity once the front ends record positions.
+  The identity deliberately excludes the effect, the kind, the coverage, the
+  tokens, and the resolved receiver class: those are inference results, and
+  keying identity on them is value-dependent, which partitions one site's
+  evidence and makes graph drift across runs undiagnosable. The projection
+  names `site` atoms by the origin id (`file::owner@position:chain`), so the
+  readable call expression is a `site-expression` display atom and a rendering
+  change cannot re-key the graph; `site-file`, `site-line` (when known), and
+  `site-chain` atoms expose the origin components. `provenance-origins`
+  returns the sorted origin ids — two runs over the same source agree, and a
+  diff localises drift to the sites that moved. Two identical expressions at
+  different positions are distinct origins (previously they collapsed into one
+  ground).
 
 ### 6.2 Confidence, coverage, and transitive profiles
 

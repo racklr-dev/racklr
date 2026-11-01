@@ -42,7 +42,8 @@
 
 (require racklr/uir
          racklr/effects/shape
-         racklr/effects/imports)
+         racklr/effects/imports
+         racklr/effects/origin)
 
 (provide
   ;; function identity
@@ -50,7 +51,9 @@
   ;; provenance records
   prov-site prov-site? prov-site-owner prov-site-effect prov-site-site
   prov-site-tokens prov-site-receiver prov-site-kind prov-site-coverage
+  prov-site-origin
   prov-call prov-call? prov-call-from prov-call-to prov-call-site
+  prov-call-origin
   provenance provenance? provenance-grounds provenance-calls
   make-provenance
   provenance-add-ground! provenance-add-call!
@@ -59,6 +62,8 @@
   effect-cap-receiver
   make-callee-site
   make-declared-site
+  ;; stable site origins (the identity a ground is keyed on)
+  (all-from-out racklr/effects/origin)
   ;; effect-name access
   entry-effect-name
   ;; completeness
@@ -103,11 +108,15 @@
 ;;              dataflow), or 'local-literal (worked instance through a tracked
 ;;              local/attribute/literal value). The confidence label is the
 ;;              `kind` mapped through racklr/effects/labels.
-(struct prov-site (owner effect site tokens receiver kind coverage)
+;;   origin   — the STABLE site identity (racklr/effects/origin): file, owner,
+;;              receiver chain, and the site's positional discriminator. It is
+;;              what names the evidence; `site` is only the readable rendering.
+(struct prov-site (owner effect site tokens receiver kind coverage origin)
   #:transparent)
 
-;; One call-graph edge: `from` calls `to` at classifying expression `site`.
-(struct prov-call (from to site) #:transparent)
+;; One call-graph edge: `from` calls `to` at classifying expression `site`,
+;; with the same stable site origin as a ground.
+(struct prov-call (from to site origin) #:transparent)
 
 ;; The provenance of one inference run.
 ;;   grounds — fq → (hash effect-symbol → (listof prov-site))
@@ -117,12 +126,17 @@
 (define (make-provenance)
   (provenance (make-hash) (make-hash)))
 
-;; Record a ground, dropping duplicates (an expression can classify the same
-;; call twice only through a duplicate walk, which is not evidence).
+;; Record a ground, dropping duplicates. Identity is the stable origin, not the
+;; whole record: a duplicate walk of one site is not evidence, but two distinct
+;; sites that happen to render the same expression are.
 (define (provenance-add-ground! prov site)
   (define h (hash-ref! (provenance-grounds prov) (prov-site-owner site) make-hash))
   (hash-update! h (prov-site-effect site)
-                (λ (paths) (if (member site paths) paths (cons site paths)))
+                (λ (paths)
+                  (if (for/or ([p (in-list paths)])
+                        (equal? (prov-site-origin p) (prov-site-origin site)))
+                      paths
+                      (cons site paths)))
                 '())
   (void))
 
@@ -164,23 +178,36 @@
 ;; symbol or a structured `effect-cap`, normalized here so the record keys on
 ;; the domain either way. `coverage` is the evidence's scope
 ;; (racklr/effects/labels: universal / census-param / local-literal).
+;; `position` is the call-site ordinal in the owner body (see
+;; racklr/effects/origin); `file`/`line` are the source coordinates the
+;; inference mode knows (#f when unknown).
 (define (make-callee-site owner effect callee
                           #:kind [kind 'inferred]
-                          #:coverage [coverage 'universal])
+                          #:coverage [coverage 'universal]
+                          #:file [file #f]
+                          #:line [line #f]
+                          #:position [position #f])
   (prov-site owner
              (if (effect-cap? effect) (effect-cap-domain effect) effect)
              (callee-site-string callee)
              (callee-tokens callee)
              (and (effect-cap? effect) (effect-cap-receiver effect))
              kind
-             coverage))
+             coverage
+             (make-call-origin owner callee
+                               #:file file #:line line #:position position)))
 
 ;; A ground for a declared capability: the evidence is the DATA rule at the
 ;; method definition, not a call site, so the site names the definition and the
 ;; tokens are the module path, class, and method the capability was derived from.
 ;; A declared capability is a for-all contract, so its coverage is universal.
-(define (make-declared-site owner effect tokens receiver)
-  (prov-site owner effect "(declared)" tokens receiver 'declared 'universal))
+;; Its origin is the definition site: no call position, and the tokens (module
+;; path, class, method) are the receiver chain.
+(define (make-declared-site owner effect tokens receiver
+                            #:file [file #f]
+                            #:line [line #f])
+  (prov-site owner effect "(declared)" tokens receiver 'declared 'universal
+             (make-declared-origin owner tokens #:file file #:line line)))
 
 ;; ── completeness: every effect edge has a ground ────────────────────
 

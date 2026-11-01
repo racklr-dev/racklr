@@ -149,7 +149,7 @@
   ;; The coverage label is in the reusable index too.
   (define idx (make-graph-index graph))
   (check-equal? (hash-ref (graph-index-site-coverages idx)
-                          (site-id "f" "open"))
+                          (walk-ground-origin io-ground))
                 'universal))
 
 (define (test-param-rooted-obligation-coverage)

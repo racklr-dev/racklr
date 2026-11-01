@@ -10,6 +10,7 @@
 ;;   racket tools/provenance-corpus.rkt django/django   # explicit probe
 ;;   racket tools/provenance-corpus.rkt --record-only   # skip graph projection
 ;;   racket tools/provenance-corpus.rkt --profiles      # also report profiles
+;;   racket tools/provenance-corpus.rkt --origins       # print the site origins
 ;;
 ;; `--record-only` is for probes too large to project (the full django tree
 ;; builds ~100k atoms); it still runs the record-level reachability check, which
@@ -23,10 +24,18 @@
 ;;   2. `provenance-graph` builds (it enforces the same property at the atom
 ;;      level and raises otherwise);
 ;;   3. a provenance query returns a call-chain path for EVERY effect edge,
-;;      using one reusable graph index.
+;;      using one reusable graph index;
+;;   4. the stable site origins the record holds and the `site` atoms the graph
+;;      projects are the same set: the distinct origin count and a sha256
+;;      fingerprint of the sorted origin ids are printed. `--origins` prints
+;;      the ids themselves so two runs diff directly; origins are
+;;      file::owner@position:receiver-chain, derived from source structure only
+;;      (never from an inferred value or a corpus example), so a diff localises
+;;      drift to the sites that moved. Component identity is repo-relative, so
+;;      the fingerprint does not depend on the checkout location.
 ;;
 ;; This reads the corpus only; it never re-pins or touches baseline/. Exit 0
-;; means all three checks passed; any failure exits 1 and names the edge.
+;; means all checks passed; any failure exits 1 and names the edge.
 ;;
 ;; Prerequisites are the same as tools/baseline-check.rkt: the django and
 ;; effervesce submodules plus the vendored grammars-v4 Python3 grammar.
@@ -45,7 +54,8 @@
          racklr/effects/labels
          racklr/effects/provenance
          racklr/graph/provenance
-         racklr/graph/profile)
+         racklr/graph/profile
+         "sha256.rkt")
 
 (define default-probe-dirs '("django/django/core"))
 
@@ -111,6 +121,15 @@
            (let-values ([(b n dir?) (split-path root-dir)]) (path->string n))
            (string-join comps "."))])))
 
+;; The stable component identity of a corpus file: its path relative to the
+;; repository root when it is inside the checkout, so origins do not depend on
+;; where the corpus was cloned.
+(define (component-name root f)
+  (define rel (find-relative-path root f))
+  (if (string-prefix? (path->string rel) "..")
+      (path->string f)
+      (path->string rel)))
+
 ;; Returns (values rows provenance-record).
 (define (corpus-rows root dirs)
   (define-values (tokenize parse tok-type tok-value) (load-python-front-end root))
@@ -140,14 +159,14 @@
              (and (list? res)
                   (= (length res) 2)
                   (lower-python (second res) tok-type tok-value)))))
-    (if uir (hash-set! host-code (path->string f) uir) (set! failed (cons f failed)))
+    (if uir (hash-set! host-code (component-name root f) uir) (set! failed (cons f failed)))
     (define modpath
       (for/or ([r (in-list roots)])
         (define rel (find-relative-path (cdr r) f))
         (and (not (string-prefix? (path->string rel) ".."))
              (path->module-path (car r) (cdr r) f))))
     (when modpath
-      (define comp (path->string f))
+      (define comp (component-name root f))
       (hash-set! comp-modpath comp modpath)
       (when (regexp-match? #rx"__init__[.]py$" comp)
         (set! packages (set-add packages modpath)))
@@ -211,10 +230,36 @@
 (define (link-count graph type)
   (for/sum ([a (in-list graph)] #:when (and (link? a) (eq? (link-type a) type))) 1))
 
+;; Every stable site origin the record holds, sorted and deduplicated: grounds
+;; and call hops alike.
+(define (record-origins prov)
+  (sort
+   (remove-duplicates
+    (append
+     (for*/list ([(owner by-effect) (in-hash (provenance-grounds prov))]
+                 [(effect sites) (in-hash by-effect)]
+                 [site (in-list sites)])
+       (prov-origin->string (prov-site-origin site)))
+     (for*/list ([(caller calls) (in-hash (provenance-calls prov))]
+                 [call (in-list calls)])
+       (prov-origin->string (prov-call-origin call)))))
+   string<?))
+
+;; The drift fingerprint of an origin set: a content address of the sorted ids.
+(define (origins-fingerprint origins)
+  (sha256-hex (string->bytes/utf-8 (string-join origins "\n"))))
+
+(define (report-origins label origins show?)
+  (printf "~a: ~a\n" label (length origins))
+  (printf "~a sha256: ~a\n" label (origins-fingerprint origins))
+  (when show?
+    (for ([o (in-list origins)]) (printf "  origin ~a\n" o))))
+
 (define (main)
   (define args (vector->list (current-command-line-arguments)))
   (define record-only? (pair? (member "--record-only" args)))
   (define profiles? (pair? (member "--profiles" args)))
+  (define show-origins? (pair? (member "--origins" args)))
   (define dirs (filter (λ (a) (not (string-prefix? a "--"))) args))
   (define probe-dirs (if (null? dirs) default-probe-dirs dirs))
   (define root (repo-root))
@@ -226,6 +271,11 @@
     (printf "function/effect edges: ~a\n" edges)
     (printf "ground sites by kind: ~a\n" (ground-kind-counts prov))
     (printf "ground sites by coverage: ~a\n" (ground-coverage-counts prov))
+    ;; Stable site origins: what every ground/call hop is identified by (never
+    ;; by the rendered expression or an inferred value). Repo-relative component
+    ;; names make the fingerprint independent of the checkout location.
+    (define origins (record-origins prov))
+    (report-origins "distinct site origins" origins show-origins?)
 
     ;; 1. record-level reachability.
     (define missing (provenance-missing rows prov))
@@ -249,6 +299,16 @@
                          (exit 1))])
         (provenance-graph rows prov)))
     (printf "graph atoms: ~a\n" (length graph))
+    ;; The graph names sites by the record's origins: a projection that renamed
+    ;; or dropped a site is a failure, not a query surprise.
+    (define projected-origins (provenance-origins graph))
+    (if (equal? projected-origins origins)
+        (printf "graph site origins: match the record (~a)\n" (length projected-origins))
+        (begin
+          (printf "graph site origins: MISMATCH (record ~a, graph ~a)\n"
+                  (length origins) (length projected-origins))
+          (printf "provenance FAILED\n")
+          (exit 1)))
     (for ([ty (in-list (sort (remove-duplicates
                               (for/list ([a (in-list graph)] #:when (link? a)) (link-type a)))
                              (λ (a b) (string<? (symbol->string a) (symbol->string b)))))])
