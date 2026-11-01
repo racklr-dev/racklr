@@ -32,6 +32,7 @@
       (uir-var? v)
       (uir-set!? v)
       (uir-ann-set!? v)
+      (uir-walrus? v)
       (uir-if? v)
       (uir-block? v)
       (uir-return? v)
@@ -44,6 +45,7 @@
       (uir-decorated? v)
       (uir-get? v)
       (uir-paren? v)
+      (uir-type-alias? v)
       (uir-class? v)
       (uir-method? v)
       (uir-field? v)
@@ -113,6 +115,7 @@
         [(uir-var? v)    'var]
         [(uir-set!? v)  'set!]
         [(uir-ann-set!? v) 'ann-set!]
+        [(uir-walrus? v) 'walrus]
         [(uir-if? v)     'if]
         [(uir-block? v)  'block]
         [(uir-return? v) 'return]
@@ -125,6 +128,7 @@
         [(uir-decorated? v) 'decorated]
         [(uir-get? v) 'get]
         [(uir-paren? v) 'paren]
+        [(uir-type-alias? v) 'type-alias]
         [(uir-class? v)     'class]
         [(uir-method? v)    'method]
         [(uir-field? v)     'field]

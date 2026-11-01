@@ -43,6 +43,7 @@
     [(eq? tag 'pass_stmt) (uir-null)]
     [(eq? tag 'return_stmt) (lower-return cst tk-type tk-value)]
     [(eq? tag 'expr_stmt) (lower-expr-stmt cst tk-type tk-value)]
+    [(eq? tag 'type_alias) (lower-type-alias cst tk-type tk-value)]
     [(eq? tag 'break_stmt) (uir-block (list (uir-symbol "break")))]
     [(eq? tag 'continue_stmt) (uir-block (list (uir-symbol "continue")))]
     [(eq? tag 'import_name) (lower-import-name cst tk-type tk-value)]
@@ -56,6 +57,37 @@
     [(eq? tag 'block) (lower-block cst tk-type tk-value)]
     [(eq? tag 'stmt) (if (null? kids) (uir-null) (lower-block-or-stmt (first kids) tk-type tk-value))]
     [else (uir-symbol (format "?stmt-~a" tag))]))
+
+;; PEP 695 type alias: `type Name[TypeParams] = value`. `type` is a soft
+;; keyword, so the alias name is the first NAME token after the leading keyword.
+(define (lower-type-alias cst tk-type tk-value)
+  (define toks (cst-tokens cst tk-type tk-value))
+  (define name
+    (for/or ([t (if (pair? toks) (cdr toks) toks)]
+             #:when (eq? (first t) 'NAME))
+      (second t)))
+  (define type-params-node
+    (for/or ([c (node-children cst)]
+             #:when (eq? (any-tree-tag c) 'type_params))
+      c))
+  (define type-params
+    (if type-params-node
+        (for/list ([p (node-children type-params-node)]
+                   #:when (eq? (any-tree-tag p) 'type_param))
+          (define ptoks (cst-tokens p tk-type tk-value))
+          (define pname
+            (for/or ([t ptoks] #:when (eq? (first t) 'NAME)) (second t)))
+          (uir-symbol (or pname "?")))
+        '()))
+  (define value-node
+    (for/or ([c (node-children cst)]
+             #:when (eq? (any-tree-tag c) 'test))
+      c))
+  (uir-type-alias (uir-symbol (or name "?"))
+                  type-params
+                  (if value-node
+                      (lower-expr value-node tk-type tk-value)
+                      (uir-null))))
 
 (define (lower-return cst tk-type tk-value)
   (define kids (node-children cst))

@@ -67,7 +67,7 @@
         [else s]))
 
 (define uir-tag-set (set 'uir 'null 'bool 'number 'string 'fstring 'list 'record 'symbol
-                         'fn 'call 'let 'var 'set! 'ann-set! 'if 'block 'return 'for-each 'while 'try 'with 'await 'yield 'decorated 'get 'paren
+                         'fn 'call 'let 'var 'set! 'ann-set! 'walrus 'type-alias 'if 'block 'return 'for-each 'while 'try 'with 'await 'yield 'decorated 'get 'paren
                          'class 'method 'field 'new 'interface 'module 'import 'export 'enum 'enum-variant
                          'component 'element 'attribute 'event 'slot 'text-node 'style 'effect 'state 'jsx-expr 'spread
                          'effect-row 'effect-entry 'subtype 'effect-decl 'effect-op 'effect-handler

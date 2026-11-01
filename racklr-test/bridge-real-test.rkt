@@ -16,7 +16,7 @@
          effervesce/check/bridge)
 
 (define-values (py-parse py-tokenize py-tok-type py-tok-value)
-  (gen-and-load-py "../grammars-v4/python/python3/Python3Parser.g4"))
+  (gen-and-load-py "../grammars/python3/Python3Parser.g4"))
 
 (define py-parse-file-input
   (let ([mod-path (*last-module-path*)])

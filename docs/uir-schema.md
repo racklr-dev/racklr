@@ -169,6 +169,8 @@ These are part of Tier 0 but not needed for JSON:
 | `uir-let`     | `name value body`               | Variable binding |
 | `uir-var`     | `name`                          | Variable reference (uses `uir-symbol`) |
 | `uir-set!`    | `name value`                    | Mutation / assignment |
+| `uir-walrus`  | `name value`                    | Assignment expression (Python `:=`) |
+| `uir-type-alias` | `name type-params value`     | Type alias declaration (Python 3.12 `type`) |
 | `uir-if`      | `test then else`                | Conditional |
 | `uir-block`   | `stmts`                         | Sequence of expressions |
 | `uir-return`  | `value`                         | Return from function |

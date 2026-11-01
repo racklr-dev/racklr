@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(none)
+### Added
+
+- Tracked modern Python 3 grammar in `grammars/python3/` (`Python3Lexer.g4`,
+  `Python3Parser.g4`). Adds assignment expressions (`:=`, PEP 572),
+  positional-only parameters (`/`, PEP 570) in `def` and `lambda`, and PEP 695
+  `type` alias statements, including generic aliases.
+- UIR nodes `uir-walrus` and `uir-type-alias`, with Python lowering, emission
+  and sexp/JSON serialization. `emit-python` renders `(name := value)` and
+  `type Name[T] = value`.
+- `racklr-test/modern-python-test.rkt` covering parse, lower and emit
+  round-trips for the new syntax.
+
+### Changed
+
+- Python front-end test suites load the tracked `grammars/python3/` grammar
+  instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
+  tests exercise is the one the repository owns.
 
 ## [0.1.0rc1] - 2026-06-23
 

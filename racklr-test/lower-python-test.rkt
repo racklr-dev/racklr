@@ -13,7 +13,7 @@
 ;; ── Load the Python3 parser ──────────────────────────────────────────
 
 (define-values (py-parse py-tokenize py-tok-type py-tok-value)
-  (gen-and-load-py "../grammars-v4/python/python3/Python3Parser.g4"))
+  (gen-and-load-py "../grammars/python3/Python3Parser.g4"))
 
 ;; Load raw parse-file_input from the SAME generated module as gen-and-load-py
 ;; (avoids cross-module token struct incompatibility)

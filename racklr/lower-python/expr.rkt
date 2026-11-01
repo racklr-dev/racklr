@@ -39,7 +39,7 @@
                            (let ([gk (node-children second)])
                              (if (pair? gk) (lower-expr (first gk) tk-type tk-value) (uir-null)))]
                           [else (lower-expr second tk-type tk-value)])])
-          (uir-set! lhs rhs))]
+          (uir-walrus lhs rhs))]
        [(= (length kids) 1) (lower-expr (first kids) tk-type tk-value)]
        [else (uir-symbol "?namedexpr_test")])]
     [(eq? tag 'comparison) (lower-comparison u tk-type tk-value)]
