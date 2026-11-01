@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or host-grammar policy leak back into the core engine; the guards derive
   their forbidden sets from the lexicons' DATA and derive their scan targets
   from the directories, so a module split cannot silently shrink the scan.
+- `fastapi/` vendors the backend of the official FastAPI
+  full-stack template (release 0.10.0, 27 Python files / 1,611 lines) as a
+  substantial real host-code sample, with an Effervesce spec (`app.fizz`) and
+  `tools/bridge-python.rkt`, a tracked-grammar counterpart of
+  `effervesce/tools/verify-dir.rkt` that runs the four checkers over a
+  directory of Python source per file (so repeated top-level names do not
+  collapse effect rows). `racklr-test/bridge-fastapi-sample-test.rkt` pins the
+  result: every file parses and lowers, the bridge finds no uncovered effect,
+  and the unresolved calls are reported as `bridge-unverified`.
 - Effect-edge provenance is first-class in the graph substrate. Inference
   (`infer-effects`, `infer-effects-all`) optionally records every classifying
   call site (tokens, receiver type, classification kind) and the inferred call

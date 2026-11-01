@@ -40,6 +40,10 @@
 (provide repository-root
          python-parser
          python-parser?
+         python-parser-tokenize
+         python-parser-parse-file-input
+         python-parser-token-type
+         python-parser-token-value
          load-python-parser
          find-python-files
          scan-result

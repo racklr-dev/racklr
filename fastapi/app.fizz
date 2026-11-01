@@ -1,0 +1,34 @@
+// The FastAPI full-stack template backend, described in Effervesce.
+//
+// `tools/bridge-python.rkt` infers the effect row of every function in the
+// vendored `app/` tree and checks that this component's needs cover them,
+// through the capability-interpretation table:
+//   Db   -> db     (sqlmodel / sqlalchemy / alembic session work)
+//   Io   -> io     (pathlib reads, logging, startup probes)
+//   Time -> time   (datetime.now)
+//
+// Anything the inference cannot resolve (an unknown callee, e.g. a call into
+// jwt or pwdlib) is reported as `bridge-unverified` instead of being counted as
+// covered, so the run states how much of the app it could actually check.
+system FastApiBackend {
+
+  capability Db {
+    execute(sql: String) -> Unit
+    commit() -> Unit
+  }
+
+  capability Io {
+    read(path: String) -> String
+    write(text: String) -> Unit
+  }
+
+  capability Time {
+    now() -> String
+  }
+
+  given Db, Io, Time
+
+  component Api needs Db, Io, Time {
+    health() = now()
+  }
+}
