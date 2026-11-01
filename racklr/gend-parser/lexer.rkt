@@ -100,7 +100,8 @@
 ;; Advance the (line, column) of a matched token's text by one token.
 ;; \\r\\n counts as a single line break; lone \\n and \\r also break the line.
 ;; (A form feed is whitespace that the tokenizer skips before any rule matches
-;; it, so it only ever appears inside a token's text and is not a line break.)
+;; it, so it only ever appears inside a token's text and is not a line break.
+;; This matches Python's tokenizer; do not turn it into a line break.)
 (define (advance-line-col l c text)
   (define len (string-length text))
   (let loop ([i 0] [l l] [c c])
