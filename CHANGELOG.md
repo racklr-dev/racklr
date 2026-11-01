@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Call-result projection through the whole-program type relations:
+  `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
+  result class from the corpus return relation, then the receiver-type-dataflow
+  half `x.m()` for a receiver whose class the relations track, then the
+  constructor/stdlib/imported result type), `call-target-keys` (method targets
+  resolved through tracked receivers, complementing the syntactic
+  `self.m()`/`super().m()`/`KnownClass.m()` resolution) and `return-class-of`
+  (moved from `receiver-type.rkt`; a returned call now projects too). The
+  assign, parameter and return relations and the receiver chain share one rule,
+  and `infer-receiver-types` gains an injectable `#:call-result-class`
+  callback so an assignment from a method on a tracked receiver projects
+  without a require cycle. `receiver-type.rkt` also seeds stdlib/module-marker
+  receiver types the relations propagate (a relation-derived `open` result must
+  seed like an annotation). The projection fails closed on a mixed return and a
+  method call projects only its most-derived dispatch key, so an unprojected
+  override is never shadowed by a superclass projection. Django-core unknown
+  call sites 210 → 199, unknown functions 231 → 216, unknown files 64 → 60; the
+  type-graph baseline is re-pinned to the reduced graph. Full-package numbers
+  and the remaining levers are recorded in `docs/unknown-census.md`.
 - Non-Django Python effect generalization: the Python lexicon now carries the
   non-Django web-framework surface as DATA, and the import graph canonicalizes
   modules by their package chain rather than by the scan root.
@@ -68,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budgets, `must` propagation, recursive SCC widening, `unknown` preservation,
   grounded/conflicting/unrooted scopes, and the new region combinators.
 
+ (P0.3))
 - Stable site origins for effect-edge provenance (nc-4A19):
   `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural
   receiver chain (from the UIR callee, never a rendered expression), and a

@@ -14,6 +14,7 @@
          racklr/effects/shape
          racklr/effects/class-resolve
          racklr/effects/receiver-type
+         racklr/effects/return-type
          racklr/effects/library-tokens
          racklr/effects/lexicon)
 
@@ -107,11 +108,11 @@
      (bare-class-value (uir-new-class base) class-defs tokens import-env comp)]
     [(uir-call? base)
      ;; A `.attr` chain rooted at a call result (`Path(...).is_absolute`,
-     ;; `md5(...).hexdigest`, `open(...).close`): the result type is the class
-     ;; its callee names, or — for a corpus function/method call — the class
-     ;; its callee's projected return type names.
-     (or (corpus-call-return-type (uir-call-callee base) comp class-defs owner
-                                  methods fn-defs known comp-supers return-types tokens)
-         (call-result-type (uir-call-callee base) class-defs
-                           tokens rt import-env comp))]
+     ;; `md5(...).hexdigest`, `open(...).close`): the result class is the one
+     ;; `call-result-return-class` projects — a corpus function/method call's
+     ;; projected return, a method call through a receiver the relations typed
+     ;; (`x.key_for(...)`), or the constructor/stdlib/imported result type.
+     (call-result-return-class (uir-call-callee base) comp class-defs owner
+                               rt methods fn-defs known comp-supers return-types
+                               tokens import-env)]
     [else #f]))

@@ -2289,6 +2289,180 @@
                       (cons "app.py" 'stamp)))
   (check-false (row-lookup r 'unknown)))
 
+;; ── whole-program call-result projection through the type relations ──
+
+(define (test-projection-return-through-returned-call)
+  ;; `g` returns a corpus class instance and `f` returns `g()`; a caller that
+  ;; runs `f().m()` must resolve through the returned call's projected class —
+  ;; return-type projection composes through the return relation — to `A.m`
+  ;; instead of stopping at `unknown`.
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (fn "g" (prog (uir-return (uir-call (v "A") '()))))
+     (fn "f" (prog (uir-return (uir-call (v "g") '()))))
+     (fn "run" (uir-call (dot (uir-call (v "f") '()) "m") '()))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-return-tracked-receiver-method)
+  ;; `f` returns `loader.load()` where `loader` is a tracked local; the return
+  ;; relation projects `Loader.load`'s class through the receiver-type dataflow
+  ;; half, so `f().m()` resolves.
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (py-class "Loader"
+               (list (py-method "load" (prog (uir-return (uir-call (v "A") '()))))))
+     (fn "f" (prog
+              (uir-set! (v "loader") (uir-call (v "Loader") '()))
+              (uir-return (uir-call (dot (v "loader") "load") '()))))
+     (fn "run" (uir-call (dot (uir-call (v "f") '()) "m") '()))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-param-through-call-argument)
+  ;; `run` calls `h(g())`; g's projected return class (A) must flow into h's
+  ;; parameter through the param relation, so `x.m()` resolves to `A.m`.
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (fn "g" (prog (uir-return (uir-call (v "A") '()))))
+     (fn "h" (uir-call (dot (v "x") "m") '())
+         #:params (list (uir-typed-param (sym "x") #f #f #f)))
+     (fn "run" (uir-call (v "h") (list (uir-call (v "g") '()))))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'h))) '(db))
+  (check-false (row-lookup (hash-ref rows (cons "app.py" 'run)) 'unknown)))
+
+(define (test-projection-param-stdlib-receiver-type)
+  ;; A relation-propagated stdlib receiver TYPE (`open`'s result) must seed the
+  ;; parameter environment; `h`'s `x.close()` is io, not unknown.
+  (define app
+    (prog
+     (fn "g" (prog (uir-return (uir-call (v "open") (list (uir-string "f"))))))
+     (fn "h" (uir-call (dot (v "x") "close") '())
+         #:params (list (uir-typed-param (sym "x") #f #f #f)))
+     (fn "run" (uir-call (v "h") (list (uir-call (v "g") '()))))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'h))) '(io))
+  (check-false (row-lookup (hash-ref rows (cons "app.py" 'run)) 'unknown)))
+
+(define (test-projection-param-typed-receiver-call-target)
+  ;; `User.run` calls `self.storage.save(File())`: the target resolves through
+  ;; the typed `self.storage` attribute to `Storage.save` (the receiver-type-
+  ;; dataflow half of call-target resolution), so `content.chunks()` resolves.
+  (define app
+    (prog
+     (py-class "File"
+               (list (py-method "chunks" (uir-call (dot (v "db") "commit") '()))))
+     (uir-class (uir-symbol "Storage") '() '()
+                (list
+                 (uir-method (uir-symbol "save")
+                             (list (uir-typed-param (uir-symbol "self") #f #f #f)
+                                   (uir-typed-param (uir-symbol "content") #f #f #f))
+                             (uir-call (dot (v "content") "chunks") '())
+                             'public)))
+     (uir-class (uir-symbol "User") '() '()
+                (list
+                 (uir-method (uir-symbol "__init__")
+                             (list (uir-typed-param (uir-symbol "self") #f #f #f))
+                             (uir-set! (uir-get (v "self") (sym "storage"))
+                                       (uir-call (v "Storage") '()))
+                             'public)
+                 (uir-method (uir-symbol "run")
+                             (list (uir-typed-param (uir-symbol "self") #f #f #f))
+                             (uir-call (dot (uir-get (v "self") (sym "storage")) "save")
+                                       (list (uir-call (v "File") '())))
+                             'public)))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'Storage.save))) '(db))
+  (check-false (row-lookup (hash-ref rows (cons "app.py" 'Storage.save)) 'unknown))
+  (check-false (row-lookup (hash-ref rows (cons "app.py" 'User.run)) 'unknown)))
+
+(define (test-projection-assign-through-tracked-receiver-method)
+  ;; `f` does `x = loader.load()` where `loader` is a tracked local, then
+  ;; `x.m()`: the assign relation projects Loader.load's return class through
+  ;; the injected call-result rule, so x.m() resolves to A.m (db).
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (py-class "Loader"
+               (list (py-method "load" (prog (uir-return (uir-call (v "A") '()))))))
+     (fn "f" (prog
+              (uir-set! (v "loader") (uir-call (v "Loader") '()))
+              (uir-set! (v "x") (uir-call (dot (v "loader") "load") '()))
+              (uir-call (dot (v "x") "m") '())))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'f)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-return-mixed-expressions-not-projected)
+  ;; A function whose return expressions project DIFFERENT classes has no
+  ;; single return class. The projection must fail closed (a mixed return
+  ;; yields #f) instead of over-claiming one branch's class, so a receiver from
+  ;; `f()` stays unknown rather than falsely resolving to A.m or B.m.
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (py-class "B" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (fn "f" (prog (uir-return (uir-if (v "c")
+                                       (uir-call (v "A") '())
+                                       (uir-call (v "B") '())))))
+     (fn "run" (uir-call (dot (uir-call (v "f") '()) "m") '()))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-not-false (row-lookup (hash-ref rows (cons "app.py" 'run)) 'unknown)))
+
+(define (test-projection-return-strict-override)
+  ;; `Sub` overrides `Base.make` with a body whose return does not project a
+  ;; class; `Sub.run` returns `self.make()`. The method-return projection must
+  ;; fail CLOSED instead of inheriting Base.make's class A: a receiver from
+  ;; `Sub.run()` stays unknown rather than claiming A.m.
+  (define app
+    (prog
+     (py-class "A" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (py-class/super "Base" (uir-null)
+                     (list (py-method "make"
+                                      (prog (uir-return (uir-call (v "A") '()))))))
+     (py-class/super "Sub" (v "Base")
+                     (list (py-method "make" (prog (uir-return (v "thing"))))
+                           (py-method "run"
+                                      (prog (uir-return
+                                             (uir-call (dot (v "self") "make") '()))))))
+     (fn "use" (prog
+                (uir-set! (v "sub") (uir-call (v "Sub") '()))
+                (uir-call (dot (uir-call (dot (v "sub") "run") '()) "m") '())))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (check-not-false (row-lookup (hash-ref rows (cons "app.py" 'use)) 'unknown)))
+
+(define (test-projection-return-most-derived-override)
+  ;; `Sub` overrides `Base.make` with a projected return (B) while `Base.make`
+  ;; does not project. The most-derived key is the one runtime dispatch selects,
+  ;; so `Sub.run()`'s return projects B and `s.run().m()` resolves; an
+  ;; all-candidates-must-agree rule would fail closed and lose this.
+  (define app
+    (prog
+     (py-class "B" (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+     (py-class/super "Base" (uir-null)
+                     (list (py-method "make" (prog (uir-return (v "thing"))))))
+     (py-class/super "Sub" (v "Base")
+                     (list (py-method "make" (prog (uir-return (uir-call (v "B") '()))))
+                           (py-method "run"
+                                      (prog (uir-return
+                                             (uir-call (dot (v "self") "make") '()))))))
+     (fn "use" (prog
+                (uir-set! (v "sub") (uir-call (v "Sub") '()))
+                (uir-call (dot (uir-call (dot (v "sub") "run") '()) "m") '())))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'use)))
+  (check-equal? (row-names r) '(db))
+  (check-false (row-lookup r 'unknown)))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -2464,4 +2638,13 @@
   (test-projection-property-mro)
   (test-projection-submodule-module-function)
   (test-projection-lowercase-imported-class)
+  (test-projection-return-through-returned-call)
+  (test-projection-return-tracked-receiver-method)
+  (test-projection-param-through-call-argument)
+  (test-projection-param-stdlib-receiver-type)
+  (test-projection-param-typed-receiver-call-target)
+  (test-projection-assign-through-tracked-receiver-method)
+  (test-projection-return-mixed-expressions-not-projected)
+  (test-projection-return-strict-override)
+  (test-projection-return-most-derived-override)
   (displayln "All infer tests passed."))

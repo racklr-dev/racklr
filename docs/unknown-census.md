@@ -99,26 +99,27 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-01, racklr `11eb4a2` + this change)
+## Baseline (observed 2026-11-01, racklr `0a26a01` + this change)
 
-`django/django/core`:
+`django/django/core` (the pinned baseline probe):
 
 ```
 files scanned: 112   parsed: 112   failed: 0
 functions: 979 (in 101 files with inferred functions)
-unknown call sites: 215   unknown functions: 236   unknown files: 65
+unknown call sites: 199   unknown functions: 216   unknown files: 60
+(this lever: 210 -> 199 call sites, 231 -> 216 functions, 64 -> 60 files)
 
-receiver shapes: local 63, bare-call 53, param 36, self-attr 23,
-                 chained 18, call-result 11, self-method 11
-local binding kinds (of 63): call-result 32, loop-var 12, attr 10,
+receiver shapes: local 61, bare-call 53, param 32, self-attr 23,
+                 chained 13, call-result 11, self-method 6
+local binding kinds (of 61): call-result 30, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
-  return-type-projection   55   parameter-dataflow       36
+  return-type-projection   53   parameter-dataflow       32
   self-attr-typing         23   element-type-dataflow    22
-  multi-level-chain        18   attribute-alias-typing   15
-  higher-order-row-hole    15   mro-edge-resolution      11
-  literal-constructor-typing 10 bare-call-lexicon         9
+  attribute-alias-typing   15   higher-order-row-hole    15
+  multi-level-chain        13   literal-constructor-typing 10
+  bare-call-lexicon         9   mro-edge-resolution       6
   unbound-binding-resolution 1
 ```
 
@@ -127,42 +128,82 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3911   unknown functions: 3612   unknown files: 449
+unknown call sites: 3738   unknown functions: 3531   unknown files: 447
+(this lever: 3764 -> 3738 call sites, 3551 -> 3531 functions,
+ 447 -> 447 files)
 
-receiver shapes: local 1108, param 733, self-attr 639, bare-call 503,
-                 chained 327, call-result 312, self-method 285, other 4
-local binding kinds (of 1108): call-result 437, unbound 231, loop-var 192,
-                 attr 155, comp-var 59, literal 21, exception 9, alias 4
+receiver shapes: local 1098, param 724, self-attr 637, bare-call 498,
+                 chained 327, call-result 310, self-method 140, other 4
+local binding kinds (of 1098): call-result 428, unbound 231, loop-var 192,
+                 attr 155, comp-var 59, literal 20, exception 9, alias 4
 
 levers:
-  return-type-projection    811    parameter-dataflow        733
-  self-attr-typing          639    multi-level-chain         327
-  bare-call-lexicon         299    mro-edge-resolution       285
-  element-type-dataflow     272    unbound-binding-resolution 231
-  attribute-alias-typing    226    higher-order-row-hole      41
-  literal-constructor-typing 34    exception-type-dataflow     9
+  return-type-projection    796    parameter-dataflow        724
+  self-attr-typing          637    multi-level-chain         327
+  bare-call-lexicon         298    element-type-dataflow     272
+  unbound-binding-resolution 231   attribute-alias-typing    226
+  mro-edge-resolution       140    higher-order-row-hole      41
+  literal-constructor-typing 33    exception-type-dataflow     9
   unclassified                4
 ```
 
+The full-package TSV diff for this lever is 26 removed rows and **no added
+rows**: 15 `return-type-projection`, 9 `parameter-dataflow`, 1 `self-attr-typing`
+and 1 `literal-constructor-typing` sites resolved, with no site gaining
+`unknown`. The effect alphabet moves at the margin (network-touching functions
+93 -> 95, db 4514 -> 4513) as previously unresolved receivers name their
+domain, and `entries with typed ops` stays 70 / 10699 because this lever does
+not change the operation vocabulary.
+
 One full-corpus run takes on the order of 8-15 min wall including parser
 generation (452-908 s observed on this machine) and peaks at ~275 MB RSS, so
-the census fits a small harness memory budget.
+the census fits a small harness memory budget. The full-corpus relation join is
+capped at 100 rounds and reports `type-relations: join did not converge in 100
+rounds` both before and after this lever: its counters are a deterministic
+tracked state, not a proven fixed point. The 112-file pinned probe converges,
+so the core numbers are a fixed point.
 
-The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the
-same 215 sites / 236 functions / 65 files and the same shape histogram on
-`django/django/core`, and the same 3911 / 3612 / 449 and the same shape and
-local-binding-kind histograms on `django/django`, so the census agrees with
-the diagnostic already used by the loop.
+The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the same
+199 sites / 216 functions / 60 files and the same shape histogram on
+`django/django/core`, so the census agrees with the diagnostic already used by
+the loop.
 
-The effect-graph gate is unchanged by this diagnostic. On
-`django/django/core`, `racket tools/baseline-check.rkt` reports
-`baseline COVERAGE-FAILED sha256:94fcb2b2b58254f4162c4ebf80bb3ee6876048d4c61e12b6e65c86f5d7d11263`:
-the graph **matches the pin** (the pass/fail half is green — no drift) while the
-Phase-0.3 unknown-elimination obligation is still open (236 unknown functions /
-65 unknown files, `<= 0` required). The census in this document is the aiming
-instrument for that open obligation, not a claim that it is discharged. The
-same run reports 112 parsed / 0 failed, 979 named functions, db 169/54,
-network 9/6, inherits 126, fn-effect-row 979.
+The effect-graph gate is unchanged by this diagnostic. On `django/django/core`,
+`racket tools/baseline-check.rkt` reports
+`baseline COVERAGE-FAILED sha256:2429041cecdcc631fe4ddc636d436194f1afccb3a858c1d515218c30ac6e3913`:
+the graph **matches the re-pinned snapshot** (the pass/fail half is green — no
+drift; -19/+16 atom lines, 2633 atoms) while the Phase-0.3 unknown-elimination
+obligation is still open (216 unknown functions / 60 unknown files, `<= 0`
+required). The census in this document is the aiming instrument for that open
+obligation, not a claim that it is discharged. The same probe reports 112
+parsed / 0 failed, 979 named functions and 979 `fn-effect-row` links.
+
+### Remaining surface after this lever
+
+The call-result projection reaches the receiver-method-return and
+returned-call sites of the `return-type-projection` family (a corpus method's
+returned class, a returned call, and one level of `x.m()` /
+`self.attr.m()` receiver dataflow). The largest remaining groups in the
+before-census TSV were:
+
+- `return-type-projection` (811 before): 213 `super().m()` results, which need
+  out-of-corpus parent-method classification rather than return projection;
+  228 receiver-method returns, still limited by an unprojected receiver or an
+  unprojected override; 165 `self.m()` / corpus-call chains; 77 imported or
+  module result-type DATA entries; 66 unassigned/unknown-bare sites; 62
+  function values.
+- `parameter-dataflow` (733 before): 621-640 have no statically visible
+  in-corpus call site (framework/dispatch-invoked callbacks and protocol
+  methods), so call-chain parameter typing cannot reach them; the visible
+  residual call sites pass locals/attributes, i.e. upstream dataflow.
+
+Two deliberate conservatisms of this lever: a method call projects only its
+most-derived dispatch key, so an unprojected override fails closed instead of
+inheriting a superclass projection, and the relation projection is not
+compositional through call-result receivers (`x = f().m()` is not projected in
+the relations; the classification-time receiver chain does handle `f().m()`).
+The `class-self-attrs` seed path keeps the older skip-missing corpus lookup
+(pre-existing).
 
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change
