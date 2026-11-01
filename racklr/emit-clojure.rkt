@@ -4,7 +4,8 @@
 ;; Canonical reader-macro calls are re-sugared: quote → ', deref → @,
 ;; with-meta → ^, vector → [...], hash-set → #{...}, fn* → #(...).
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract)
 
 (provide emit-clojure)
 
@@ -44,10 +45,15 @@
 
 ;; ── Top level ────────────────────────────────────────────────────────
 
-(define (emit-clojure uir)
-  (if (uir-block? uir)
-      (string-join (map emit-form (uir-block-stmts uir)) "\n")
-      (emit-form uir)))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Clojure source out. Clojure's native row vocabulary
+;; is the `:__effects__` metadata map on the entry defn, which is where the
+;; reader and Jolt actually keep it.
+(define (emit-clojure uir [row #f])
+  (define source (attach-root-row 'emit-clojure uir row))
+  (if (uir-block? source)
+      (string-join (map emit-form (uir-block-stmts source)) "\n")
+      (emit-form source)))
 
 ;; ── Forms ────────────────────────────────────────────────────────────
 

@@ -5,7 +5,8 @@
 ;; left-associatively with no precedence, so infix emission without
 ;; parentheses round-trips for every shape the lowerer produces.
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract)
 
 (provide emit-koka)
 
@@ -27,10 +28,15 @@
 
 ;; ── Top level ────────────────────────────────────────────────────────
 
-(define (emit-koka uir)
-  (if (uir-block? uir)
-      (string-join (map emit-stmt (uir-block-stmts uir)) "\n")
-      (emit-expr uir)))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Koka source out. Koka's native row vocabulary is the
+;; function effect annotation, so an explicit row is rendered as the entry
+;; function's `: <effects>` (or `: total` for an empty row).
+(define (emit-koka uir [row #f])
+  (define source (attach-root-row 'emit-koka uir row))
+  (if (uir-block? source)
+      (string-join (map emit-stmt (uir-block-stmts source)) "\n")
+      (emit-expr source)))
 
 (define (emit-stmt uir)
   (cond

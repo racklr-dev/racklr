@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type Name[T] = value`.
 - `racklr-test/modern-python-test.rkt` covering parse, lower and emit
   round-trips for the new syntax.
+- One emit contract (`racklr/emit-contract.rkt`) and a single dispatch
+  (`racklr/emit.rkt`): every target emitter takes UIR plus an optional explicit
+  effect row, and `(emit target uir row)` renders any supported target from
+  that same input, forwarding target-specific keyword options. An explicit row
+  is reified in the target's native vocabulary (Python/JavaScript guards, Koka
+  effect annotation, Clojure metadata) or refused, never silently dropped;
+  omitting the row keeps the previous one-argument call shape.
+- `racklr-test/emit-contract-test.rkt` covering the target table, the native
+  row rendering for every row-capable target, refusal for the targets without a
+  native row vocabulary, and the unchanged row-less call shape.
 
 ### Changed
 

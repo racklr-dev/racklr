@@ -39,6 +39,8 @@ grammars-v4/*.g4          ← ANTLR4 grammar files (vendor)
                 ▼
   lower-<lang>.rkt        ← CST → UIR lowering pass (per language)
   emit-<lang>.rkt         ← UIR → language text code generator (per language)
+  emit-contract.rkt       ← the contract every target implements: UIR + effect row → source
+  emit.rkt                ← single dispatch over every emit-contract target
                 │
                 ▼
   uir.rkt                 ← UIR struct definitions (Tier 0 + Tier 1 types)
@@ -102,6 +104,12 @@ Both emitters attach the row to the emitted function so it survives round-trips:
 
 **Planned:** runtime enforcement. Static checks run wherever the call graph is resolvable; a runtime guard covers the rest. Jolt is the Clojure runtime for this, and effect-ts is the chosen direction for JavaScript/TypeScript emission.
 
+### emit-contract.rkt / emit.rkt
+
+One contract for every target: `render : UIR × (or/c #f uir-effect-row?) → string`. `emit-contract.rkt` defines that call shape, the row-reification strategies a target may declare, and the shared rule that an explicit row is attached to the unit's entry function (`attach-root-row`) or refused. `emit.rkt` is the single dispatch and the target table: `(emit target uir row)` renders any supported target from the same UIR-plus-row input — `python`, `javascript`, `jsx`, `koka`, `clojure`, `dom-js`, `html`, `json`, `effervesce` — and forwards target-specific keyword options (`#:indent` for JSON, `#:title`/`#:lang`/`#:external-js` for HTML), so it is a drop-in replacement for the direct emitter calls.
+
+A supplied row is rendered in the target's native vocabulary where one exists (Python `@__withEffects({...})`, JavaScript/HTML `__withEffects({...}, fn)`, Koka `fun f() : <llm, db>` / `: total`, Clojure `:__effects__` metadata) and refused with an error where it does not (JSX/DOM/JSON/Effervesce), so it is never silently dropped. Omitting the row keeps the pre-contract one-argument call shape.
+
 ## Generated Parser Design
 
 ### Lexer (tokenize)
@@ -133,6 +141,7 @@ Run each suite directly from inside `racklr-test/`. `raco test racklr-test/*.rkt
 cd racklr-test
 racket effects-infer-test.rkt        # effect inference
 racket effects-contract-test.rkt     # contract checking
+racket emit-contract-test.rkt        # emit contract + single dispatch
 racket effects-python-annot-test.rkt # Python effect annotations
 racket effects-clojure-test.rkt      # Clojure effects + Jolt runtime round-trip
 racket lower-clojure-test.rkt        # Clojure lowering + emit

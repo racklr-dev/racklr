@@ -1,6 +1,7 @@
 #lang racket
 
 (require racklr/uir
+         racklr/emit-contract
          racklr/effects/infer)
 
 (provide emit-javascript)
@@ -740,8 +741,14 @@
     [(pair? uir) (or (program-has-effects? (car uir)) (program-has-effects? (cdr uir)))]
     [else #f]))
 
-(define (emit-javascript uir)
-  (define annotated (annotate-effects uir))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, JavaScript source out. An explicit row is
+;; authoritative for the unit's entry function and is rendered as a
+;; `__withEffects({...}, fn)` guard. The other functions still get their row
+;; from the UIR or, when absent, from inference, exactly as before.
+(define (emit-javascript uir [row #f])
+  (define source (attach-root-row 'emit-javascript uir row))
+  (define annotated (annotate-effects source))
   (define body (emit-js annotated))
   (if (program-has-effects? annotated)
       (string-append (effects-guard-preamble) "\n\n" body)
