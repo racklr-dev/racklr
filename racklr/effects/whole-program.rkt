@@ -93,6 +93,7 @@
   (define comp-supers (make-hash))   ;; (cons comp class) → (listof super-ref: symbol | (first . full-dotted))
   (define class-defs (make-hash))    ;; class-name → (listof comp)
   (define fn-defs (make-hash))       ;; fn-name → (listof comp)
+  (define fn-parents (make-hash))    ;; (cons comp name) → enclosing node name
   (define fn-params (make-hash))     ;; (cons comp name) → params
   (define method-params (make-hash)) ;; (cons comp name) → params
   (for ([cp (in-list comp-programs)])
@@ -103,6 +104,8 @@
       (hash-update! fn-defs n (λ (l) (cons comp l)) '()))
     (for ([(n ps) (in-hash (collect-function-params program))])
       (hash-set! fn-params (cons comp n) ps))
+    (for ([(n parent) (in-hash (collect-fn-parents program))])
+      (hash-set! fn-parents (cons comp n) parent))
     (for ([(n body) (in-hash (collect-methods program))])
       (hash-set! methods (cons comp n) body))
     (for ([(n ps) (in-hash (collect-method-params program))])
@@ -138,6 +141,7 @@
                          #:method-params method-params
                          #:fn-defs fn-defs
                          #:comp-supers comp-supers
+                         #:fn-parents fn-parents
                          #:tokens tokens)
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
@@ -151,8 +155,13 @@
 
   ;; Per-key receiver env: locals from the closed assign relation, self-attrs
   ;; from the class's MRO-closed self-attr relation.
+  (define (owner-of-key k)
+    (or (and (hash-has-key? methods k) (class-name-of-name (cdr k)))
+        (fn-owner-class (cdr k)
+                        (λ (x) (hash-ref fn-parents (cons (car k) x) #f)))))
+
   (define (rt-of k)
-    (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
+    (define owner (owner-of-key k))
     (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
     (receiver-types (hash-ref assign k (hash))
                     (or (and class-env (receiver-types-self-attrs class-env)) (hash))))
@@ -168,7 +177,7 @@
   (for ([k (in-list all-keys)])
     (define body (if (hash-has-key? fns k) (hash-ref fns k) (hash-ref methods k)))
     (define comp (car k))
-    (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
+    (define owner (owner-of-key k))
     (define rt (rt-of k))
     (define blessed (and (hash-has-key? methods k)
                         (method-cap k import-env lex)))

@@ -1361,6 +1361,173 @@
                       (cons "app.py" 'Command.run)))
   (check-equal? (row-names r) '(db)))
 
+;; ── optional-chain / `this` receiver dataflow (JS/TS lowering) ──────
+;; The JS/TS front ends lower `a?.b` to `(if (== a null) void0 b')`, encoding
+;; the member field as a uir-var (tsx-integration-test's B53 fixtures pin the
+;; emitted JS; these pin the UIR the dataflow has to read). Receiver-type
+;; dataflow must follow the guard's PRESENT branch — the absent branch carries
+;; no receiver class — and must start `this` at the enclosing class.
+
+(define (jsdotv b f) (uir-call (sym "dot") (list b (v f))))
+(define (void-0) (uir-call (sym "void") (list (uir-number 0))))
+(define (optional-chain base present)
+  (uir-if (uir-call (sym "==") (list base (uir-null))) (void-0) present))
+
+(define (test-receiver-type-optional-chain-new)
+  ;; `const s = new Service(); s?.m()`: `new C(...)` seeds the receiver type,
+  ;; the optional-chain guard is read through its present branch, and the call
+  ;; resolves to Service.m's edge (llm) instead of falling to `unknown`.
+  (define p
+    (prog (py-class "Service" (list (py-method "m" (uir-call (dot (v "llm") "query") '()))))
+          (fn "run"
+              (uir-block
+               (list (uir-call (sym "const")
+                               (list (uir-set! (sym "s") (uir-new (v "Service") '()))))
+                     (optional-chain (v "s")
+                                     (uir-call (jsdotv (v "s") "m") '())))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.ts" p)))
+                      (cons "app.ts" 'run)))
+  (check-equal? (row-names r) '(llm))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-receiver-type-optional-chain-this)
+  ;; `this?.m()` inside a method: `this` is the host implicit receiver, so the
+  ;; optional call dispatches through the class MRO to Svc.m (io). The JS
+  ;; lexicon supplies `this` in the dialect's self-name set.
+  (define p
+    (prog (py-class "Svc"
+                    (list (py-method "m" (uir-call (jsdot (v "console") "log") '()))
+                          (py-method "run"
+                                     (optional-chain (v "this")
+                                                     (uir-call (jsdotv (v "this") "m") '())))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.ts" p))
+                                        #:lexicon javascript-lexicon)
+                      (cons "app.ts" 'Svc.run)))
+  (check-equal? (row-names r) '(io))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-receiver-type-optional-chain-assignment)
+  ;; `const r = x?.y` where the present value is a constructor: the value's
+  ;; class is the present branch's class, so `r?.m()` resolves — the absent
+  ;; `void 0` branch must not defeat the projection.
+  (define p
+    (prog (py-class "Service" (list (py-method "m" (uir-call (dot (v "llm") "query") '()))))
+          (fn "run"
+              (uir-block
+               (list (uir-call (sym "const")
+                               (list (uir-set! (sym "r")
+                                               (optional-chain (v "x")
+                                                               (uir-new (v "Service") '())))))
+                     (optional-chain (v "r")
+                                     (uir-call (jsdotv (v "r") "m") '())))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.ts" p)))
+                      (cons "app.ts" 'run)))
+  (check-equal? (row-names r) '(llm))
+  (check-false (row-lookup r 'unknown)))
+
+;; ── unresolved self.m() leaves ──────────────────────────────────────
+;; Two dataflow rules remove the self-method `unknown` leaves the Django core
+;; census reports: a nested function inherits its enclosing method's class, and
+;; `self` is a receiver of the enclosing class (class -> module -> domain).
+
+(define (test-self-method-in-tagged-module)
+  ;; `self._open()` on a class defined in an io-tagged module: the enclosing
+  ;; class grounds the receiver, and class -> module -> domain yields io. The
+  ;; same call in an untagged module has no domain to ground it and stays
+  ;; `unknown` (no heuristic replaces the missing receiver evidence).
+  (define app
+    (prog (py-class "Storage"
+                    (list (py-method "open"
+                                     (uir-call (dot (v "self") "_open") '()))))))
+  (define tagged
+    (infer-effects-all (list (cons "app.py" app))
+                       #:import-env (import-env (hash "app.py" "django.core.files")
+                                                (hash) (hash))))
+  (check-equal? (row-names (hash-ref tagged (cons "app.py" 'Storage.open))) '(io))
+  (define untagged
+    (infer-effects-all (list (cons "app.py" app))
+                       #:import-env (import-env (hash "app.py" "untagged.module")
+                                                (hash) (hash))))
+  (check-equal? (row-names (hash-ref untagged (cons "app.py" 'Storage.open)))
+                '(unknown)))
+
+(define (test-nested-function-self-method)
+  ;; A nested `def` inside a method keeps the enclosing method's class: its
+  ;; `self.helper()` is an edge to S.helper (llm), so the closure is not an
+  ;; unresolved self-method leaf and the enclosing method stays pure.
+  (define p
+    (prog (py-class "S"
+                    (list (py-method "outer"
+                                     (uir-block
+                                      (list (fn "inner"
+                                                (uir-call (dot (v "self") "helper") '())))))
+                          (py-method "helper" (uir-call (dot (v "llm") "query") '()))))))
+  (define rows (infer-effects-all (list (cons "app.py" p))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'inner))) '(llm))
+  (check-false (row-lookup (hash-ref rows (cons "app.py" 'inner)) 'unknown))
+  (check-equal? (hash-ref rows (cons "app.py" 'S.outer)) (empty-row)))
+
+(define (test-js-this-method-single-file)
+  ;; Single-file inference (the emit path) also reads `this.m()` through the
+  ;; class MRO: emit-javascript annotates rows with infer-effects, not the
+  ;; whole-program fixpoint.
+  (define p
+    (prog (py-class "Svc"
+                    (list (py-method "m" (uir-call (jsdot (v "console") "log") '()))
+                          (py-method "run" (uir-call (jsdotv (v "this") "m") '()))))))
+  (define rows (infer-effects p #:lexicon javascript-lexicon))
+  (check-equal? (modality (hash-ref rows 'Svc.run) 'io) 'may))
+
+(define (test-self-attr-and-this-attr-parity)
+  ;; `self.attr` (Python uir-var receiver) and `this.attr` (JS uir-symbol
+  ;; receiver) must enter the SAME self-attribute fast path of the chain walk:
+  ;; both resolve the attribute's constructor class, then the call is an MRO
+  ;; edge to that class's method.
+  (define py
+    (prog (py-class "Cache"
+                    (list (py-method "m" (uir-call (dot (v "db") "commit") '()))))
+          (py-class "Svc"
+                    (list (py-method "run"
+                                     (uir-block
+                                      (list (uir-set! (dot (v "self") "cache")
+                                                      (uir-call (v "Cache") '()))
+                                            (uir-call (dot (dot (v "self") "cache") "m")
+                                                      '()))))))))
+  (define py-row (hash-ref (infer-effects-all (list (cons "app.py" py)))
+                           (cons "app.py" 'Svc.run)))
+  (check-equal? (row-names py-row) '(db))
+  (check-false (row-lookup py-row 'unknown))
+  (define js
+    (prog (py-class "Cache"
+                    (list (py-method "m" (uir-call (jsdot (v "console") "log") '()))))
+          (py-class "Svc"
+                    (list (py-method "run"
+                                     (uir-block
+                                      (list (uir-set! (jsdotv (v "this") "cache")
+                                                      (uir-new (v "Cache") '()))
+                                            (uir-call (jsdot (jsdotv (v "this") "cache") "m")
+                                                      '()))))))))
+  (define js-row (hash-ref (infer-effects-all (list (cons "app.ts" js))
+                                              #:lexicon javascript-lexicon)
+                           (cons "app.ts" 'Svc.run)))
+  (check-equal? (row-names js-row) '(io))
+  (check-false (row-lookup js-row 'unknown)))
+
+(define (test-self-method-in-pure-tagged-module)
+  ;; The class->module->domain tail accepts only a CONCRETE domain capability:
+  ;; an unresolved `self.m()` on a class whose module is tagged pure must stay
+  ;; `unknown`, not become `pure`. An unknown callable attribute may hold user
+  ;; code, so a pure-tagged module cannot vouch for it.
+  (define app
+    (prog (py-class "Helper"
+                    (list (py-method "run"
+                                     (uir-call (dot (v "self") "_missing") '()))))))
+  (define rows
+    (infer-effects-all (list (cons "app.py" app))
+                       #:import-env (import-env (hash "app.py" "django.utils.encoding")
+                                                (hash) (hash))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'Helper.run))) '(unknown)))
+
 (define (test-imported-constructor-receiver)
   ;; `x = MigrationLoader(...)` where MigrationLoader is imported from a module
   ;; OUTSIDE the scanned corpus (django.db): the receiver-type env tracks the
@@ -2243,6 +2410,14 @@
   (test-receiver-type-nested-attr)
   (test-receiver-type-bare-class-ref)
   (test-receiver-type-class-field-initializer)
+  (test-receiver-type-optional-chain-new)
+  (test-receiver-type-optional-chain-this)
+  (test-receiver-type-optional-chain-assignment)
+  (test-self-method-in-tagged-module)
+  (test-nested-function-self-method)
+  (test-js-this-method-single-file)
+  (test-self-attr-and-this-attr-parity)
+  (test-self-method-in-pure-tagged-module)
   (test-imported-constructor-receiver)
   (test-imported-class-bare-ref-receiver)
   (test-param-annotation-receiver)

@@ -173,6 +173,7 @@
                                #:method-params method-params
                                #:fn-defs fn-defs
                                #:comp-supers comp-supers
+                               #:fn-parents [fn-parents (hash)]
                                #:tokens [tokens default-effect-tokens])
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
@@ -184,7 +185,13 @@
   (for ([k (in-list all-keys)]) (hash-set! known k #t))
 
   (define (body-of k) (if (hash-has-key? fns k) (hash-ref fns k) (hash-ref methods k)))
-  (define (owner-of k) (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
+  ;; Enclosing class of a call-graph node: a method's own class, or — for a
+  ;; nested function — the class of the method frame it is defined in, so the
+  ;; closure's implicit receiver dispatches through that class's MRO.
+  (define (owner-of k)
+    (or (and (hash-has-key? methods k) (class-name-of-name (cdr k)))
+        (fn-owner-class (cdr k)
+                        (λ (x) (hash-ref fn-parents (cons (car k) x) #f)))))
   (define (params-of k)
     (if (hash-has-key? fns k) (hash-ref fn-params k '()) (hash-ref method-params k '())))
 

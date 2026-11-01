@@ -15,6 +15,8 @@
   collect-methods
   collect-function-params
   collect-method-params
+  collect-fn-parents
+  fn-owner-class
   collect-class-names
   collect-supers
   mro-chain
@@ -154,6 +156,63 @@
               (hash-set! h (qualified-name-symbol cname mname) (uir-method-params mm))))))))
   (walk-uir program visit!)
   h)
+
+;; name-symbol → enclosing function/method call-graph name, for every NESTED
+;; named function (a `def` inside a method or function body). collect-functions
+;; keys a nested `def` by its own name; this records which enclosing node it
+;; belongs to, so a closure's `self.m()` can resolve through the enclosing
+;; method's class (and its MRO) instead of falling to `unknown` because the
+;; nested node's own name carries no class prefix.
+(define (collect-fn-parents program)
+  (define h (make-hash))
+  (define (name-of-fn n)
+    (and (uir-fn? n)
+         (uir-fn-name n)
+         (uir-symbol? (uir-fn-name n))
+         (string->symbol (uir-symbol-name (uir-fn-name n)))))
+  (define (walk n frame)
+    (cond
+      [(uir-fn? n)
+       (define nm (name-of-fn n))
+       (when (and nm frame) (hash-set! h nm frame))
+       (walk (uir-fn-body n) (or nm frame))]
+      ;; A JS/TS named function declaration / bound arrow is a call-graph node
+      ;; too; its body is the second element of the pair.
+      [(named-function n)
+       => (λ (p)
+            (when frame (hash-set! h (car p) frame))
+            (walk (cdr p) (car p)))]
+      [(uir-class? n)
+       (define cname (class-name-symbol n))
+       (for ([m (in-list (uir-class-methods n))])
+         (define mm (unwrap-method m))
+         (define mname (and mm
+                            (uir-method-name mm)
+                            (uir-symbol? (uir-method-name mm))
+                            (string->symbol (uir-symbol-name (uir-method-name mm)))))
+         (when (and cname mname)
+           (walk (uir-method-body mm) (qualified-name-symbol cname mname))))
+       ;; Class-level bodies (field initializers) carry no enclosing function
+       ;; frame.
+       (walk (uir-class-fields n) #f)]
+      [(struct? n)
+       (for ([f (in-list (cdr (vector->list (struct->vector n))))])
+         (walk f frame))]
+      [(pair? n) (walk (car n) frame) (walk (cdr n) frame)]
+      [else (void)]))
+  (walk program #f)
+  h)
+
+;; Enclosing class name symbol for call-graph node `name`, following the nested
+;; function parent chain until a `Class.method` frame is reached. A nested
+;; function belongs to the class of the method it is defined in, so its
+;; `self`/`cls` (and JS/TS `this`) receiver resolves like the method's.
+;; `parent-of` maps a node name to its enclosing node name (collect-fn-parents,
+;; or a component-qualified lookup in whole-program inference).
+(define (fn-owner-class name parent-of)
+  (let loop ([n name])
+    (define p (parent-of n))
+    (and p (or (class-name-of-name p) (loop p)))))
 
 ;; Set of all class name symbols reachable from `program`.
 (define (collect-class-names program)
