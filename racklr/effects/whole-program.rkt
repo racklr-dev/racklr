@@ -44,9 +44,11 @@
 ;; shape/op/receiver/binding-kind are the aiming data (classify-all.rkt's
 ;; receiver-shape); `site` is the exact callee site string (shape.rkt's
 ;; callee-site-string), so a census names a call site instead of an aggregate
-;; count; `higher-order?` is #t when a bare callee names one of the enclosing
-;; function's parameters (the row-hole lever) rather than an unknown free name
-;; (the lexicon lever).
+;; count; `higher-order?` is #t only when a bare callee names one of the
+;; enclosing function's parameters (the row-hole lever). A bare callee that is
+;; a local bound from a function value carries binding-kind 'fn (the
+;; function-value-typing lever) and a free/global/imported name carries
+;; 'unbound (the lexicon lever), so the three bare-call cases are separable.
 
 (define (var-symbol v)
   (cond

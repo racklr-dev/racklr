@@ -14,8 +14,8 @@
 ;; This is not the empty-context census. `effervesce/tools/unknown-histogram.rkt`
 ;; classifies each call with no known names, so intra-program edges and imported
 ;; handles count as unknown (1463 non-edge sites on django/django/core). This
-;; tool counts only what the real context leaves unresolved (249 sites on the
-;; same corpus at the same revision) — the surface worth aiming levers at.
+;; tool counts only what the real context leaves unresolved — the surface worth
+;; aiming levers at.
 ;;
 ;; Usage:
 ;;   racket tools/unknown-census.rkt <dir> [<dir> ...]
@@ -34,57 +34,22 @@
 ;;
 ;;   PLTCOLLECTS="$(pwd):" racket tools/unknown-census.rkt django/django/core
 ;;
-;; The effect inference and the census live in the racklr collection; the
-;; Python front end (parse + lower) is the effervesce submodule's
-;; check/host-python.rkt, the same module the effervesce tools use.
+;; The effect inference, the census, and the corpus/CLI helpers live in the
+;; racklr collection; the Python front end (parse + lower) is the effervesce
+;; submodule's check/host-python.rkt, the same module the effervesce tools use.
 
 (require racket/file
          racklr/uir
          racklr/effects/contract
          racklr/effects/imports
          racklr/effects/census
+         racklr/effects/census-cli
          "../effervesce/check/host-python.rkt")
-
-;; ── corpus walk ──────────────────────────────────────────────────────
-
-(define (find-py-files dir)
-  (define out '())
-  (let loop ([d dir])
-    (for ([e (in-list (directory-list d))])
-      (define p (build-path d e))
-      (cond
-        [(directory-exists? p) (loop p)]
-        [(regexp-match? #rx"[.]py$" e) (set! out (cons p out))]
-        [else (void)])))
-  (reverse out))
-
-;; Canonical dotted module name of a scanned root directory: walk up past every
-;; __init__.py-bearing ancestor and join the names, so scanning django/django
-;; yields "django" rather than the bare basename. Same rule as
-;; effervesce/tools/type-graph.rkt; a root with no package ancestor falls back
-;; to its basename.
-(define (package-root-name root-dir)
-  (define comps '())
-  (let loop ([d root-dir])
-    (define-values (base name dir?) (split-path d))
-    (cond
-      [(and base (file-exists? (build-path d "__init__.py")))
-       (set! comps (cons (path->string name) comps))
-       (loop base)]
-      [else
-       (if (null? comps)
-           (let-values ([(b n dir?) (split-path root-dir)]) (path->string n))
-           (string-join comps "."))])))
 
 ;; ── report helpers ───────────────────────────────────────────────────
 
 (define (pct n total)
   (if (zero? total) 0 (round (* 100 (/ n total)))))
-
-(define (print-counts title counts total)
-  (printf "\n~a\n" title)
-  (for ([p (in-list counts)])
-    (printf "  ~a  x~a  (~a%)\n" (car p) (cdr p) (pct (cdr p) total))))
 
 ;; (op . count) for the sites of one lever, highest first.
 (define (lever-op-counts c lever)
@@ -107,29 +72,16 @@
 ;; ── main ─────────────────────────────────────────────────────────────
 
 (define (main)
-  (define args (vector->list (current-command-line-arguments)))
-  (define (flag-value flag)
-    (for/or ([a (in-list args)] [i (in-naturals)]
-             #:when (string=? a flag))
-      (and (< (add1 i) (length args)) (list-ref args (add1 i)))))
-  (define top-n (or (string->number (or (flag-value "--top") "10")) 10))
-  (define shape-filter
-    (let ([s (flag-value "--shape")]) (and s (string->symbol s))))
-  (define lever-filter
-    (let ([s (flag-value "--lever")]) (and s (string->symbol s))))
-  (define print-sites? (and (member "--sites" args) #t))
-  (define tsv-path (flag-value "--tsv"))
-  (define dirs
-    (filter (λ (a) (not (string-prefix? a "--")))
-            (let loop ([as args] [acc '()])
-              (cond
-                [(null? as) (reverse acc)]
-                [(member (car as) '("--top" "--shape" "--lever" "--tsv"))
-                 (loop (if (pair? (cdr as)) (cddr as) (cdr as)) acc)]
-                [else (loop (cdr as) (cons (car as) acc))]))))
-  (unless (pair? dirs)
-    (eprintf "usage: unknown-census.rkt <dir> [<dir> ...] [--top N] [--shape SHAPE] [--lever LEVER] [--sites] [--tsv PATH]\n")
+  (define cli (parse-census-cli (vector->list (current-command-line-arguments))))
+  (unless cli
+    (eprintf "~a\n" census-cli-usage)
     (exit 1))
+  (define dirs (census-cli-dirs cli))
+  (define top-n (census-cli-top cli))
+  (define shape-filter (census-cli-shape cli))
+  (define lever-filter (census-cli-lever cli))
+  (define print-sites? (census-cli-sites? cli))
+  (define tsv-path (census-cli-tsv-path cli))
 
   (define roots
     (for/list ([dir (in-list dirs)])
@@ -194,8 +146,11 @@
           (census-unknown-functions c)
           (census-unknown-files c))
 
-  (print-counts "Receiver shapes (unknown call sites):"
-                (census-shape-counts c) (census-site-count c))
+  (printf "\nReceiver shapes (unknown call sites):\n")
+  (for ([p (in-list (census-shape-counts c))])
+    (printf "  ~a  x~a  (~a%)\n" (car p) (cdr p)
+            (pct (cdr p) (census-site-count c))))
+
   (define local-pair (assq 'local (census-shape-counts c)))
   (define local-total (if local-pair (cdr local-pair) 0))
   (printf "\nLocal binding kinds (of ~a local receivers):\n" local-total)
@@ -233,4 +188,4 @@
       #:exists 'truncate)
     (printf "\nWrote ~a (~a site rows).\n" tsv-path (census-site-count c))))
 
-(main)
+(module+ main (main))

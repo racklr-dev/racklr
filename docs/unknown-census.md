@@ -61,13 +61,13 @@ that would resolve it (`census-lever-of` in `racklr/effects/census.rkt`):
 | `attribute-alias-typing` | local `attr` / `alias` | carry a receiver type through an attribute copy or alias |
 | `mro-edge-resolution` | `self-method` | resolve `self.m()`/`cls.m()` through the class MRO to an edge |
 | `multi-level-chain` | `chained` | walk a multi-level `a.b.m()` receiver chain to a class |
-| `higher-order-row-hole` | `bare-call` naming an enclosing parameter | type a callback parameter as a row hole at its call sites |
-| `bare-call-lexicon` | `bare-call` | add the missing bare stdlib/framework name to the DATA lexicon |
+| `higher-order-row-hole` | `bare-call` whose callee names an enclosing parameter | type a callback parameter as a row hole at its call sites |
+| `bare-call-lexicon` | `bare-call` to a free/global/imported name | add the missing bare stdlib/framework name to the DATA lexicon |
 | `import-handle-lexicon` | `symbol` | tag the imported module/object handle's effect domain |
 | `literal-constructor-typing` | local `literal` | give container/stdlib literals a receiver type |
 | `unbound-binding-resolution` | local `unbound` | bind a module-global/import/closure name before typing the receiver |
 | `exception-type-dataflow` | local `exception` | type the caught exception binding |
-| `function-value-typing` | local `fn` | type a function value held in a local before calling it |
+| `function-value-typing` | `bare-call` or receiver from a local `fn` | type a function value held in a local before calling it |
 | `local-constructor-tracking` | other local | track the local's concrete constructor (`KnownClass(...)`) |
 | `unclassified` | `var` / `other` | shape the census does not yet attribute to a lever |
 
@@ -84,13 +84,19 @@ that would resolve it (`census-lever-of` in `racklr/effects/census.rkt`):
    function / file counters) against the baseline below: a lever that does not
    move real sites did not move the goal.
 
-`higher-order?` in the TSV distinguishes a callback parameter (row-hole work,
-Phase 1) from a missing bare lexicon name, so the two `bare-call` buckets are
-not conflated. The `component` column is the dotted module path (for example
+`higher-order?` in the TSV is #t only for a callback parameter (row-hole
+work); a bare call to a function-valued local is the separate
+`function-value-typing` lever (binding-kind `fn`), and a bare free/imported
+name stays `bare-call-lexicon` (binding-kind `unbound`), so the three
+`bare-call` cases are not conflated. The `component` column is the dotted module path (for example
 `django.core.cache.backends.base`), so the TSV does not depend on the checkout
 directory and diffs cleanly across machines.
 
-## Baseline (observed 2026-10-31, racklr `8a5982d` + this change)
+TSV fields are **space-normalized, not escaped**: every control character in a
+field (tab, newline, carriage return, ...) is replaced by a space. The file is
+a diff artifact, not a lossless serialization of arbitrary identifiers.
+
+## Baseline (observed 2026-11-01, racklr `c349f37` + this change)
 
 `django/django/core`:
 
@@ -105,11 +111,11 @@ local binding kinds (of 75): call-result 44, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
-  return-type-projection   57   self-attr-typing         39
-  bare-call-lexicon        38   parameter-dataflow       36
+  return-type-projection   69   self-attr-typing         39
+  parameter-dataflow       36   element-type-dataflow    22
   multi-level-chain        19   higher-order-row-hole    17
-  element-type-dataflow    14   mro-edge-resolution      12
-  attribute-alias-typing   10   literal-constructor-typing 6
+  attribute-alias-typing   15   mro-edge-resolution      12
+  literal-constructor-typing 10 bare-call-lexicon         9
   unbound-binding-resolution 1
 ```
 
@@ -118,37 +124,42 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3997   unknown functions: 3668   unknown files: 449
+unknown call sites: 3983   unknown functions: 3653   unknown files: 449
 
-receiver shapes: local 1122, param 736, self-attr 669, bare-call 525,
+receiver shapes: local 1126, param 736, self-attr 669, bare-call 507,
                  chained 328, call-result 319, self-method 294, other 4
-local binding kinds (of 1122): call-result 465, unbound 211, loop-var 192,
-                 attr 160, comp-var 59, literal 22, exception 9, alias 4
+local binding kinds (of 1126): call-result 453, unbound 232, loop-var 192,
+                 attr 155, comp-var 59, literal 22, exception 9, alias 4
 
 levers:
-  return-type-projection    784    parameter-dataflow        736
-  self-attr-typing          669    bare-call-lexicon         480
-  multi-level-chain         328    mro-edge-resolution       294
-  element-type-dataflow     251    unbound-binding-resolution 211
-  attribute-alias-typing    164    higher-order-row-hole      45
-  literal-constructor-typing 22    exception-type-dataflow     9
+  return-type-projection    834    parameter-dataflow        736
+  self-attr-typing          669    multi-level-chain         328
+  bare-call-lexicon         299    mro-edge-resolution       294
+  element-type-dataflow     272    unbound-binding-resolution 232
+  attribute-alias-typing    226    higher-order-row-hole      45
+  literal-constructor-typing 35    exception-type-dataflow     9
   unclassified                4
 ```
 
-One full-corpus run takes ~15 min wall including parser generation and peaks
-at ~275 MB RSS, so the census fits a small harness memory budget.
+One full-corpus run takes on the order of 8-15 min wall including parser
+generation (723-908 s observed on this machine) and peaks at ~275 MB RSS, so
+the census fits a small harness memory budget.
 
 The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the
 same 249 sites / 250 functions / 66 files and the same shape histogram on
-`django/django/core`, and the same 3997 / 3668 / 449 and the same shape and
+`django/django/core`, and the same 3983 / 3653 / 449 and the same shape and
 local-binding-kind histograms on `django/django`, so the census agrees with
 the diagnostic already used by the loop.
 
-The `fn-effect-row` / effect-algebra numbers from
-`effervesce/tools/type-graph.rkt` are the independent inference gate and are
-not changed by this diagnostic: on `django/django/core` it still reports
-112 parsed / 0 failed, 979 named functions, unknown 250 functions / 66 files,
-db 169/54, network 9/6, inherits 126, fn-effect-row 979.
+The effect-graph gate is unchanged by this diagnostic. On
+`django/django/core`, `racket tools/baseline-check.rkt` reports
+`baseline COVERAGE-FAILED sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`:
+the graph **matches the pin** (the pass/fail half is green — no drift) while the
+Phase-0.3 unknown-elimination obligation is still open (250 unknown functions /
+66 unknown files, `<= 0` required). The census in this document is the aiming
+instrument for that open obligation, not a claim that it is discharged. The
+same run reports 112 parsed / 0 failed, 979 named functions, db 169/54,
+network 9/6, inherits 126, fn-effect-row 979.
 
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change

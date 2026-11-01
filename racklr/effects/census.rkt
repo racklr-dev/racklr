@@ -49,11 +49,13 @@
 ;; ── records ──────────────────────────────────────────────────────────
 
 ;; `shape` and `binding-kind` are receiver-shape's bucket and the enclosing
-;; function's local-binding kind (classify-all.rkt / whole-program.rkt).
-;; `lever` is the receiver-type-dataflow mechanism that would resolve the
-;; site. `site` is the callee site string (e.g. "self.connection.cursor").
-;; `higher-order?` marks a bare callee that names one of the enclosing
-;; function's parameters (a callback, resolved by row holes, not a lexicon).
+;; function's binding kind for the receiver/callee (classify-all.rkt /
+;; whole-program.rkt). `lever` is the receiver-type-dataflow mechanism that
+;; would resolve the site. `site` is the callee site string (e.g.
+;; "self.connection.cursor"). `higher-order?` marks a bare callee that names
+;; one of the enclosing function's parameters (a callback, resolved by row
+;; holes); a function-valued local invoked bare is binding-kind 'fn and the
+;; function-value-typing lever instead.
 (struct census-site (component function shape op receiver binding-kind
                      lever site higher-order?)
   #:transparent)
@@ -68,11 +70,23 @@
 ;; ── lever attribution ────────────────────────────────────────────────
 
 ;; The receiver-type-dataflow lever each unknown site needs. Shapes come from
-;; classify-all.rkt's receiver-shape; local receivers are refined by the
-;; binding kind recorded by the whole-program walk.
-(define (census-lever-of shape binding-kind #:higher-order? [higher-order? #f])
+;; classify-all.rkt's receiver-shape; `binding-kind` refines `local` receivers
+;; and bare calls, both recorded by the whole-program walk:
+;;   bare-call + 'param   a callback parameter (row-hole lever)
+;;   bare-call + 'fn      a local function value (function-value-typing lever)
+;;   bare-call + else     a free/global/imported name (lexicon lever)
+(define (census-lever-of shape binding-kind)
   (case shape
-    [(bare-call) (if higher-order? 'higher-order-row-hole 'bare-call-lexicon)]
+    [(bare-call)
+     (case binding-kind
+       [(param) 'higher-order-row-hole]
+       [(fn) 'function-value-typing]
+       [(call-result) 'return-type-projection]
+       [(loop-var comp-var) 'element-type-dataflow]
+       [(attr alias) 'attribute-alias-typing]
+       [(literal) 'literal-constructor-typing]
+       [(exception) 'exception-type-dataflow]
+       [else 'bare-call-lexicon])]
     [(param) 'parameter-dataflow]
     [(call-result) 'return-type-projection]
     [(self-attr) 'self-attr-typing]
@@ -163,8 +177,7 @@
             (match-define (list comp fn-name shape op rx kind site higher?)
               r)
             (census-site (component-name comp) fn-name shape op rx kind
-                         (census-lever-of shape kind
-                                          #:higher-order? (and higher? #t))
+                         (census-lever-of shape kind)
                          site
                          (and higher? #t)))
           census-site<?))

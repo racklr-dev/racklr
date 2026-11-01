@@ -11,9 +11,11 @@
 ;;  - coverage counters and aggregations are deterministic.
 
 (require rackunit
+         racket/file
          racklr/uir
          racklr/effects/infer
-         racklr/effects/census)
+         racklr/effects/census
+         racklr/effects/census-cli)
 
 ;; ── UIR helpers (same constructs the other effects suites use) ───────
 
@@ -28,7 +30,7 @@
 (define (py-method name body)
   (uir-method (uir-symbol name) '() body 'public))
 (define (param name)
-  (uir-typed-param (uir-symbol name) #f #f))
+  (uir-typed-param (uir-symbol name) #f #f #f))
 
 ;; ── fixtures ─────────────────────────────────────────────────────────
 
@@ -142,6 +144,7 @@
   (check-equal? (census-site-shape s) 'bare-call)
   (check-equal? (census-site-op s) 'cb)
   (check-equal? (census-site-site s) "cb")
+  (check-equal? (census-site-binding-kind s) 'param)
   (check-true (census-site-higher-order? s))
   (check-equal? (census-site-lever s) 'higher-order-row-hole))
 
@@ -151,6 +154,31 @@
   (check-equal? (census-site-shape s) 'bare-call)
   (check-false (census-site-higher-order? s))
   (check-equal? (census-site-lever s) 'bare-call-lexicon))
+
+(define (test-local-function-value-bare-call-lever)
+  ;; A function value held in a local and invoked bare is not a missing lexicon
+  ;; name: it is the function-value-typing lever, and it is not a row-hole
+  ;; callback (higher-order? stays #f). A `let` binding is used because the
+  ;; engine's named-function collection already turns `cb = lambda: ...` into a
+  ;; named function edge; this is the binding shape that stays unresolved, so
+  ;; the census must still attribute it to the right lever.
+  (define c (one-site-census
+             (uir-let (sym "cb") (uir-fn #f '() (uir-null) #f #f)
+                      (uir-call (v "cb") '()))))
+  (define s (first (census-sites c)))
+  (check-equal? (census-site-shape s) 'bare-call)
+  (check-equal? (census-site-op s) 'cb)
+  (check-equal? (census-site-binding-kind s) 'fn)
+  (check-false (census-site-higher-order? s))
+  (check-equal? (census-site-lever s) 'function-value-typing))
+
+(define (test-assigned-lambda-resolves-as-edge)
+  ;; The engine's named-function collection makes `cb = lambda: ...; cb()` an
+  ;; edge, so it is not an unknown site at all (no lever is invented for it).
+  (define c (one-site-census
+             (prog (uir-set! (sym "cb") (uir-fn #f '() (uir-null) #f #f))
+                   (uir-call (v "cb") '()))))
+  (check-equal? (census-site-count c) 0))
 
 (define (test-lever-taxonomy)
   (check-equal? (census-lever-of 'param #f) 'parameter-dataflow)
@@ -165,8 +193,12 @@
   (check-equal? (census-lever-of 'local 'unbound) 'unbound-binding-resolution)
   (check-equal? (census-lever-of 'local 'fn) 'function-value-typing)
   (check-equal? (census-lever-of 'local #f) 'local-constructor-tracking)
-  (check-equal? (census-lever-of 'bare-call #f #:higher-order? #t)
-                'higher-order-row-hole)
+  (check-equal? (census-lever-of 'bare-call 'param) 'higher-order-row-hole)
+  (check-equal? (census-lever-of 'bare-call 'fn) 'function-value-typing)
+  (check-equal? (census-lever-of 'bare-call 'call-result) 'return-type-projection)
+  (check-equal? (census-lever-of 'bare-call 'loop-var) 'element-type-dataflow)
+  (check-equal? (census-lever-of 'bare-call 'attr) 'attribute-alias-typing)
+  (check-equal? (census-lever-of 'bare-call 'unbound) 'bare-call-lexicon)
   (check-equal? (census-lever-of 'bare-call #f) 'bare-call-lexicon)
   (check-equal? (census-lever-of 'other #f) 'unclassified)
   ;; Every lever in the taxonomy has a report description.
@@ -192,6 +224,100 @@
   (define raw (census-unknown-sites
                (list (cons "m1.py" (prog (fn "f" (uir-call (v "z_external") '())))))))
   (check-equal? (map census-site-component (census-sites raw)) '("m1.py")))
+
+;; ── corpus scan and CLI parsing ──────────────────────────────────────
+
+(define (tmp-dir)
+  (make-temporary-file "census-test-~a" 'directory))
+
+(define (touch file)
+  (call-with-output-file file void))
+
+(define (test-package-root-name)
+  ;; A nested package: only the two final directory components carry
+  ;; __init__.py, so the dotted root is "a.b".
+  (define tmp (tmp-dir))
+  (dynamic-wind
+    void
+    (λ ()
+      (define a (build-path tmp "a"))
+      (define b (build-path a "b"))
+      (make-directory a)
+      (make-directory b)
+      (touch (build-path a "__init__.py"))
+      (touch (build-path b "__init__.py"))
+      (check-equal? (package-root-name b) "a.b"))
+    (λ () (delete-directory/files tmp)))
+
+  ;; django/django shape: only the scanned root is a package, so the result is
+  ;; the single component "pkg" (the same rule that turns django/django into
+  ;; "django").
+  (define tmp2 (tmp-dir))
+  (dynamic-wind
+    void
+    (λ ()
+      (define pkg (build-path tmp2 "pkg"))
+      (make-directory pkg)
+      (touch (build-path pkg "__init__.py"))
+      (check-equal? (package-root-name pkg) "pkg"))
+    (λ () (delete-directory/files tmp2)))
+
+  ;; No package ancestor: the basename fallback.
+  (define tmp3 (tmp-dir))
+  (dynamic-wind
+    void
+    (λ ()
+      (define plain (build-path tmp3 "plain"))
+      (make-directory plain)
+      (check-equal? (package-root-name plain) "plain"))
+    (λ () (delete-directory/files tmp3))))
+
+(define (test-find-py-files)
+  (define tmp (tmp-dir))
+  (dynamic-wind
+    void
+    (λ ()
+      (define sub (build-path tmp "sub"))
+      (make-directory sub)
+      (touch (build-path tmp "a.py"))
+      (touch (build-path sub "b.py"))
+      (touch (build-path sub "notes.txt"))
+      (check-equal?
+       (map (λ (p) (path->string (find-relative-path tmp p)))
+            (find-py-files tmp))
+       '("a.py" "sub/b.py")))
+    (λ () (delete-directory/files tmp))))
+
+(define (test-parse-census-cli)
+  ;; Defaults: dirs only, top 10, no filters, no TSV.
+  (define d (parse-census-cli '("django/django/core")))
+  (check-true (census-cli? d))
+  (check-equal? (census-cli-dirs d) '("django/django/core"))
+  (check-equal? (census-cli-top d) 10)
+  (check-false (census-cli-shape d))
+  (check-false (census-cli-lever d))
+  (check-false (census-cli-sites? d))
+  (check-false (census-cli-tsv-path d))
+
+  ;; All flags, values kept in order, flags stripped from dirs.
+  (define f (parse-census-cli
+             '("d1" "--top" "5" "--shape" "param" "--lever"
+               "parameter-dataflow" "--sites" "--tsv" "/tmp/census.tsv" "d2")))
+  (check-equal? (census-cli-dirs f) '("d1" "d2"))
+  (check-equal? (census-cli-top f) 5)
+  (check-equal? (census-cli-shape f) 'param)
+  (check-equal? (census-cli-lever f) 'parameter-dataflow)
+  (check-true (census-cli-sites? f))
+  (check-equal? (census-cli-tsv-path f) "/tmp/census.tsv")
+
+  ;; Invalid invocations are #f, never exceptions.
+  (check-false (parse-census-cli '()))                     ;; no dir
+  (check-false (parse-census-cli '("--top" "5")))          ;; no dir
+  (check-false (parse-census-cli '("d" "--top" "abc")))    ;; bad number
+  (check-false (parse-census-cli '("d" "--top" "-3")))     ;; negative
+  (check-false (parse-census-cli '("d" "--tsv")))          ;; missing value
+  (check-false (parse-census-cli '("d" "--shape")))        ;; missing value
+  (check-false (parse-census-cli '("d" "--bogus"))))       ;; unknown flag
 
 ;; ── aggregation and serialization are deterministic ──────────────────
 
@@ -222,9 +348,14 @@
   (test-local-binding-kind-and-lever)
   (test-loop-var-lever)
   (test-higher-order-bare-call-lever)
+  (test-local-function-value-bare-call-lever)
+  (test-assigned-lambda-resolves-as-edge)
   (test-bare-call-lexicon-lever)
   (test-lever-taxonomy)
   (test-component-name-mapping)
+  (test-package-root-name)
+  (test-find-py-files)
+  (test-parse-census-cli)
   (test-aggregates)
   (test-tsv-deterministic)
   (displayln "All census tests passed."))
