@@ -108,6 +108,44 @@ Effect rows give generated code a readable boundary: a function declares which c
 
 Both emitters attach the row to the emitted function so it survives round-trips: Python via a `__effects__` attribute, Clojure via `:__effects__` metadata on the `defn`. The Clojure effects test executes the emitted code through the [Jolt](https://github.com/jolt-lang/jolt) runtime and reads the row back off the var.
 
+### Effect-row spelling (emit-effects.rkt)
+
+`emit-contract.rkt` decides whether a target can carry a row; `emit-effects.rkt`
+owns how that row is spelled. It is the one place that renders a
+`uir-effect-row` into each target's native effect vocabulary; the emitters own
+where the row is placed, so a row cannot be dropped silently.
+
+| Target | Native effect expression | Placement |
+|---|---|---|
+| Python | object literal plus a `# @effects {...}` documented comment | `@__withEffects(row)` decorator above the `def` |
+| JavaScript | object literal plus a `/** @effects {...} */` documented annotation | `__withEffects(row, fn)` guard around the declaration |
+| TypeScript | emitted through the JS emitter (type annotations drop at emit), so the JS object/guard form is its emitted native form | as JavaScript |
+| Clojure | keyword-keyed map, e.g. `{:llm {:modality :may :max 5}}` | `defn` attr-map metadata `{:__effects__ ...}`, which the reader keeps on the var |
+| Koka | typed effect row, e.g. `: <llm, db> ret` (or `total` when none) | function return type |
+
+Fields without native syntax are documented, not discarded. A Koka typed row
+spells names only, so budgets, scopes, ops and prohibitions are recorded in a
+`// @effects {...}` comment next to the typed row, and a `must-not` entry is
+never granted as a typed effect. (Koka has no way to distinguish `may` from
+`must` in the typed row, so both render as `<db>` and the modality distinction
+is only in the comment.)
+
+The Python/JS runtime guards enforce a scope by classifying the performed op as
+a read or a write. That vocabulary is rendered from the classifier's DATA verb
+tables (`racklr/effects/guard-vocabulary.rkt`, backed by
+`racklr/effects/imports/library-config.rkt`), not hand-written in the emitters,
+so a new lexicon verb is enforced by construction. A scope value that is not
+`reads=...` or `writes=...` has no enforcement branch and is rejected at guard
+construction instead of silently skipping enforcement. Koka's grammar only accepts `<effects>` in
+front of a result type, so a function with a known row but no declared result
+type carries it as the documented comment alone. The JSON target has no
+functions or effect vocabulary, so function rows do not appear there.
+`unknown` entries are dropped: an unclassified effect is a tracked inference
+obligation, not something a target guard can enforce. `uir-method` has no
+effect-row slot yet, so method rows are not emitted by any target.
+
+Per-target mapping tests live in `racklr-test/effects-{python,ts,jsdoc,clojure,koka}-annot-test.rkt`.
+
 **Planned:** runtime enforcement. Static checks run wherever the call graph is resolvable; a runtime guard covers the rest. Jolt is the Clojure runtime for this, and effect-ts is the chosen direction for JavaScript/TypeScript emission.
 
 ### emit-contract.rkt / emit.rkt

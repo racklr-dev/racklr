@@ -89,7 +89,7 @@
 (define (call-f-harness)
   (string-append
    "globalThis.llm = { query: function(){ return \"q\"; }, generate: function(){ return \"g\"; } };\n"
-   "globalThis.db = { fetch: function(){ return \"d\"; }, write: function(){ return \"w\"; } };\n"
+   "globalThis.db = { fetch: function(){ return \"d\"; }, get: function(){ return \"d\"; }, write: function(){ return \"w\"; } };\n"
    "try { f(); console.log(\"OK\"); } catch (e) { console.log(\"THREW:\" + e.message); }\n"))
 
 (define (check-throws program message)
@@ -98,6 +98,14 @@
   (check-true ok? (format "node exited nonzero: ~a" out))
   (check-true (string-contains? out (format "THREW:~a" message))
               (format "expected THREW:~a, got: ~a" message out)))
+
+;; A guard that rejects the row at construction throws while the emitted module
+;; loads, so there is no THREW: line: the process must fail loudly.
+(define (check-load-fails program message)
+  (define-values (ok? out) (run-node (emit-javascript program)))
+  (check-false ok? (format "node should exit nonzero: ~a" out))
+  (check-true (string-contains? out message)
+              (format "expected ~a, got: ~a" message out)))
 
 (define (check-runs program)
   (define-values (ok? out)
@@ -109,7 +117,7 @@
 (define (call-f-async-harness)
   (string-append
    "globalThis.llm = { query: function(){ return \"q\"; }, generate: function(){ return \"g\"; } };\n"
-   "globalThis.db = { fetch: function(){ return \"d\"; }, write: function(){ return \"w\"; } };\n"
+   "globalThis.db = { fetch: function(){ return \"d\"; }, get: function(){ return \"d\"; }, write: function(){ return \"w\"; } };\n"
    "(async function() { try { await f(); console.log(\"OK\"); } catch (e) { console.log(\"THREW:\" + e.message); } })();\n"))
 
 (define (check-throws-async program message)
@@ -174,16 +182,32 @@
 
 (define (test-scope-writes-rejects-read)
   (check-throws (guarded-program (row (list "db" (entry #:scope "writes=user")))
-                                 (list (db-op "fetch")))
-                "effect scope violation: db.fetch outside writes=user"))
+                                 (list (db-op "get")))
+                "effect scope violation: db.get outside writes=user"))
+
+;; The scope vocabulary comes from the classifier's lexicon: `fetchall` and
+;; `bulk_update` are db verbs the old hand-written guard lists missed, so they
+;; used to slip through a scope check unenforced.
+(define (test-scope-enforces-lexicon-read-verb)
+  (check-throws (guarded-program (row (list "db" (entry #:scope "writes=user")))
+                                 (list (db-op "fetchall")))
+                "effect scope violation: db.fetchall outside writes=user"))
+
+(define (test-scope-enforces-lexicon-write-verb)
+  (check-throws (guarded-program (row (list "db" (entry #:scope "reads=search_index")))
+                                 (list (db-op "bulk_update")))
+                "effect scope violation: db.bulk_update outside reads=search_index"))
 
 (define (test-scope-reads-allows-read)
   (check-runs (guarded-program (row (list "db" (entry #:scope "reads=search_index")))
-                               (list (db-op "fetch")))))
+                               (list (db-op "get")))))
 
-(define (test-scope-bare-qualifier-opaque)
-  (check-runs (guarded-program (row (list "db" (entry #:scope "tenant_a")))
-                               (list (db-op "write")))))
+;; An unrecognized scope encoding has no enforcement branch; it must fail loudly
+;; at guard construction rather than silently no-op.
+(define (test-scope-unsupported-encoding-rejected)
+  (check-load-fails (guarded-program (row (list "db" (entry #:scope "tenant_a")))
+                                     (list (db-op "write")))
+                    "unsupported effect scope encoding: tenant_a"))
 
 (define (test-async-budget-after-await)
   ;; Effects performed after an await must still count against the ambient
@@ -280,8 +304,10 @@
   (test-may-within-budget-runs)
   (test-scope-reads-rejects-write)
   (test-scope-writes-rejects-read)
+  (test-scope-enforces-lexicon-read-verb)
+  (test-scope-enforces-lexicon-write-verb)
   (test-scope-reads-allows-read)
-  (test-scope-bare-qualifier-opaque)
+  (test-scope-unsupported-encoding-rejected)
   (test-async-budget-after-await)
   (test-async-must-met)
   (test-async-must-unmet)

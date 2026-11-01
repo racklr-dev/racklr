@@ -85,5 +85,28 @@
 (let ([out (lower+emit "function plain() { return 1; }")])
   (check-false (string-contains? out "__withEffects")))
 
+;; ── emitted documented annotation re-absorbs to the same row ───────
+
+;; The JS/TS emitter writes the row both as a documented `@effects` JSDoc
+;; annotation and as the `__withEffects(row, fn)` guard. Re-absorbing the
+;; emitted source must recover the row from that native annotation.
+(let* ([row (extract-jsdoc-row "/** @effects { llm: { max: 5 } } */")]
+       [fn (uir-fn (uir-symbol "summarize") '()
+                   (uir-block (list (uir-number "1"))) #f row)]
+       [out (emit-javascript
+             (uir-block (list (uir-set! (uir-symbol "summarize") fn))))]
+       [back (lower-program (ts-parse out) tok-type tok-value (ts-tokenize out))]
+       [stmt (last (uir-block-stmts back))]
+       [guard (uir-set!-value (first (uir-call-args stmt)))]
+       [back-row (first (uir-call-args guard))])
+  (check-true (string-contains? out "/** @effects {\"llm\": {\"modality\": \"may\", \"max\": 5}} */")
+              "the row is emitted as a documented @effects annotation")
+  (check-true (string-contains? out "__withEffects(")
+              "the row is also emitted as the runtime guard")
+  (check-true (uir-effect-row? back-row)
+              "the emitted documented annotation re-absorbs to a row")
+  (check-equal? (uir-effect-entry-budget (row-lookup back-row "llm")) 5
+                "budget survives the emit -> absorb round trip"))
+
 (cleanup)
 (displayln "All jsdoc-annot tests passed.")

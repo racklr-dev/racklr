@@ -204,7 +204,11 @@
   (uir-call (uir-symbol name)
             (map (λ (f) (lower-form f tk-type tk-value)) args)))
 
-;; (defn name doc? [params] body...)
+;; (defn name doc? attr-map? [params] body...)
+;;
+;; The attr-map slot is where the emitter places the effect row
+;; (`{:__effects__ {:llm {...}}}`), so reading it back makes the native
+;; annotation survive an emit -> absorb round trip.
 (define (lower-defn private? args tk-type tk-value)
   (cond
     [(null? args) (uir-symbol (if private? "?defn-" "?defn"))]
@@ -216,9 +220,15 @@
      (define rest* (if (and (pair? rest) (form-is-string? (car rest) tk-type tk-value))
                        (cdr rest)
                        rest))
-     (if (and (pair? rest*) (form-is-vector? (car rest*) tk-type tk-value))
-         (let* ([params (lower-vector-items (car rest*) tk-type tk-value)]
-                [body (map (λ (f) (lower-form f tk-type tk-value)) (cdr rest*))]
+     ;; an attr-map carrying effects metadata is the emitted row shape
+     (define attr-row
+       (and (pair? rest*)
+            (let ([m (lower-form (car rest*) tk-type tk-value)])
+              (and (uir-record? m) (extract-effects-row m)))))
+     (define rest** (if attr-row (cdr rest*) rest*))
+     (if (and (pair? rest**) (form-is-vector? (car rest**) tk-type tk-value))
+         (let* ([params (lower-vector-items (car rest**) tk-type tk-value)]
+                [body (map (λ (f) (lower-form f tk-type tk-value)) (cdr rest**))]
                 [body-node (if (null? body)
                                (uir-null)
                                (if (= (length body) 1)
@@ -228,7 +238,7 @@
                    params
                    body-node
                    #f
-                   #f))
+                   attr-row))
          ;; non-standard defn (multi-arity etc.): round-trip as a call
          (lower-call (if private? "defn-" "defn") args tk-type tk-value))]))
 

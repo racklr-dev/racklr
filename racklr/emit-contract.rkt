@@ -17,7 +17,8 @@
 ;; Output: target source text.
 ;;
 ;; Each target declares how it reifies an explicit row in its native effect
-;; vocabulary (`emit-target-row-syntax`):
+;; vocabulary (`emit-target-row-syntax`). The spelling of the row itself is
+;; `racklr/emit-effects.rkt`:
 ;;
 ;;     guard-decorator    Python            @__withEffects({...})
 ;;     guard-wrapper      JavaScript, HTML  __withEffects({...}, fn)
@@ -26,6 +27,11 @@
 ;;     none               JSX, DOM JS, JSON, Effervesce: no native form for a
 ;;                        row, so an explicit row is *refused* with an error
 ;;                        instead of being dropped.
+;;
+;; Koka can only type a row when the annotated function declares a result type
+;; (its grammar puts `<effects>` in front of a result type). A row on a function
+;; with no declared result type is reified as the documented `// @effects`
+;; annotation, never dropped.
 ;;
 ;; The target table checks the call shape via `make-emit-target`: a renderer
 ;; must accept two positional arguments (an arity-only check — it cannot prove
