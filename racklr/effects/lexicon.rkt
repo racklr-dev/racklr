@@ -41,7 +41,8 @@
   tokens-wrapper-callees tokens-runtime-primitives tokens-binding-callees
   tokens-method-receiver-offset tokens-init-method-name
   tokens-keyword-arg-callee tokens-annotation-callee
-  tokens-literal-receiver-type)
+  tokens-literal-receiver-type
+  tokens-control-transfer-names tokens-short-circuit-callees)
 
 ;; The dialect travels inside the token tables (effect-tokens), so every
 ;; existing optional `[tokens default-effect-tokens]` parameter is a complete
@@ -69,6 +70,10 @@
   (dialect-synthetic-callees (effect-tokens-dialect tokens)))
 (define (tokens-comprehension-callees tokens)
   (dialect-comprehension-callees (effect-tokens-dialect tokens)))
+(define (tokens-control-transfer-names tokens)
+  (dialect-control-transfer-names (effect-tokens-dialect tokens)))
+(define (tokens-short-circuit-callees tokens)
+  (dialect-short-circuit-callees (effect-tokens-dialect tokens)))
 (define (tokens-wrapper-callees tokens)
   (dialect-wrapper-callees (effect-tokens-dialect tokens)))
 (define (tokens-runtime-primitives tokens)

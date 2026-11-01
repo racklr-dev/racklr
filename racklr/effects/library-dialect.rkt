@@ -78,4 +78,10 @@
    ;; f-string literal is a `str`, a list literal a `list`, a dict literal a
    ;; `dict`. Receiver typing then resolves `xs = []; xs.append(v)` through the
    ;; builtin type table instead of leaving it `unknown`.
-   (hash 'uir-string "str" 'uir-fstring "str" 'uir-list "list" 'uir-record "dict")))
+   (hash 'uir-string "str" 'uir-fstring "str" 'uir-list "list" 'uir-record "dict")
+   ;; Callees/statements that always transfer control out of the block:
+   ;; `raise` and `sys.exit`/`exit` do not return; `break`/`continue` leave the
+   ;; loop body. Read by the must analysis, never by the classifier.
+   (set "raise" "exit" "sys.exit" "break" "continue")
+   ;; Short-circuit boolean operators: the right operand runs conditionally.
+   (set "and" "or")))
