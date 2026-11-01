@@ -33,9 +33,12 @@
   effect-tokens-python-builtins effect-tokens-pure-dunder-names
   effect-tokens-str-method-names effect-tokens-pure-container-method-names
   effect-tokens-module-result-types effect-tokens-receiver-modules
+  effect-tokens-racket-builtins
   default-effect-tokens)
 
-(require racklr/effects/library-stdlib-types)
+(require racket/hash
+         racklr/effects/library-stdlib-types
+         racklr/effects/library-racket-tokens)
 
 ;; The lexicon of tokens the engine classifies. All fields are name sets (or a
 ;; symbol→effect hash for root-qualified stdlib effects / per-root method sets).
@@ -49,7 +52,12 @@
    framework-exception-names declarative-names
    pure-stdlib-bare-names gettext-names pure-config-method-names
    python-builtins pure-dunder-names str-method-names pure-container-method-names
-   module-result-types receiver-modules)
+   module-result-types receiver-modules
+   ;; Language-specific pure builtins that must NOT feed the Python/JS value-
+   ;; constructor tables (receiver-type.rkt reads pure-stdlib-bare-names for
+   ;; receiver typing; e.g. the Racket procedure `values` must not make a
+   ;; Django `.values()` call look like a pure constructor).
+   racket-builtins)
   #:transparent)
 
 (define default-effect-tokens
@@ -62,7 +70,7 @@
         "transaction")
    ;; library roots / bare names whose every call is a network effect
    (set "fetch" "axios" "httpx" "requests" "aiohttp" "urllib")
-   (set "fetch" "axios")
+   (set-union racket-network-builtins (set "fetch" "axios"))
    ;; library roots / bare names whose every call is a cache effect
    (set "redis" "memcache" "cache")
    (set "revalidatePath" "revalidate_path" "invalidate" "clearCache" "purgeCache")
@@ -110,22 +118,30 @@
         "base64" "binascii" "unicodedata" "calendar" "keyword" "datetime")
    ;; bare builtins that perform console/file I/O, plus framework logging /
    ;; deprecation-warning helpers imported bare (`django.utils.log.log_response`).
-   (set "open" "print" "input" "warn_about_external_use" "log_response"
+   (set-union
+    (set "open" "print" "input" "warn_about_external_use" "log_response"
         "NamedTemporaryFile" "TemporaryFile" "TemporaryDirectory"
         "mkstemp" "mkdtemp"
         ;; asgiref.sync.sync_to_async: runs a sync callable on a thread-pool
         ;; executor (the async bridge), so the scheduling is an io effect.
         "sync_to_async")
+    ;; Racket standard-library I/O names (library-racket-tokens.rkt).
+    racket-io-builtins)
    ;; module roots whose every call is an effect (unambiguous)
-   (hash 'subprocess 'process
-         'multiprocessing 'process
-         'shutil 'io
-         'tempfile 'io
-         'fileinput 'io
-         'smtplib 'email
-         'http 'network
-         'socket 'network
-         'urllib3 'network)
+   (hash-union
+    (hash 'subprocess 'process
+          'multiprocessing 'process
+          'shutil 'io
+          'tempfile 'io
+          'fileinput 'io
+          'smtplib 'email
+          'http 'network
+          'socket 'network
+          'urllib3 'network)
+    ;; Racket process spawn/control names, e.g. (system "make") / (exit 0).
+    racket-process-root-effects
+    ;; both tables say 'process where they overlap (e.g. 'subprocess)
+    #:combine (λ (a b) a))
    ;; dotted methods that perform file/stream I/O or logging output regardless
    ;; of receiver. `log` is deliberately absent: it collides with `math.log`.
    (set "open" "read" "readline" "readlines" "read1" "readinto" "readinto1"
@@ -136,9 +152,12 @@
    ;; method and bare names that perform a time effect regardless of receiver:
    ;; `time.sleep` / `from time import sleep`, clock reads (`time.time`,
    ;; `time.monotonic`), and Django's `now` / `tz_now` timezone clock reads.
-   (set "sleep" "time" "monotonic" "monotonic_ns" "perf_counter"
-        "perf_counter_ns" "process_time" "thread_time" "time_ns"
-        "tz_now" "now" "localtime" "gmtime")
+   (set-union
+    (set "sleep" "time" "monotonic" "monotonic_ns" "perf_counter"
+         "perf_counter_ns" "process_time" "thread_time" "time_ns"
+         "tz_now" "now" "localtime" "gmtime")
+    ;; Racket clock reads: current-seconds, current-inexact-milliseconds, ...
+    racket-time-builtins)
    ;; root-qualified method effects: `root.method` → effect, where the effect
    ;; depends on the method, not only the root (`os.remove` → io, `os.system` →
    ;; process, `sys.exit` → process, `warnings.warn` → io).
@@ -245,6 +264,9 @@
    ;; Includes Django pure helpers (`import_string` matches the existing
    ;; `__import__` pure-builtin treatment; `get_resolver` and `deconstruct*`
    ;; build or introspect values without a domain effect).
+   ;; Racket standard-library pure procedures (library-racket-tokens.rkt) are
+   ;; unioned into this bare-name table: `car`, `hash-ref`, `first`,
+   ;; `string-append`, ... stop being `unknown` in the compiler's own UIR.
    (set "partial" "wraps" "lru_cache" "cached_property" "byref" "POINTER"
         "urlsplit" "urljoin" "urlencode" "quote" "unquote" "parse_qs"
         "parse_qsl" "defaultdict" "iscoroutinefunction" "deconstructible"
@@ -370,4 +392,7 @@
    ;; name->domain table so `self._lib = library` (library=pylibmc) tracks
    ;; `pylibmc` and `self._lib.get(...)` classifies as cache instead of the
    ;; ORM-name `get`->db bias.
-   (hash "pylibmc" 'cache "pymemcache" 'cache "memcache" 'cache "redis" 'cache)))
+   (hash "pylibmc" 'cache "pymemcache" 'cache "memcache" 'cache "redis" 'cache)
+   ;; Racket standard-library pure procedures, consumed only by
+   ;; pure-roots.rkt's racket-builtin predicate (never by receiver typing).
+   racket-pure-builtins))
