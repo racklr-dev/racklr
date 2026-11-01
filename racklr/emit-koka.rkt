@@ -5,7 +5,10 @@
 ;; left-associatively with no precedence, so infix emission without
 ;; parentheses round-trips for every shape the lowerer produces.
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract
+         racklr/emit-effects
+         racklr/effects/infer)
 
 (provide emit-koka)
 
@@ -27,10 +30,19 @@
 
 ;; ── Top level ────────────────────────────────────────────────────────
 
-(define (emit-koka uir)
-  (if (uir-block? uir)
-      (string-join (map emit-stmt (uir-block-stmts uir)) "\n")
-      (emit-expr uir)))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Koka source out. Koka's native row vocabulary is the
+;; function effect annotation, so an explicit row is rendered as the entry
+;; function's `: <effects>` (or `: total` for an empty row).
+;;
+;; Inference also attaches rows to named functions before emission
+;; (`#:wrap-anonymous? #f`: Koka has its own row placement).
+(define (emit-koka uir [row #f])
+  (define sourced (attach-root-row 'emit-koka uir row))
+  (define annotated (annotate-effects sourced #:wrap-anonymous? #f))
+  (if (uir-block? annotated)
+      (string-join (map emit-stmt (uir-block-stmts annotated)) "\n")
+      (emit-expr annotated)))
 
 (define (emit-stmt uir)
   (cond
@@ -50,9 +62,32 @@
 (define (emit-fn uir)
   (define name (and (uir-fn-name uir) (uir-symbol-name (uir-fn-name uir))))
   (define head (if name (format "fun ~a" name) "fn"))
-  (define ret (emit-rettype (uir-fn-return-type uir) (uir-fn-effects uir)))
-  (string-append (format "~a(~a)" head (emit-params (uir-fn-params uir)))
-                 (if ret (format " : ~a" ret) "")
+  (define row (uir-fn-effects uir))
+  (define declared-ret (uir-fn-return-type uir))
+  ;; A typed effect row spells names only; budgets, scopes, ops and
+  ;; prohibitions have no Koka syntax, so they are documented instead of
+  ;; dropped, and `must-not` entries are never granted by the typed row.
+  ;;
+  ;; Koka's grammar only accepts an effect row when a result type follows it
+  ;; (`rettype : COLON effects? ktype`), so a row on a function with no
+  ;; declared result type is emitted as the documented `// @effects` row: the
+  ;; native typed position is unavailable, but the row is still present.
+  (define typed? (and (uir-effect-row? row) declared-ret))
+  (define annotation
+    (cond
+      [(not (uir-effect-row? row)) #f]
+      [typed? (render-effect-annotation 'koka row)]
+      [else (render-effect-documented 'koka row)]))
+  (define ret-str
+    (cond
+      [typed? (format " : ~a ~a"
+                      (render-effect-row 'koka row)
+                      (emit-type declared-ret))]
+      [declared-ret (format " : ~a" (emit-type declared-ret))]
+      [else ""]))
+  (string-append (if annotation (string-append annotation "\n") "")
+                 (format "~a(~a)" head (emit-params (uir-fn-params uir)))
+                 ret-str
                  "\n"
                  (emit-block (uir-fn-body uir))))
 
@@ -81,22 +116,6 @@
 
 (define (emit-type t)
   (if (uir-symbol? t) (uir-symbol-name t) "?"))
-
-(define (emit-rettype ret effects)
-  (cond
-    [effects (string-append (emit-effects effects)
-                            (if ret (format " ~a" (emit-type ret)) ""))]
-    [ret (emit-type ret)]
-    [else #f]))
-
-(define (emit-effects row)
-  (define entries (uir-effect-row-entries row))
-  (if (null? entries)
-      "total"
-      (string-append "<"
-                     (string-join (map (λ (e) (uir-symbol-name (uir-effect-entry-name e))) entries)
-                                  ", ")
-                     ">")))
 
 (define (emit-params ps)
   (string-join (map emit-param ps) ", "))

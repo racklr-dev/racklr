@@ -4,50 +4,35 @@
 ;; Canonical reader-macro calls are re-sugared: quote → ', deref → @,
 ;; with-meta → ^, vector → [...], hash-set → #{...}, fn* → #(...).
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract
+         racklr/emit-effects
+         racklr/effects/infer)
 
 (provide emit-clojure)
 
 ;; ── Effect-row rendering (Clojure keyword-keyed map) ────────────────
-
-(define (emit-effect-entry e)
-  (define parts (list (format ":modality :~a" (symbol->string (uir-effect-entry-modality e)))))
-  (define with-budget
-    (if (uir-effect-entry-budget e)
-        (cons (format ":max ~a" (uir-effect-entry-budget e)) parts)
-        parts))
-  (define with-scope
-    (if (uir-effect-entry-scope e)
-        (cons (format ":scope ~s" (uir-symbol-name (uir-effect-entry-scope e))) with-budget)
-        with-budget))
-  (define with-ops
-    (if (pair? (uir-effect-entry-ops e))
-        (cons (format ":ops [~a]"
-                      (string-join
-                       (map (λ (o) (format "~s" (uir-symbol-name o)))
-                            (uir-effect-entry-ops e))
-                       " "))
-              with-scope)
-        with-scope))
-  (string-append "{" (string-join (reverse with-ops) " ") "}"))
-
-(define (emit-effect-row row)
-  (string-append
-   "{"
-   (string-join
-    (map (λ (e) (format ":~a ~a"
-                        (uir-symbol-name (uir-effect-entry-name e))
-                        (emit-effect-entry e)))
-         (uir-effect-row-entries row))
-    " ")
-   "}"))
+;;
+;; The row's spelling is owned by the emit contract (racklr/emit-effects): a
+;; keyword-keyed map placed in the `defn` attr-map, where the reader keeps it on
+;; the var (the outer-`^` shape is dropped by the reader).
 
 ;; ── Top level ────────────────────────────────────────────────────────
 
-(define (emit-clojure uir)
-  (if (uir-block? uir)
-      (string-join (map emit-form (uir-block-stmts uir)) "\n")
-      (emit-form uir)))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Clojure source out. Clojure's native row vocabulary
+;; is the `:__effects__` metadata map on the entry defn, which is where the
+;; reader and Jolt actually keep it.
+;;
+;; Inference also attaches rows to named functions before emission
+;; (`#:wrap-anonymous? #f`: Clojure has its own row placement, so the JS/Python
+;; guard wrapper convention does not apply).
+(define (emit-clojure uir [row #f])
+  (define sourced (attach-root-row 'emit-clojure uir row))
+  (define annotated (annotate-effects sourced #:wrap-anonymous? #f))
+  (if (uir-block? annotated)
+      (string-join (map emit-form (uir-block-stmts annotated)) "\n")
+      (emit-form annotated)))
 
 ;; ── Forms ────────────────────────────────────────────────────────────
 
@@ -141,7 +126,9 @@
      ;; attach the row in the defn attr-map slot: the outer-^ shape is
      ;; dropped by the reader, so Jolt (and Clojure) keep only this one.
      (string-append "(defn " (uir-symbol-name name)
-                    " {:__effects__ " (emit-effect-row (uir-fn-effects uir)) "}"
+                    " {:__effects__ "
+                    (render-effect-row 'clojure (uir-fn-effects uir))
+                    "}"
                     " [" params-str "] " body-str ")")]
     [(uir-symbol? name)
      (string-append "(defn " (uir-symbol-name name) " [" params-str "] " body-str ")")]

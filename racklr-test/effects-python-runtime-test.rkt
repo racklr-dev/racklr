@@ -74,6 +74,7 @@
    "llm = _LLM()\n"
    "class _DB:\n"
    "    def fetch(self): return \"d\"\n"
+   "    def get(self): return \"d\"\n"
    "    def write(self): return \"w\"\n"
    "db = _DB()\n"
    "try:\n"
@@ -88,6 +89,14 @@
   (check-true ok? (format "python3 exited nonzero: ~a" out))
   (check-true (string-contains? out (format "THREW:~a" message))
               (format "expected THREW:~a, got: ~a" message out)))
+
+;; A guard that rejects the row at construction raises while the emitted module
+;; is imported, so there is no THREW: line: the process must fail loudly.
+(define (check-load-fails program message)
+  (define-values (ok? out) (run-python (emit-python program)))
+  (check-false ok? (format "python3 should exit nonzero: ~a" out))
+  (check-true (string-contains? out message)
+              (format "expected ~a, got: ~a" message out)))
 
 (define (check-runs program)
   (define-values (ok? out)
@@ -182,16 +191,32 @@
 
 (define (test-scope-writes-rejects-read)
   (check-throws (guarded-program (row (entry "db" #:scope "writes=user"))
-                                 (list (db-op "fetch")))
-                "effect scope violation: db.fetch outside writes=user"))
+                                 (list (db-op "get")))
+                "effect scope violation: db.get outside writes=user"))
+
+;; The scope vocabulary comes from the classifier's lexicon: `fetchall` and
+;; `bulk_update` are db verbs the old hand-written guard lists missed, so they
+;; used to slip through a scope check unenforced.
+(define (test-scope-enforces-lexicon-read-verb)
+  (check-throws (guarded-program (row (entry "db" #:scope "writes=user"))
+                                 (list (db-op "fetchall")))
+                "effect scope violation: db.fetchall outside writes=user"))
+
+(define (test-scope-enforces-lexicon-write-verb)
+  (check-throws (guarded-program (row (entry "db" #:scope "reads=search_index"))
+                                 (list (db-op "bulk_update")))
+                "effect scope violation: db.bulk_update outside reads=search_index"))
 
 (define (test-scope-reads-allows-read)
   (check-runs (guarded-program (row (entry "db" #:scope "reads=search_index"))
-                               (list (db-op "fetch")))))
+                               (list (db-op "get")))))
 
-(define (test-scope-bare-qualifier-opaque)
-  (check-runs (guarded-program (row (entry "db" #:scope "tenant_a"))
-                               (list (db-op "write")))))
+;; An unrecognized scope encoding has no enforcement branch; it must fail loudly
+;; at guard construction rather than silently no-op.
+(define (test-scope-unsupported-encoding-rejected)
+  (check-load-fails (guarded-program (row (entry "db" #:scope "tenant_a"))
+                                     (list (db-op "write")))
+                    "unsupported effect scope encoding: 'tenant_a'"))
 
 ;; ── async enforcement ────────────────────────────────────────────────
 
@@ -298,8 +323,10 @@
   (test-may-within-budget-runs)
   (test-scope-reads-rejects-write)
   (test-scope-writes-rejects-read)
+  (test-scope-enforces-lexicon-read-verb)
+  (test-scope-enforces-lexicon-write-verb)
   (test-scope-reads-allows-read)
-  (test-scope-bare-qualifier-opaque)
+  (test-scope-unsupported-encoding-rejected)
   (test-async-must-met)
   (test-async-must-unmet)
   (test-async-budget-exceeded)

@@ -22,6 +22,7 @@
 ;;   rows.rkt          — effect-row construction + algebra adapter
 ;;   algebra/          — the effect algebra: rows, join, fixpoint, subtyping
 ;;   classify.rkt      — classify-call / classify-nonedge
+;;   provenance.rkt    — structured effect-edge provenance (grounds + call graph)
 ;;   whole-program.rkt — cross-file fixpoint (infer-effects-all)
 
 (require racklr/uir
@@ -34,6 +35,7 @@
          racklr/effects/collect
          racklr/effects/rows
          racklr/effects/classify
+         racklr/effects/provenance
          racklr/effects/whole-program)
 
 (provide
@@ -53,14 +55,30 @@
 ;; over the call graph. Every callee named by an `edge` classification must be
 ;; present in `known` (the intra-program name table); a name missing from
 ;; `known` falls back to an empty row.
+;;
+;; Two provenance views are available, both filled on request:
+;;
+;;   #:provenance-table  — the compact legacy view consumed by Effervesce's
+;;                         bridge checker: name → (hash effect → list of
+;;                         classifier strings), a propagated entry prefixed with
+;;                         the callee it came through ("g::site").
+;;   #:provenance-record — the first-class record (racklr/effects/provenance.rkt)
+;;                         projected into the graph substrate: every classifying
+;;                         call site is a ground, and every call-graph edge is a
+;;                         `prov-call` carrying the callee expression. The record
+;;                         is filled even when no effect was detected, because the
+;;                         call graph (edges without direct effects) is what a
+;;                         provenance path walks.
 (define (compute-effect-rows fns methods class-names supers known
-                             #:provenance-table [prov-box #f])
+                             #:provenance-table [prov-box #f]
+                             #:provenance-record [rec-box #f])
   (define direct-rows (make-hash))  ;; name → algebra-row (direct entries only)
   (define edges (make-hash))        ;; name → (listof name-symbol)
-  (define direct-prov (make-hash))  ;; name → (hash effect-name → (listof site))
+  (define direct-prov (and prov-box (make-hash)))  ;; name → hash effect → sites
+  (define prov (and rec-box (make-provenance)))
 
   ;; Merge a classifying call-site string into an effect→sites hash, dropping
-  ;; duplicates and preserving first-seen order.
+  ;; duplicates and preserving first-seen order (legacy table view).
   (define (sites-add! h eff site)
     (hash-update! h eff (λ (l) (if (member site l) l (cons site l))) '()))
 
@@ -75,25 +93,34 @@
     (define (visit! node)
       (if (uir-call? node)
           (let* ([callee (uir-call-callee node)]
-                 [cls (classify-call callee known owner class-names supers)])
+                 [cls (classify-call callee known owner class-names supers)]
+                 [site (callee-site-string callee)])
             (case (car cls)
-              [(edge) (set! callees (cons (cdr cls) callees))]
+              [(edge)
+               (set! callees (cons (cdr cls) callees))
+               (when prov
+                 (provenance-add-call! prov
+                                       (prov-call (function-fq n)
+                                                  (function-fq (cdr cls))
+                                                  site)))]
               [(effect)
                ;; (cdr cls) is the effect-name symbol (effects->row builds the
-               ;; entry), so it keys the provenance table directly.
+               ;; entry), so it keys both provenance views directly.
                (define e (cdr cls))
                (set! effects (cons e effects))
-               (when prov-box
-                 (sites-add! (hash-ref! direct-prov n make-hash)
-                             e
-                             (callee-site-string callee)))]
+               (when direct-prov
+                 (sites-add! (hash-ref! direct-prov n make-hash) e site))
+               (when prov
+                 (provenance-add-ground! prov (make-callee-site (function-fq n) e callee)))]
               [(pure) (void)]
               [(unknown)
                (set! effects (cons 'unknown effects))
-               (when prov-box
-                 (sites-add! (hash-ref! direct-prov n make-hash)
-                             'unknown
-                             (callee-site-string callee)))]))
+               (when direct-prov
+                 (sites-add! (hash-ref! direct-prov n make-hash) 'unknown site))
+               (when prov
+                 (provenance-add-ground! prov
+                                         (make-callee-site (function-fq n) 'unknown callee
+                                                           #:kind 'unresolved)))]))
           (void)))
     (walk-body body visit!)
     (hash-set! direct-rows n (effects->algebra-row effects))
@@ -106,39 +133,43 @@
   ;; graph and inference results are unchanged.
   (define rows (alg:least-fixpoint direct-rows edges))
 
-  ;; Provenance propagates alongside the rows: an effect n inherits from a
-  ;; callee g keeps g's classifying call sites, prefixed with g (the call
-  ;; chain), so a finding reads as the chain that produced the effect. The
-  ;; provenance table is a second monotone fixpoint over strings, independent
-  ;; of the rows, so it is solved after them.
-  (when prov-box
-    (define prov (make-hash))
+  ;; Legacy table: a second monotone fixpoint over the rendered call-site
+  ;; strings, independent of the rows. A propagated entry keeps the callee's
+  ;; classifying sites, prefixed with the callee it came through (the rendered
+  ;; call chain).
+  (define prov-strings (and direct-prov (make-hash)))
+  (when prov-strings
     (for ([n (in-list all-names)])
-      (hash-set! prov n (hash-copy (hash-ref direct-prov n (make-hash)))))
+      (hash-set! prov-strings n (hash-copy (hash-ref direct-prov n (make-hash)))))
     (let loop ()
       (define changed? #f)
       (for ([n (in-list all-names)])
         (define np (hash-copy (hash-ref direct-prov n (make-hash))))
         (for ([g (in-list (hash-ref edges n))])
-          (for ([(e sites) (in-hash (hash-ref prov g (make-hash)))])
+          (for ([(e sites) (in-hash (hash-ref prov-strings g (make-hash)))])
             (for ([s (in-list sites)])
               (sites-add! np e (format "~a::~a" g s)))))
-        (unless (equal? np (hash-ref prov n))
+        (unless (equal? np (hash-ref prov-strings n))
           (set! changed? #t)
-          (hash-set! prov n np)))
-      (if changed? (loop) (void)))
-    (set-box! prov-box prov))
+          (hash-set! prov-strings n np)))
+      (if changed? (loop) (void))))
+
+  (when prov-box (set-box! prov-box prov-strings))
+  (when rec-box (set-box! rec-box prov))
 
   ;; Materialize the algebra rows back to the UIR row contract: entries
   ;; unchanged, provenance side table dropped (the UIR row has no slot for it).
   (for/hash ([(n r) (in-hash rows)])
     (values n (alg:algebra-row->uir r))))
 
+
 ;; Compute the fixpoint effect rows for a single program: name-symbol →
 ;; uir-effect-row. Only calls into functions/methods defined in `program` (or a
 ;; program passed together with it) resolve as edges; anything else falls to
 ;; `unknown`.
-(define (infer-effects program #:provenance-table [prov-box #f])
+(define (infer-effects program
+                       #:provenance-table [prov-box #f]
+                       #:provenance-record [rec-box #f])
   (define fns (collect-functions program))
   (define methods (collect-methods program))
   (define class-names (collect-class-names program))
@@ -147,14 +178,21 @@
   (for ([(n _) (in-hash fns)]) (hash-set! known n #t))
   (for ([(n _) (in-hash methods)]) (hash-set! known n #t))
   (compute-effect-rows fns methods class-names supers known
-                       #:provenance-table prov-box))
+                       #:provenance-table prov-box
+                       #:provenance-record rec-box))
 
 ;; ── write-back ──────────────────────────────────────────────────────
 
 ;; Rewrite a program so every named function carries its inferred effect row
 ;; in the `effects` field: named uir-fn nodes, plus the JS/TS `set!`-bound
 ;; function declarations (writing back into the wrapped uir-fn).
-(define (annotate-effects program)
+;;
+;; `#:wrap-anonymous?` controls the JS/Python runtime-guard convention: when
+;; true (the default) an arrow/function expression with no effects slot gets
+;; wrapped in the internal `__withEffects(row, fn)` call those emitters render.
+;; Targets with their own row placement (Koka's typed effect row, Clojure's
+;; defn metadata) pass #f so their emitters see the row on the uir-fn instead.
+(define (annotate-effects program #:wrap-anonymous? [wrap? #t])
   (define rows (infer-effects program))
   ;; Materialize an inferred row for emission: 'unknown is a checker signal
   ;; ("could not verify"), not a runtime effect, and the runtime guards reject
@@ -211,7 +249,7 @@
        (struct-copy uir-call val
                     [args (list (with-effects (first (uir-call-args val)) nm))])]
       [(or (arrow-call? val) (function-expr-call? val))
-       (with-effects-wrap val nm)]
+       (if wrap? (with-effects-wrap val nm) val)]
       [else val]))
   (define (rewrite n)
     (cond

@@ -5,7 +5,8 @@
 ;; no precedence tiers, so infix emission without parentheses round-trips for
 ;; every shape the lowerer produces.
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract)
 
 (provide emit-effervesce)
 
@@ -18,7 +19,17 @@
 
 ;; ── Top level ────────────────────────────────────────────────────────
 
-(define (emit-effervesce uir)
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Effervesce text out. Effervesce carries rows
+;; structurally (`given` / `needs` / `provides` refs in the UIR); this target
+;; renders declarations, so a function-entry row from the contract has no place
+;; to be reified and is refused rather than dropped.
+(define (emit-effervesce uir [row #f])
+  (if (eq? row #f)
+      (emit-effervesce-unit uir)
+      (refuse-explicit-row 'emit-effervesce "effervesce" row)))
+
+(define (emit-effervesce-unit uir)
   (if (uir-eff-system? uir)
       (string-append
        (format "system ~a {\n" (uir-symbol-name (uir-eff-system-name uir)))

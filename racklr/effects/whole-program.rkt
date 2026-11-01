@@ -20,7 +20,9 @@
          racklr/effects/receiver-type
          racklr/effects/classify-all
          racklr/effects/type-relations
-         racklr/effects/library-tokens)
+         racklr/effects/library-tokens
+         racklr/effects/imports
+         racklr/effects/provenance)
 
 (provide infer-effects-all classify-call-all)
 
@@ -63,7 +65,10 @@
 ;; Whole-program effect rows: (component . name) → uir-effect-row, computed by
 ;; a single fixpoint over the union of every program's call graph. Takes a list
 ;; of `(component . program)` pairs.
-(define (infer-effects-all comp-programs #:import-env [import-env #f] #:unknown-tally [unknown-tally #f])
+(define (infer-effects-all comp-programs
+                           #:import-env [import-env #f]
+                           #:unknown-tally [unknown-tally #f]
+                           #:provenance-record [rec-box #f])
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
   (define comp-supers (make-hash))   ;; (cons comp class) → (listof super-ref: symbol | (first . full-dotted))
@@ -134,14 +139,33 @@
   ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))
   (define edges (make-hash))
+  ;; Structured provenance: every call-graph edge (with the callee expression
+  ;; the classifier saw) and every direct ground. Propagation needs no path
+  ;; storage — the fixpoint only moves effects along these edges, so reachability
+  ;; over the recorded call graph is exactly a provenance path.
+  (define prov (and rec-box (make-provenance)))
   (for ([k (in-list all-keys)])
     (define body (if (hash-has-key? fns k) (hash-ref fns k) (hash-ref methods k)))
     (define comp (car k))
     (define owner (and (hash-has-key? methods k) (class-name-of-name (cdr k))))
     (define rt (rt-of k))
-    (define effects
-      (let ([cap (and (hash-has-key? methods k) (method-cap k import-env))])
-        (if cap (list cap) '())))
+    (define blessed (and (hash-has-key? methods k) (method-cap k import-env)))
+    (define effects (if blessed (list blessed) '()))
+    ;; A blessed capability is asserted at the method definition by the DATA
+    ;; config, so it is its own ground: the tokens are the module path, class,
+    ;; and method the capability was derived from.
+    (when (and prov blessed)
+      (define parts (string-split (symbol->string (cdr k)) "."))
+      (provenance-add-ground!
+       prov
+       (make-declared-site (function-fq k)
+                           (effect-cap-domain blessed)
+                           (filter values (list (and import-env
+                                                     (hash-ref (import-env-comp-modpath import-env)
+                                                               comp #f))
+                                                (first parts)
+                                                (last parts)))
+                           (first parts))))
     (define callees '())
     (define param-names
       (let ([ps (or (hash-ref fn-params k #f) (hash-ref method-params k #f))])
@@ -188,17 +212,31 @@
            (when v (hash-set! local-kinds v 'exception)))]
         [else (void)])
       (if (uir-call? node)
-            (let ([cls (classify-call-all (uir-call-callee node) known methods
-                                        class-defs fn-defs comp-supers self-attr comp owner
-                                        import-env rt return-types)])
+            (let* ([callee (uir-call-callee node)]
+                   [cls (classify-call-all callee known methods
+                                           class-defs fn-defs comp-supers self-attr comp owner
+                                           import-env rt return-types)]
+                   [site (callee-site-string callee)])
             (case (car cls)
-              [(edge) (set! callees (cons (cdr cls) callees))]
-              [(effect) (set! effects (cons (cdr cls) effects))]
+              [(edge)
+               (set! callees (cons (cdr cls) callees))
+               (when prov
+                 (provenance-add-call! prov
+                                       (prov-call (function-fq k)
+                                                  (function-fq (cdr cls))
+                                                  site)))]
+              [(effect)
+               (set! effects (cons (cdr cls) effects))
+               (when prov
+                 (provenance-add-ground! prov (make-callee-site (function-fq k) (cdr cls) callee)))]
               [(pure) (void)]
               [(unknown)
                (set! effects (cons 'unknown effects))
+               (when prov
+                 (provenance-add-ground! prov
+                                         (make-callee-site (function-fq k) 'unknown callee
+                                                           #:kind 'unresolved)))
                (when unknown-tally
-                 (define callee (uir-call-callee node))
                  (define rx
                    (and (uir-get? callee)
                         (var-symbol (uir-get-base callee))))
@@ -221,6 +259,7 @@
   ;; changing. Same operation as the single-file pass, same driver, so the two
   ;; fixpoints cannot drift apart.
   (define rows (alg:least-fixpoint direct-rows edges))
+  (when rec-box (set-box! rec-box prov))
   ;; Materialize the algebra rows back to the UIR row contract.
   (for/hash ([(k r) (in-hash rows)])
     (values k (alg:algebra-row->uir r))))

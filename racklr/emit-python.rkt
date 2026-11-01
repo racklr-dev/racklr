@@ -1,6 +1,9 @@
 #lang racket
 
 (require racklr/uir
+         racklr/emit-contract
+         racklr/emit-effects
+         racklr/effects/guard-vocabulary
          racklr/effects/infer
          racklr/effects/python-annot)
 
@@ -189,37 +192,10 @@
                  (emit-body (uir-with-body uir) (+ indent 1))))
 
 ;; ── Effect-row runtime guard (pure Python, no FFI) ─────────────────
-
-(define (emit-effect-entry-dict e)
-  ;; {"modality":"may","max":5,"scope":"...","ops":["query"]}
-  (let* ([base (list (format "~s: ~s" "modality"
-                             (symbol->string (uir-effect-entry-modality e))))]
-         [with-budget (if (uir-effect-entry-budget e)
-                          (cons (format "~s: ~a" "max" (uir-effect-entry-budget e)) base)
-                          base)]
-         [with-scope (if (uir-effect-entry-scope e)
-                         (cons (format "~s: ~s" "scope" (uir-symbol-name (uir-effect-entry-scope e))) with-budget)
-                         with-budget)]
-         [with-ops (if (pair? (uir-effect-entry-ops e))
-                       (cons (format "~s: [~a]" "ops"
-                                     (string-join
-                                      (map (λ (o) (format "~s" (uir-symbol-name o)))
-                                           (uir-effect-entry-ops e))
-                                      ", "))
-                             with-scope)
-                       with-scope)])
-    (string-append "{" (string-join (reverse with-ops) ", ") "}")))
-
-(define (emit-effect-row row)
-  (string-append
-   "{"
-   (string-join
-    (map (λ (e) (format "~s: ~a"
-                        (uir-symbol-name (uir-effect-entry-name e))
-                        (emit-effect-entry-dict e)))
-         (uir-effect-row-entries row))
-    ", ")
-   "}"))
+;;
+;; The row's spelling is owned by the emit contract (racklr/emit-effects); this
+;; section only places it: a `# @effects {...}` documented annotation plus the
+;; live `@__withEffects` guard that enforces it at runtime.
 
 ;; Wrap a directly-performed effect call in the runtime guard: the ambient
 ;; effect context (established by the __withEffects decorator) enforces
@@ -234,13 +210,25 @@
 
 (define (emit-effects-guard fn indent)
   (define spc (make-string (* indent 4) #\space))
-  (string-append spc "@__withEffects(" (emit-effect-row (uir-fn-effects fn)) ")"))
+  (define row (uir-fn-effects fn))
+  (define annotation (render-effect-annotation 'python row))
+  (string-append
+   (if annotation (string-append spc annotation "\n") "")
+   spc "@__withEffects(" (render-effect-row 'python row) ")"))
+
+;; Render a vocabulary list as a Python tuple literal. The scope read/write
+;; verbs and the modality set come from the lexicon DATA module, so the guard
+;; enforces exactly the vocabulary the classifier can emit.
+(define (python-tuple strings)
+  (string-append "(" (string-join (map (λ (v) (format "~s" v)) strings) ", ") ")"))
 
 (define (effects-guard-preamble)
   (string-append
    "import inspect\n"
    "__effects_stack = []\n"
    "__handlers_stack = []\n"
+   "__write_ops = " (python-tuple (scope-write-verbs)) "\n"
+   "__read_ops = " (python-tuple (scope-read-verbs)) "\n"
    "def __effects_current():\n"
    "    return __effects_stack[-1] if __effects_stack else None\n"
    "def __current_handler(name):\n"
@@ -262,11 +250,9 @@
    "            raise RuntimeError(\"effect operation prohibited: \" + name + \".\" + op)\n"
    "        scope = entry.get(\"scope\")\n"
    "        if scope:\n"
-   "            write_ops = (\"write\", \"update\", \"create\", \"delete\", \"save\", \"insert\", \"put\", \"remove\", \"set\", \"push\", \"clear\", \"drop\", \"mutate\", \"add\")\n"
-   "            read_ops = (\"query\", \"fetch\", \"get\", \"read\", \"find\", \"filter\", \"all\", \"select\", \"search\", \"list\", \"exists\", \"load\", \"peek\", \"count\")\n"
-   "            if scope.startswith(\"reads=\") and op in write_ops:\n"
+   "            if scope.startswith(\"reads=\") and op in __write_ops:\n"
    "                raise RuntimeError(\"effect scope violation: \" + name + \".\" + op + \" outside \" + scope)\n"
-   "            if scope.startswith(\"writes=\") and op in read_ops:\n"
+   "            if scope.startswith(\"writes=\") and op in __read_ops:\n"
    "                raise RuntimeError(\"effect scope violation: \" + name + \".\" + op + \" outside \" + scope)\n"
    "        performed = ctx[\"performed\"]\n"
    "        performed.setdefault(name, {\"any\": 0})\n"
@@ -289,7 +275,7 @@
    "    finally:\n"
    "        __handlers_stack.pop()\n"
    "def __withEffects(row):\n"
-   "    _valid_modalities = (\"may\", \"must\", \"must-not\")\n"
+   "    _valid_modalities = " (python-tuple (guard-modalities)) "\n"
    "    for _name, _entry in row.items():\n"
    "        _modality = _entry.get(\"modality\", \"may\")\n"
    "        if _modality not in _valid_modalities:\n"
@@ -297,6 +283,9 @@
    "        _budget = _entry.get(\"max\")\n"
    "        if _budget is not None and (not isinstance(_budget, int) or _budget < 0):\n"
    "            raise ValueError(\"invalid effect budget: %r\" % (_budget,))\n"
+   "        _scope = _entry.get(\"scope\")\n"
+   "        if _scope is not None and (not isinstance(_scope, str) or not (_scope.startswith(\"reads=\") or _scope.startswith(\"writes=\"))):\n"
+   "            raise ValueError(\"unsupported effect scope encoding: %r\" % (_scope,))\n"
    "    def _check(frame):\n"
    "        for _k, _entry in row.items():\n"
    "            if _entry.get(\"modality\", \"may\") == \"must\":\n"
@@ -737,8 +726,14 @@
 
 ;; ── Top-level ──────────────────────────────────────────────────────
 
-(define (emit-python uir)
-  (define annotated (annotate-effects uir))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Python 3 source out. An explicit row is authoritative
+;; for the unit's entry function and is rendered as an `@__withEffects({...})`
+;; guard. The other functions still get their row from the UIR or, when absent,
+;; from inference, exactly as before the contract existed.
+(define (emit-python uir [row #f])
+  (define source (attach-root-row 'emit-python uir row))
+  (define annotated (annotate-effects source))
   (define body
     (cond [(uir-block? annotated)
            (emit-body annotated 0)]

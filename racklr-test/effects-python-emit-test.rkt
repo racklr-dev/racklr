@@ -129,7 +129,9 @@
             #f
             (extract-effects-row deco)))
   (define out (emit-python (prog (uir-decorated (list deco) inner))))
-  (check-false (string-contains? out "@effects")
+  ;; The row is documented as `# @effects {...}`, but the *decorator* must not
+  ;; be re-emitted: executing an undefined `effects` would raise NameError.
+  (check-false (regexp-match? #rx"(?m:^[ \t]*@effects\\()" out)
                "@effects annotation decorator must be stripped")
   (check-true (string-contains? out "@__withEffects(")
                "the declared row still guards the function")

@@ -39,6 +39,8 @@ grammars-v4/*.g4          ← ANTLR4 grammar files (vendor)
                 ▼
   lower-<lang>.rkt        ← CST → UIR lowering pass (per language)
   emit-<lang>.rkt         ← UIR → language text code generator (per language)
+  emit-contract.rkt       ← the contract every target implements: UIR + effect row → source
+  emit.rkt                ← single dispatch over every emit-contract target
                 │
                 ▼
   uir.rkt                 ← UIR struct definitions (Tier 0 + Tier 1 types)
@@ -95,12 +97,62 @@ Effect rows give generated code a readable boundary: a function declares which c
 
 - `infer.rkt`: effect inference; composes rows up the call graph from annotations and known effects, and defers higher-order calls whose callee is not statically known.
 - `contract.rkt`: contract checking; subtyping between rows, budgets as upper bounds, and prohibitions.
+- `provenance.rkt` + `graph/provenance.rkt`: every inference run records the
+  evidence for each effect edge (classifying call site, source tokens, receiver
+  type, call chain) as structured data, projected into the typed hypergraph
+  substrate; `provenance-paths` answers "why is this function `db`" with the
+  exact caller→callee chain, and the projection refuses an effect edge with no
+  ground.
 - `python-annot.rkt`: Python annotation surface (`__effects__` attribute / decorator) extracted into a UIR effect row.
 - `clojure-annot.rkt`: Clojure annotation surface (`^{:effects ...}` metadata) extracted into a UIR effect row.
 
 Both emitters attach the row to the emitted function so it survives round-trips: Python via a `__effects__` attribute, Clojure via `:__effects__` metadata on the `defn`. The Clojure effects test executes the emitted code through the [Jolt](https://github.com/jolt-lang/jolt) runtime and reads the row back off the var.
 
+### Effect-row spelling (emit-effects.rkt)
+
+`emit-contract.rkt` decides whether a target can carry a row; `emit-effects.rkt`
+owns how that row is spelled. It is the one place that renders a
+`uir-effect-row` into each target's native effect vocabulary; the emitters own
+where the row is placed, so a row cannot be dropped silently.
+
+| Target | Native effect expression | Placement |
+|---|---|---|
+| Python | object literal plus a `# @effects {...}` documented comment | `@__withEffects(row)` decorator above the `def` |
+| JavaScript | object literal plus a `/** @effects {...} */` documented annotation | `__withEffects(row, fn)` guard around the declaration |
+| TypeScript | emitted through the JS emitter (type annotations drop at emit), so the JS object/guard form is its emitted native form | as JavaScript |
+| Clojure | keyword-keyed map, e.g. `{:llm {:modality :may :max 5}}` | `defn` attr-map metadata `{:__effects__ ...}`, which the reader keeps on the var |
+| Koka | typed effect row, e.g. `: <llm, db> ret` (or `total` when none) | function return type |
+
+Fields without native syntax are documented, not discarded. A Koka typed row
+spells names only, so budgets, scopes, ops and prohibitions are recorded in a
+`// @effects {...}` comment next to the typed row, and a `must-not` entry is
+never granted as a typed effect. (Koka has no way to distinguish `may` from
+`must` in the typed row, so both render as `<db>` and the modality distinction
+is only in the comment.)
+
+The Python/JS runtime guards enforce a scope by classifying the performed op as
+a read or a write. That vocabulary is rendered from the classifier's DATA verb
+tables (`racklr/effects/guard-vocabulary.rkt`, backed by
+`racklr/effects/imports/library-config.rkt`), not hand-written in the emitters,
+so a new lexicon verb is enforced by construction. A scope value that is not
+`reads=...` or `writes=...` has no enforcement branch and is rejected at guard
+construction instead of silently skipping enforcement. Koka's grammar only accepts `<effects>` in
+front of a result type, so a function with a known row but no declared result
+type carries it as the documented comment alone. The JSON target has no
+functions or effect vocabulary, so function rows do not appear there.
+`unknown` entries are dropped: an unclassified effect is a tracked inference
+obligation, not something a target guard can enforce. `uir-method` has no
+effect-row slot yet, so method rows are not emitted by any target.
+
+Per-target mapping tests live in `racklr-test/effects-{python,ts,jsdoc,clojure,koka}-annot-test.rkt`.
+
 **Planned:** runtime enforcement. Static checks run wherever the call graph is resolvable; a runtime guard covers the rest. Jolt is the Clojure runtime for this, and effect-ts is the chosen direction for JavaScript/TypeScript emission.
+
+### emit-contract.rkt / emit.rkt
+
+One contract for every target: `render : UIR × (or/c #f uir-effect-row?) → string`. `emit-contract.rkt` defines that call shape, the row-reification strategies a target may declare, and the shared rule that an explicit row is attached to the unit's entry function (`attach-root-row`) or refused. `emit.rkt` is the single dispatch and the target table: `(emit target uir row)` renders any supported target from the same UIR-plus-row input — `python`, `javascript`, `jsx`, `koka`, `clojure`, `dom-js`, `html`, `json`, `effervesce` — and forwards target-specific keyword options (`#:indent` for JSON, `#:title`/`#:lang`/`#:external-js` for HTML), so it is a drop-in replacement for the direct emitter calls.
+
+A supplied row is rendered in the target's native vocabulary where one exists (Python `@__withEffects({...})`, JavaScript/HTML `__withEffects({...}, fn)`, Koka `fun f() : <llm, db>` / `: total`, Clojure `:__effects__` metadata) and refused with an error where it does not (JSX/DOM/JSON/Effervesce), so it is never silently dropped. Omitting the row keeps the pre-contract one-argument call shape.
 
 ## Generated Parser Design
 
@@ -134,7 +186,9 @@ cd racklr-test
 racket effects-infer-test.rkt        # effect inference
 racket effects-algebra-property-test.rkt # effect algebra laws + fixpoint monotonicity
 racket effects-algebra-prohibitions-test.rkt # prohibition / declared-row contract-order agreement
+racket provenance-test.rkt           # effect-edge provenance + graph query
 racket effects-contract-test.rkt     # contract checking
+racket emit-contract-test.rkt        # emit contract + single dispatch
 racket effects-python-annot-test.rkt # Python effect annotations
 racket effects-clojure-test.rkt      # Clojure effects + Jolt runtime round-trip
 racket lower-clojure-test.rkt        # Clojure lowering + emit
@@ -146,9 +200,37 @@ racket lower-javascript-test.rkt     # JavaScript lowering + emit
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser
 racket uir-test.rkt                  # UIR types + serialization
+racket scan-python-test.rkt          # full-tree scanner bucket classification
 ```
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.
+
+Provenance completeness can also be checked over a real corpus (same submodule
+and grammar prerequisites as the shared baseline):
+
+```bash
+racket tools/provenance-corpus.rkt                 # django/django/core
+racket tools/provenance-corpus.rkt django/django   # wider probe
+```
+
+It prints the effect-edge and provenance counts and exits non-zero if any
+effect edge has no reachable ground; it never re-pins the baseline.
+
+### Full-corpus measurement
+
+`tools/scan-python.rkt` scans a directory tree through the Python3 front end
+using the tracked `grammars/python3/` grammar and reports, per file, which
+pipeline stage fails (`ok`, `INDENT-ERROR`, `PARSE-FAIL`, `LOWER-ERROR`,
+`FALLBACK`). From the repository root, with the `django/` submodule
+initialised:
+
+```bash
+racket tools/scan-python.rkt django/django            # aggregate
+racket tools/scan-python.rkt django/django --verbose  # per-file failures + effects
+```
+
+It exits 0 only when every file lowers cleanly. The latest Django run is
+907/907 `ok` with 0 blockers; see `docs/django-frontend-catalogue.md`.
 
 ## Dependencies
 

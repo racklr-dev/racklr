@@ -3,7 +3,8 @@
 (require rackunit
          racklr/uir
          racklr/effects/contract
-         racklr/effects/python-annot)
+         racklr/effects/python-annot
+         racklr/emit-python)
 
 (define (sym s) (uir-symbol s))
 (define (num s) (uir-number s))
@@ -87,6 +88,26 @@
   (check-equal? (budget r 'llm) 3)
   (check-equal? (scope r 'db) "reads=idx"))
 
+;; ── extraction feeds the native emission ────────────────────────────
+
+;; A known row extracted from the front-end annotation surface must render in
+;; the target's native Python form: the `# @effects {...}` documented comment
+;; and the `@__withEffects({...})` guard, both carrying the row.
+(define (test-extraction-feeds-emit)
+  (define r (extract-effects-row
+             (effects-decorator
+              (record (list "llm" (record (list "max" (num "5"))))))))
+  (define fn (uir-fn (sym "summarize") '()
+                     (uir-block (list (uir-null)))
+                     #f r))
+  (define out (emit-python (uir-block (list fn))))
+  (check-true (string-contains? out "# @effects {\"llm\"")
+              "documented @effects annotation emitted")
+  (check-true (string-contains? out "@__withEffects({\"llm\"")
+              "runtime guard emitted with the native row")
+  (check-true (string-contains? out "\"max\": 5")
+              "budget preserved through extraction -> emit"))
+
 (module+ main
   (test-effects-decorator-predicate)
   (test-not-an-effect-name)
@@ -98,4 +119,5 @@
   (test-modality)
   (test-unconstrained-entry)
   (test-multiple-entries)
+  (test-extraction-feeds-emit)
   (displayln "All python-annot tests passed."))
