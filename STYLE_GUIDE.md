@@ -17,7 +17,7 @@ These are the non-negotiable contracts. A change that breaks one is not done, no
 
 ## Working expectations
 
-- Confirm the baseline is green before touching anything. Record the baseline numbers you observed, then record them again after.
+- Confirm the baseline is green before touching anything. Record the baseline hash you observed, then record it again after (with the graph diff when it moves).
 - Work in a plan-execute-verify loop. State the goal in one line, list the concrete steps, do one step, verify it, then move on.
 - Report only what you observed. Say plainly when you could not verify something.
 - A zero exit is not success. `raco test` is unreliable here. Grep the output for FAILURE and ERROR and read the real exit code.
@@ -53,8 +53,9 @@ The gate. Run it from the right working directory.
 
 - `raco setup racklr` then `raco setup effervesce`, both exit 0.
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`.
+- Baseline machinery: `cd racklr-test && racket baseline-check-test.rkt` (the content-addressing gate itself).
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt`. These must run from `effervesce/`; `check/verify-test.rkt` opens its fixture relative to the current directory.
-- The shared baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 52 files, network 2, unknown 83, inherits 126`. A drift from these numbers is a regression until proven otherwise.
+- The shared baseline: `racket tools/baseline-check.rkt` must print `baseline OK sha256:<hash>` and exit 0. `baseline/type-graph.snapshot` is the canonical serialization of the type-graph output and `baseline/type-graph.sha256` pins its hash; a mismatch prints the exact graph diff. A drift is a regression until proven otherwise, and re-pinning is a deliberate `racket tools/baseline-check.rkt --update` whose snapshot diff is the review.
 - Two Python3 front-end suites are known to fail at the parse stage (`gen-python3-test.rkt`, `lower-python-test.rkt`) because of the `single_input` compound-statement limitation. Documented, not to be "fixed" as part of unrelated work.
 - No false greens. Never suppress a failing check to manufacture green.
 - No silent skips. A test that skips most of its assertions is a bug in the test, not a pass.
@@ -65,7 +66,7 @@ The gate. Run it from the right working directory.
 
 - When you solve a non-obvious error, save the pitfall to memory or a skill immediately, with the exact symptom and the fix.
 - When a skill is stale, patch it now, not after the next time it misleads you.
-- Drive the unknown count down and keep the number in the baseline. An unknown leaf is an open obligation, not a fact of life.
+- Drive the unknown count down. The baseline snapshot records the unknown rows, so movement shows up as an exact graph diff. An unknown leaf is an open obligation, not a fact of life.
 - Re-run, do not re-trust. A repeated note that claims verification without captured output is a signal to run the gate again yourself.
 - The system that checks code is itself checked. That reflexivity is the point, so keep the checker's own code under the same contract.
 
@@ -112,7 +113,7 @@ Test gate:
 - `raco setup effervesce`
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt` (must run from `effervesce/`)
-- Baseline: `racket effervesce/tools/type-graph.rkt django/django/core` must print `112 parsed, 0 failed, db 52 files, network 2, unknown 83, inherits 126`.
+- Baseline: `racket tools/baseline-check.rkt` must print `baseline OK sha256:<hash>`. The pinned snapshot under `baseline/` content-addresses the type-graph output; re-pin with `--update` only for an intended graph change.
 - `raco test` is unreliable. Zero exit is not success. Grep output for FAILURE and ERROR and read the real exit code.
 
 Coding style:
