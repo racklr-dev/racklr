@@ -138,26 +138,27 @@
              (string-join
               (for/list ([e entries])
                 (define key-str (emit-key (car e)))
+                (define key-out (emit-property-key (car e)))
                 (define val (cdr e))
                 (cond
                   [(string=? key-str "...")
                    (emit-js val)]
                   [(and (uir-fn? val) (string-prefix? key-str "get "))
                    (format "get ~a() { ~a }"
-                           (substring key-str 4)
+                           (emit-property-name (substring key-str 4))
                            (emit-body (uir-fn-body val)))]
                   [(and (uir-fn? val) (string-prefix? key-str "set "))
                    (format "set ~a(~a) { ~a }"
-                           (substring key-str 4)
+                           (emit-property-name (substring key-str 4))
                            (string-join (map emit-js (uir-fn-params val)) ", ")
                            (emit-body (uir-fn-body val)))]
                   [(uir-fn? val)
                    (format "~a(~a) { ~a }"
-                           key-str
+                           key-out
                            (string-join (map emit-js (uir-fn-params val)) ", ")
                            (emit-body (uir-fn-body val)))]
                   [else
-                   (format "~a: ~a" key-str (emit-js val))]))
+                   (format "~a: ~a" key-out (emit-js val))]))
               ", "))]
     
     [(uir-var name)
@@ -540,9 +541,25 @@
        (uir-symbol? (uir-call-callee node))
        (string=? "switch" (uir-symbol-name (uir-call-callee node)))))
 
+;; Raw key text: used to recognise spreads and `get`/`set` prefixes.
 (define (emit-key key)
   (if (uir-string? key)
       (uir-string-value key)
+      (format "[~a]" (emit-js key))))
+
+;; A bare key is valid JS only when it is a plain identifier name; anything
+;; else — 'accent-1', '5xl', a numeric name like 28 — must be quoted, or the
+;; emitted object literal no longer parses. Computed keys already carry their
+;; own brackets.
+(define (property-name-string? s)
+  (regexp-match? #px"^[A-Za-z_$][A-Za-z0-9_$]*$" s))
+
+(define (emit-property-name name)
+  (if (property-name-string? name) name (format "~s" name)))
+
+(define (emit-property-key key)
+  (if (uir-string? key)
+      (emit-property-name (uir-string-value key))
       (format "[~a]" (emit-js key))))
 
 ;; ── ES Modules emit ──────────────────────────────────────────────────

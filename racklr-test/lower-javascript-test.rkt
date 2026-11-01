@@ -1,6 +1,7 @@
 #lang racket
 
 (require rackunit
+         racket/file
          racklr/tree
          racklr/uir
          racklr/gen-test
@@ -271,6 +272,23 @@
   (check-equal? (uir-tag uir) 'block)
   (check-true (string-contains? emitted "{")))
 
+;; ── B112: non-identifier object keys keep their key text ────────────
+;; Keys such as 'accent-1', '5xl', and 28 are legal JS property names but not
+;; identifiers; lowering used to drop them to `?` and emit invalid `?:` pairs.
+(let-values ([(uir emitted)
+              (check-js "var x = { 'accent-1': 1, 28: '7rem', '5xl': '2.5rem', plain: 3 };")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-true (string-contains? emitted "\"accent-1\": 1"))
+  (check-true (string-contains? emitted "\"28\": \"7rem\""))
+  (check-true (string-contains? emitted "\"5xl\": \"2.5rem\""))
+  (check-true (string-contains? emitted "plain: 3"))
+  (check-false (string-contains? emitted "?"))
+  (check-true (and (js-parse emitted) #t) "B112: emitted quoted keys re-parse"))
+
+;; Object literal: reserved-word key (identifierName → reservedWord)
+(let-values ([(uir emitted) (check-js "var x = { default: 1 };")])
+  (check-true (string-contains? emitted "default: 1")))
+
 ;; Array literal: multiple items
 (let-values ([(uir emitted) (check-js "var x = [1, 2, 3];")])
   (check-equal? (uir-tag uir) 'block)
@@ -525,6 +543,22 @@
   (check-true (string-contains? emitted "export"))
   (check-true (string-contains? emitted "x"))
   (check-true (string-contains? emitted "y")))
+
+;; ── B112: the reported tailwind.config.js round-trips ───────────────
+;; The config's nested objects use keys the JS grammar only accepts quoted
+;; ('accent-1', '5xl') or as numbers (28); those used to lower to `?` and the
+;; emitted text then failed to re-parse.
+(define tailwind-config
+  (build-path (current-directory) ".." "docs" "examples" "test-apps"
+              "blog-starter" "tailwind.config.js"))
+(let* ([src (file->string tailwind-config)]
+       [cst (js-parse src)]
+       [uir (and cst (lower-program cst tok-type tok-value))]
+       [emitted (and uir (emit-javascript uir))])
+  (check-true (and cst #t) "B112: tailwind.config.js parses")
+  (check-true (and emitted #t) "B112: tailwind.config.js lowers")
+  (check-false (string-contains? emitted "?:") "B112: no placeholder keys survive")
+  (check-true (and (js-parse emitted) #t) "B112: emitted tailwind config re-parses"))
 
 (cleanup)
 (displayln "All JavaScript lowering tests passed.")
