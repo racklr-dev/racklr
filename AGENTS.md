@@ -43,15 +43,17 @@ code.
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`.
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt` (must run from
   `effervesce/`).
-- Shared baseline:
-  `racket effervesce/tools/type-graph.rkt django/django/core` must print
-  `112 parsed, 0 failed, db 51 files, network 6, unknown 69, inherits 126`.
-  Drift from these numbers is a regression until proven otherwise.
+- Shared baseline: `racket tools/baseline-check.rkt` must print
+  `baseline OK sha256:<hash>` and exit 0. The hash pins
+  `baseline/type-graph.snapshot`, the canonical serialization of the type-graph
+  output; a mismatch prints the exact graph diff. Drift is a regression until
+  proven otherwise, and re-pinning is a deliberate `--update` whose snapshot
+  diff is the review.
 
 ## Working rules
 
-- Confirm the baseline is green before touching anything. Record the numbers
-  you observed before and after.
+- Confirm the baseline is green before touching anything. Record the baseline
+  hash you observed before and after (with the graph diff when it moves).
 - Report only what you observed. Say plainly when you could not verify
   something. Never manufacture a green result or suppress a failing check.
 - Fix the underlying representation, not the symptom.

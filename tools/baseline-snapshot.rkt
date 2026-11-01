@@ -1,0 +1,201 @@
+#lang racket
+
+;; tools/baseline-snapshot.rkt — canonical, content-addressable serialization
+;; of the type-graph output.
+;;
+;; The shared baseline used to be a handful of remembered integers. This module
+;; turns the whole type-graph projection into one deterministic document:
+;;
+;;   * a small summary header (file / function / atom counts from the run), then
+;;   * one Atomese line per graph atom, sorted, with checkout paths rewritten
+;;     relative to the repository root.
+;;
+;; SHA-256 over that document is the content address. Two runs with equal
+;; graphs produce the same address on any checkout path; any graph change moves
+;; the address, and diff-snapshot reports the exact atom lines that moved. The
+;; pinned address and snapshot live in baseline/type-graph.sha256 and
+;; baseline/type-graph.snapshot; baseline-check.rkt is the CLI around this.
+;;
+;; Reference: Rainbow's src/rainbow/canonical.clj (deterministic serialization
+;; + sha256), cited by the baseline content-addressing ticket (nc-AE7E).
+
+(require racket/list
+         racket/string
+         "sha256.rkt")
+
+(provide snapshot-format-version
+         snapshot-header-marker
+         extract-summary
+         normalize-atom-lines
+         build-snapshot
+         parse-snapshot
+         snapshot-content-id
+         diff-snapshots)
+
+;; Bump only when the document layout changes; the snapshot then needs a
+;; deliberate --update and the diff shows the format churn.
+(define snapshot-format-version 1)
+(define snapshot-header-marker
+  "# --- canonical graph (Atomese, one atom per line, sorted) ---")
+
+;; Header fields carried over from the old numeric contract, in a fixed order.
+;; They are part of the hashed document, so parse failures ("files failed") and
+;; files that lower to no functions still move the address.
+(define summary-labels
+  '("files scanned"
+    "files parsed"
+    "files failed"
+    "named functions"
+    "effectful functions"))
+
+;; ── summary extraction ──────────────────────────────────────────────
+;;
+;; Read the stable, one-line counters from type-graph's stdout. Deliberately
+;; not the whole report: the effect-algebra and demonstration sections print
+;; hash-order-dependent lists, so they are not canonical.
+
+(define (line-integer lines label)
+  (define prefix (string-append label ":"))
+  (define line (findf (λ (l) (string-prefix? l prefix)) lines))
+  (unless line
+    (error 'extract-summary
+           "type-graph output has no ~s line; refusing to fabricate a baseline"
+           label))
+  (define text (string-trim (substring line (string-length prefix))))
+  (define n (string->number text))
+  (unless (and n (exact-nonnegative-integer? n))
+    (error 'extract-summary
+           "type-graph output line ~s does not hold a count: ~s"
+           label text))
+  n)
+
+(define (extract-summary report)
+  (define lines (string-split report "\n"))
+  (for/list ([label (in-list summary-labels)])
+    (cons label (number->string (line-integer lines label)))))
+
+;; ── canonical atom lines ────────────────────────────────────────────
+
+;; Absolute path inside this checkout: quoted, starting with "/" or a Windows
+;; drive. After root-relative rewriting there should be none left; one means a
+;; probe directory outside the repository, whose graph is not portable.
+(define absolute-path-rx #px"\"(?:/|[A-Za-z]:[\\\\/])")
+
+;; `simplify-path` on a directory leaves a trailing separator, which would make
+;; the prefix match nothing; normalise it away.
+(define (root-string root)
+  (regexp-replace #rx"[\\\\/]+$"
+                  (path->string (simplify-path (path->complete-path root)))
+                  ""))
+
+;; Rewrite every checkout-root prefix to "", then sort. Sorting after the
+;; rewrite makes the order independent of where the checkout lives and puts
+;; changed atoms next to their neighbours in a diff.
+(define (normalize-atom-lines lines root)
+  (define root* (root-string root))
+  (define prefix (string-append root* "/"))
+  (define rewritten
+    (for/list ([line (in-list lines)])
+      (string-replace line prefix "")))
+  (define outside
+    (findf (λ (line)
+             (or (string-contains? line root*)
+                 (regexp-match? absolute-path-rx line)))
+           rewritten))
+  (when outside
+    (error 'normalize-atom-lines
+           (string-append
+            "type-graph output contains an absolute path outside the repository "
+            "root (~a); scan only directories inside the checkout so the "
+            "baseline is portable")
+           outside))
+  (sort rewritten string<?))
+
+;; ── document build / parse ──────────────────────────────────────────
+
+(define (build-snapshot report atom-lines root probes)
+  (define summary (extract-summary report))
+  (define body (normalize-atom-lines atom-lines root))
+  (define header
+    (append
+     (list "# racklr type-graph baseline snapshot"
+           (format "# format: ~a" snapshot-format-version)
+           (format "# probe: ~a" probes)
+           "# generated by: racket tools/baseline-check.rkt --update"
+           "# the pinned hash in baseline/type-graph.sha256 addresses this file"
+           "# atom lines are sorted; paths are relative to the repository root")
+     (for/list ([kv (in-list summary)])
+       (format "~a: ~a" (car kv) (cdr kv)))
+     (list (format "graph atoms: ~a" (length body))
+           snapshot-header-marker)))
+  (string-append (string-join (append header body) "\n") "\n"))
+
+(define (split-snapshot text)
+  (define lines
+    (let ([ls (string-split text "\n")])
+      (if (and (pair? ls) (string=? "" (last ls)))
+          (drop-right ls 1)
+          ls)))
+  (define marker (index-of lines snapshot-header-marker))
+  (define body
+    (if marker
+        (drop lines (add1 marker))
+        (error 'parse-snapshot "snapshot has no graph marker line")))
+  (define header
+    (if marker
+        (take lines marker)
+        (error 'parse-snapshot "snapshot has no header")))
+  (values header body))
+
+;; The header keys are "label: value" lines; comment lines start with "#".
+(define (header-fields header-lines)
+  (for/list ([line (in-list header-lines)]
+             #:when (and (not (string=? "" line))
+                         (not (string-prefix? "#" line))))
+    (define m (regexp-match #px"^([^:]+):[ \t]*(.*)$" line))
+    (if m
+        (cons (string-trim (cadr m)) (string-trim (caddr m)))
+        (cons (string-trim line) ""))))
+
+(define (parse-snapshot text)
+  (define-values (header body) (split-snapshot text))
+  (values (header-fields header) body))
+
+(define (snapshot-content-id text)
+  (string-append "sha256:" (sha256-hex (string->bytes/utf-8 text))))
+
+;; ── diff ────────────────────────────────────────────────────────────
+
+;; Multiset difference: elements of `a` beyond what `b` contains.
+(define (multiset-diff a b)
+  (define remaining (make-hash))
+  (for ([x (in-list b)])
+    (hash-update! remaining x add1 0))
+  (define out '())
+  (for ([x (in-list a)])
+    (define n (hash-ref remaining x 0))
+    (if (positive? n)
+        (hash-set! remaining x (sub1 n))
+        (set! out (cons x out))))
+  (reverse out))
+
+;; Returns (values header-changes body-removed body-added):
+;;   header-changes: (list key old new) for changed summary fields
+;;   body-removed:   canonical atom lines only in the pinned snapshot
+;;   body-added:     canonical atom lines only in the current run
+(define (diff-snapshots pinned current)
+  (define-values (old-header old-body) (parse-snapshot pinned))
+  (define-values (new-header new-body) (parse-snapshot current))
+  (define old (make-hash (map (λ (kv) (cons (car kv) (cdr kv))) old-header)))
+  (define new (make-hash (map (λ (kv) (cons (car kv) (cdr kv))) new-header)))
+  (define keys
+    (remove-duplicates
+     (append (map car old-header) (map car new-header))
+     string=?))
+  (define changes
+    (for/list ([key (in-list keys)]
+               #:unless (equal? (hash-ref old key "") (hash-ref new key "")))
+      (list key (hash-ref old key "") (hash-ref new key ""))))
+  (values changes
+          (multiset-diff old-body new-body)
+          (multiset-diff new-body old-body)))
