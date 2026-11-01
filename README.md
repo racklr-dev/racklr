@@ -253,6 +253,24 @@ racket tools/scan-python.rkt django/django --verbose  # per-file failures + effe
 It exits 0 only when every file lowers cleanly. The latest Django run is
 907/907 `ok` with 0 blockers; see `docs/django-frontend-catalogue.md`.
 
+### Real host-code bridge sample
+
+`fastapi/` vendors the backend of the official FastAPI
+full-stack template (release 0.10.0; 27 Python files, 1,611 lines) with an
+Effervesce spec and runs the bridge over it. The tree parses and lowers with the
+tracked `grammars/python3/` grammar and every inferred effect (`db`, `io`,
+`time`) is covered by the spec's declared needs; calls the inference cannot
+resolve (e.g. `jwt`, `pwdlib`, `jinja2`) are reported as `bridge-unverified`
+instead of being counted as covered. See `fastapi/README.md`.
+
+```bash
+./fastapi/check.sh
+```
+
+The harness is `tools/bridge-python.rkt`, the tracked-grammar counterpart of
+`effervesce/tools/verify-dir.rkt`; the suite is
+`racklr-test/bridge-fastapi-sample-test.rkt`.
+
 ## Dependencies
 
 - Racket 9.3
