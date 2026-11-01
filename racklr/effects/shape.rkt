@@ -16,6 +16,10 @@
   arrow-call?
   function-expr-call?
   get-field-symbol
+  bare-name-symbol
+  dot-call-field-symbol
+  member-access-field
+  optional-chain-present
   callee-name
   effect-op-of-callee
   member-access-callee?
@@ -74,6 +78,66 @@
     [(uir-string? f) (string->symbol (uir-string-value f))]
     [else #f]))
 
+;; Field of a JS/TS `dot` member access. The lowerer emits a uir-symbol for a
+;; plain `a.b`, but a uir-var when the access is the right side of an optional
+;; chain (`a?.b`), because the chain is lowered through the expression path.
+;; Unlike a Python `uir-get` subscript (whose field is an index expression),
+;; a dot-call field is always a name.
+(define (dot-call-field-symbol f)
+  (cond
+    [(uir-symbol? f) (string->symbol (uir-symbol-name f))]
+    [(uir-var? f) (string->symbol (uir-symbol-name (uir-var-name f)))]
+    [(uir-string? f) (string->symbol (uir-string-value f))]
+    [else #f]))
+
+;; Field name of a member-access callee in either front-end encoding (Python
+;; `uir-get` attribute, JS/TS `dot` call), or #f when the callee is not a
+;; member access. A Python subscript carries an index expression, not a field
+;; name, so it yields #f — the same distinction `get-field-symbol` makes.
+(define (member-access-field c)
+  (cond
+    [(uir-get? c) (get-field-symbol (uir-get-field c))]
+    [(dot-call? c) (dot-call-field-symbol (second (uir-call-args c)))]
+    [else #f]))
+
+;; Does `v` denote the absent branch of an optional chain (`void 0` / null)?
+(define (nullish-value? v)
+  (or (uir-null? v)
+      (and (uir-call? v)
+           (uir-symbol? (uir-call-callee v))
+           ;; `void` is a front-end construct encoding (dialect data), compared
+           ;; as a symbol so the engine carries no library name literal.
+           (eq? (string->symbol (uir-symbol-name (uir-call-callee v))) 'void))))
+
+;; The present value of a nullish guard. Both front ends lower `x?.y` to
+;; `(if (== x null) void0 y')`, and hand-written `x == null ? undefined : y`
+;; has the same shape; this returns the non-absent branch (`y'`), or #f when
+;; `v` is not that guard form. The projection is right for both (the present
+;; value's class is what the receiver dataflow needs), so the match is
+;; deliberately on the shape, not on a lowered-`?.` marker. A regular
+;; conditional expression keeps its existing same-branch-type rule — see the
+;; callers.
+(define (optional-chain-present v)
+  (and (uir-if? v)
+       (let ([test (uir-if-test v)])
+         (and (uir-call? test)
+              (uir-symbol? (uir-call-callee test))
+              (eq? (string->symbol (uir-symbol-name (uir-call-callee test))) '==)
+              (let ([args (uir-call-args test)])
+                (and (= (length args) 2)
+                     (or (uir-null? (first args)) (uir-null? (second args)))
+                     (nullish-value? (uir-if-then v))))
+              (uir-if-else v)))))
+
+;; Name of a receiver expression that is a bare name. Python locals lower to
+;; uir-var; JS/TS keywords (`this`, `super`) and bare identifiers lower to
+;; uir-symbol. Returns the symbol or #f for a compound expression.
+(define (bare-name-symbol e)
+  (cond
+    [(uir-var? e) (string->symbol (uir-symbol-name (uir-var-name e)))]
+    [(uir-symbol? e) (string->symbol (uir-symbol-name e))]
+    [else #f]))
+
 ;; Simple (non-dotted) callee name: a uir-var or uir-symbol.
 (define (callee-name c)
   (cond
@@ -88,7 +152,7 @@
   (let loop ([c c])
     (cond
       [(uir-get? c) (get-field-symbol (uir-get-field c))]
-      [(dot-call? c) (get-field-symbol (second (uir-call-args c)))]
+      [(dot-call? c) (dot-call-field-symbol (second (uir-call-args c)))]
       [(uir-var? c) (string->symbol (uir-symbol-name (uir-var-name c)))]
       [(uir-symbol? c) (string->symbol (uir-symbol-name c))]
       [else #f])))
@@ -104,7 +168,7 @@
        (define f (get-field-symbol (uir-get-field c)))
        (loop (uir-get-base c) (cons (and f (symbol->string f)) fields))]
       [(dot-call? c)
-       (define f (get-field-symbol (second (uir-call-args c))))
+       (define f (dot-call-field-symbol (second (uir-call-args c))))
        (loop (first (uir-call-args c)) (cons (and f (symbol->string f)) fields))]
       [(uir-var? c)
        (string-join (cons (uir-symbol-name (uir-var-name c)) (filter values fields)) ".")]

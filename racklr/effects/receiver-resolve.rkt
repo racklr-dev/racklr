@@ -28,8 +28,9 @@
 (provide
  imported-effect imported-fn-effect module-receiver-effect
  module-path-marker-effect receiver-effect imported-class-cap manager-effect
- class-attr-lookup receiver-chain-class pure-dunder-name? exception-name?
- imported-parent-effect super-stdlib-fallback self-stdlib-fallback)
+ pure-dunder-name? exception-name?
+ imported-parent-effect super-stdlib-fallback self-stdlib-fallback
+ receiver-domain-effect)
 
 ;; ── import-graph effect resolution ──────────────────────────────────
 
@@ -46,7 +47,7 @@
               [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
               [exports (import-env-exports import-env)]
               [caps (import-env-caps import-env)]
-              [mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee)))]
+              [mname (and (member-access-callee? callee) (member-access-field callee))]
               ;; Root of the chain (`connection` in
               ;; `connection.introspection.table_names`), not just the immediate
               ;; base: a deeper imported-singleton chain classifies by the same
@@ -217,79 +218,16 @@
               (hash-has-key? class-defs root)
               (receiver-effect comp root mname class-defs import-env lex)))))
 
-;; ── receiver-type chain ─────────────────────────────────────────────
+;; ── tracked receiver class → effect domain ──────────────────────────
 
-;; Attribute `attr` of class `class-name`, resolved across defining components
-;; and the superclass chain (most-derived first); #f when the attribute is not
-;; tracked. The per-class attribute graph walk that lets a receiver chain cross
-;; an object boundary (`self.a.b.m` → class of `a` → class of `a.b`).
-(define (class-attr-lookup comp class-name attr class-defs class-attrs comp-supers)
-  (define start (resolve-class-component class-name comp class-defs))
-  (define seen (make-hash))
-  (let loop ([c start] [cls class-name])
-    (cond
-      [(not (and c cls)) #f]
-      [(hash-has-key? seen (cons c cls)) #f]
-      [else
-       (hash-set! seen (cons c cls) #t)
-       (let ([val (hash-ref (hash-ref class-attrs (cons c cls) (hash)) attr #f)])
-         (or val
-             (for/or ([sr (in-list (hash-ref comp-supers (cons c cls) '()))])
-               (let* ([c2 (car sr)] [s (cdr sr)])
-                 (and c2 s (loop c2 s))))))])))
-
-;; Class an arbitrary receiver expression (a bare variable, or a nested
-;; `a.b.c` get-chain) resolves to. `self.a` / host-implicit-receiver `.a` reads
-;; the merged owner attribute env; `expr.attr` where `expr` resolves to class C
-;; reads C's own attribute graph (with MRO), so a `self.a.b.m(...)` chain
-;; resolves through two objects instead of falling to `unknown`.
-(define (receiver-chain-class rt base comp class-defs class-attrs comp-supers
-                              [owner #f] [return-types #f]
-                              [methods #f] [fn-defs #f] [known #f]
-                              [import-env #f] [tokens default-effect-tokens])
-  (cond
-    [(uir-var? base)
-     (hash-ref (receiver-types-locals rt)
-               (string->symbol (uir-symbol-name (uir-var-name base))) #f)]
-    [(uir-get? base)
-     (define attr (get-field-symbol (uir-get-field base)))
-     (define inner (uir-get-base base))
-     (cond
-       [(not attr) #f]
-       [(and (uir-var? inner)
-             (tokens-self-name? tokens
-                                (string->symbol (uir-symbol-name (uir-var-name inner)))))
-        ;; An assigned implicit-receiver attribute wins; when untracked, fall
-        ;; back to a METHOD of the enclosing class whose return type was
-        ;; projected (`@cached_property _cache` returning `self._class(...)`),
-        ;; so `self._cache.set(...)` resolves to the cached property's result
-        ;; class instead of `unknown`.
-        (or (hash-ref (receiver-types-self-attrs rt) attr #f)
-            (and owner return-types attr
-                 (mro-property-return-type comp owner attr return-types
-                                           class-defs comp-supers)))]
-       [else
-        (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
-                                        owner return-types methods fn-defs known import-env
-                                        tokens))
-        (and c
-             (or (class-attr-lookup comp c attr class-defs class-attrs comp-supers)
-                 ;; Bottom out at a module marker (`django.db` from
-                 ;; `connection = connections[database]`, or `pylibmc.Client`):
-                 ;; it has no corpus attribute graph to walk, but the marker
-                 ;; still carries its module's domain to the caller. A class
-                 ;; symbol never contains a dot, so the dotted test disambiguates.
-                 (and (string-contains? (symbol->string c) ".") c)))])]
-    [(uir-call? base)
-     ;; A `.attr` chain rooted at a call result (`Path(...).is_absolute`,
-     ;; `md5(...).hexdigest`, `open(...).close`): the result type is the class
-     ;; its callee names, or — for a corpus function/method call — the class
-     ;; its callee's projected return type names.
-     (or (corpus-call-return-type (uir-call-callee base) comp class-defs owner
-                                  methods fn-defs known comp-supers return-types tokens)
-         (call-result-type (uir-call-callee base) class-defs
-                           tokens rt import-env comp))]
-    [else #f]))
+;; Class→module→domain capability for a tracked receiver class, or #f. This is
+;; the coarse fallback: only the receiver class's home module names the domain.
+(define (receiver-domain-effect comp rcls mname class-defs import-env
+                                [lex default-lexicon])
+  (and rcls mname
+       (or (module-receiver-effect rcls (lexicon-tokens lex))
+           (module-path-marker-effect rcls mname import-env lex)
+           (receiver-effect comp rcls mname class-defs import-env lex))))
 
 ;; ── protocol fallbacks ──────────────────────────────────────────────
 
@@ -341,11 +279,16 @@
 ;; target is the object root, whose protocol methods are pure.
 (define (super-stdlib-fallback callee comp owner comp-supers class-defs import-env
                                [lex default-lexicon])
-  (and (uir-get? callee) (super-call? (uir-get-base callee))
+  (and (member-access-callee? callee)
        (let* ([tokens (lexicon-tokens lex)]
-              [mname (get-field-symbol (uir-get-field callee))]
+              [base (member-access-base callee)]
+              [mname (member-access-field callee)]
               [parents (hash-ref comp-supers (cons comp owner) '())])
-         (and mname
+         (and (or (super-call? base)
+                  ;; JS/TS `super.m()`: the `super` keyword lowers to a bare
+                  ;; symbol, unlike the Python `super()` invocation.
+                  (eq? (bare-name-symbol base) 'super))
+              mname
               (or (for/or ([pr (in-list parents)])
                     (cond
                       [(car pr) #f]
@@ -366,12 +309,11 @@
 ;; it, but the parent's `(cons #f name)` super-ref still names the type.
 (define (self-stdlib-fallback callee comp owner comp-supers import-env
                               [lex default-lexicon])
-  (and owner (uir-get? callee)
+  (and owner (member-access-callee? callee)
        (let* ([tokens (lexicon-tokens lex)]
-              [mname (get-field-symbol (uir-get-field callee))]
-              [base (uir-get-base callee)]
-              [base-name (and (uir-var? base)
-                              (string->symbol (uir-symbol-name (uir-var-name base))))])
+              [mname (member-access-field callee)]
+              [base (member-access-base callee)]
+              [base-name (bare-name-symbol base)])
          (and mname (tokens-self-name? tokens base-name)
               (for/or ([pr (in-list (hash-ref comp-supers (cons comp owner) '()))])
                 (and (not (car pr))

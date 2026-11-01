@@ -148,12 +148,16 @@
 (define (method-callee-keys callee comp owner methods class-defs comp-supers
                            [tokens default-effect-tokens])
   (cond
-    [(not (uir-get? callee)) '()]
+    [(not (member-access-callee? callee)) '()]
     [else
-     (let* ([mname (get-field-symbol (uir-get-field callee))]
-            [base (uir-get-base callee)])
+     (let* ([mname (member-access-field callee)]
+            [base (member-access-base callee)]
+            [base-name (bare-name-symbol base)])
        (cond
-         [(and mname (super-call? base))
+         [(and mname (or (super-call? base)
+                         ;; JS/TS `super.m()`: the `super` keyword lowers to a
+                         ;; bare symbol, unlike the Python `super()` invocation.
+                         (eq? base-name 'super)))
           ;; super().m() → each parent of the enclosing class, resolved to the
           ;; file that defines it (most-derived first).
           (if owner
@@ -163,14 +167,15 @@
                    (if (and c2 s) (mro-method-keys c2 s mname methods class-defs comp-supers) '())))
                (hash-ref comp-supers (cons comp owner) '()))
               '())]
-         [(and mname (uir-var? base))
-          (let ([base-name (string->symbol (uir-symbol-name (uir-var-name base)))])
-            (cond
-              [(tokens-self-name? tokens base-name)
-               (or (and owner (mro-method-keys comp owner mname methods class-defs comp-supers)) '())]
-              [else
-               (define c (resolve-class-component base-name comp class-defs))
-               (or (and c (mro-method-keys c base-name mname methods class-defs comp-supers)) '())]))]
+         [(and mname base-name)
+          (cond
+            ;; The host's implicit receiver name (Python `self`/`cls`, JS `this`)
+            ;; dispatches through the enclosing class's MRO.
+            [(tokens-self-name? tokens base-name)
+             (or (and owner (mro-method-keys comp owner mname methods class-defs comp-supers)) '())]
+            [else
+             (define c (resolve-class-component base-name comp class-defs))
+             (or (and c (mro-method-keys c base-name mname methods class-defs comp-supers)) '())])]
          [else '()]))]))
 
 ;; `(component . name)` key for a bare function call `f(...)`: the local

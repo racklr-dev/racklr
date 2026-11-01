@@ -18,6 +18,7 @@
          racklr/effects/class-resolve
          racklr/effects/imports
          racklr/effects/library-tokens
+         racklr/effects/receiver-assign
          racklr/effects/type-projection
          racklr/effects/lexicon)
 
@@ -37,9 +38,8 @@
 ;; self-attrs: hash attr-symbol → class-name-symbol (on self / cls)
 
 (define (self-or-cls-var? v [tokens default-effect-tokens])
-  (and (uir-var? v)
-       (tokens-self-name? tokens
-                          (string->symbol (uir-symbol-name (uir-var-name v))))))
+  (and (or (uir-var? v) (uir-symbol? v))
+       (tokens-self-name? tokens (bare-name-symbol v))))
 
 ;; A pure stdlib/builtin value constructor name (`Path`, `md5`, `dict`): pure to
 ;; construct, and therefore also a usable receiver type for a call result.
@@ -57,15 +57,6 @@
   (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
                          (symbol->string nm))))
 
-;; Name symbol bound by a `set!` left-hand side. The Python lowerer emits a
-;; uir-var target; the JS/TS lowerer emits a uir-symbol target. Returns #f for
-;; a compound target (a uir-get attribute assignment is handled by the caller).
-(define (set!-lhs-symbol lhs)
-  (cond
-    [(uir-var? lhs) (string->symbol (uir-symbol-name (uir-var-name lhs)))]
-    [(uir-symbol? lhs) (string->symbol (uir-symbol-name lhs))]
-    [else #f]))
-
 ;; Class name (symbol) tracked for a receiver expression `base`, or #f. `base`
 ;; is either a local variable (`qs`), a `self`/`cls` attribute (`self.cursor`),
 ;; or a bare class reference. Moved above `call-result-type` because
@@ -80,9 +71,9 @@
     [(uir-symbol? base)
      (hash-ref (receiver-types-locals env)
                (string->symbol (uir-symbol-name base)) #f)]
-    [(uir-get? base)
-     (define attr (get-field-symbol (uir-get-field base)))
-     (and attr (self-or-cls-var? (uir-get-base base) tokens)
+    [(member-access-callee? base)
+     (define attr (member-access-field base))
+     (and attr (self-or-cls-var? (member-access-base base) tokens)
           (hash-ref (receiver-types-self-attrs env) attr #f))]
     [else #f]))
 
@@ -213,6 +204,13 @@
   (cond
     [(uir-await? value) (value-class-of (uir-await-expr value) rt class-defs
                                         tokens import-env comp owner)]
+    ;; Optional chain (`x?.y`): the front ends lower it to a null guard whose
+    ;; absent branch is `void 0`. The value's type is the PRESENT branch's
+    ;; class — the absent branch only means "no value", so it carries no
+    ;; receiver class and must not defeat the projection. This is what makes
+    ;; `r = x?.y; r.m()` receiver-type dataflow work for `?.` chains.
+    [(and (uir-if? value) (optional-chain-present value))
+     => (λ (present) (value-class-of present rt class-defs tokens import-env comp owner))]
     ;; Conditional expression (`x if c else y`): sound only when every branch
     ;; projects to the SAME class; a mixed or unresolvable branch yields #f.
     [(uir-if? value)
@@ -234,6 +232,20 @@
                   [b (value-class-of (second args) rt class-defs
                                      tokens import-env comp owner)])
               (and a b (eq? a b) a))))]
+    ;; `new C(...)` constructs an instance of C: the receiver type is C when
+    ;; the class expression names a tracked class (corpus, stdlib value type, or
+    ;; imported class handle), so a fresh JS/TS object seeds the dataflow.
+    [(uir-new? value)
+     (bare-class-value (uir-new-class value) class-defs tokens import-env comp)]
+    ;; A JS/TS `this.attr` value is a dot-call member access, not a uir-get:
+    ;; read it through the same implicit-receiver attribute env as Python's
+    ;; `self.attr`, so both encodings project identically.
+    [(and (member-access-callee? value)
+          (let ([attr (member-access-field value)])
+            (and attr
+                 (self-or-cls-var? (member-access-base value) tokens)
+                 (hash-ref (receiver-types-self-attrs rt) attr #f))))
+     => (λ (cls) cls)]
     [(uir-call? value)
      (or (operator-result-type
           value
@@ -347,17 +359,13 @@
                                                     tokens import-env comp))
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
-  (define (process-set! n)
-    (define cls (value-class (uir-set!-value n)))
-    (when cls
-      (define lhs (uir-set!-name n))
-      (cond
-        [(and (uir-get? lhs) (get-field-symbol (uir-get-field lhs))
-              (self-or-cls-var? (uir-get-base lhs) tokens))
-         (hash-set! self-attrs (get-field-symbol (uir-get-field lhs)) cls)]
-        [(set!-lhs-symbol lhs)
-         => (λ (nm) (hash-set! locals nm cls))]
-        [else (void)])))
+  ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
+  ;; caller supplies the value projection, host implicit-receiver name test and
+  ;; env setters.
+  (apply-assignments! body value-class
+                      (λ (n) (tokens-self-name? tokens n))
+                      (λ (nm cls) (hash-set! locals nm cls))
+                      (λ (attr cls) (hash-set! self-attrs attr cls)))
   ;; `with ctx() as name:` binds the context manager's RESULT type: track the
   ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
   ;; later `executor.submit(...)` resolves instead of staying `unknown`.
@@ -374,11 +382,7 @@
         (when nm
           (define cls (value-class (first item)))
           (when cls (hash-set! locals nm cls))))))
-  (walk-body body (λ (n)
-                    (cond
-                      [(uir-set!? n) (process-set! n)]
-                      [(uir-with? n) (process-with! n)]
-                      [else (void)])))
+  (walk-body body (λ (n) (when (uir-with? n) (process-with! n))))
   (receiver-types locals self-attrs))
 
 ;; Overlay `overlay`'s entries onto `base` (overlay wins on a key collision).

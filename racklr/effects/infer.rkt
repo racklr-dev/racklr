@@ -80,6 +80,7 @@
 (define (compute-effect-rows fns methods class-names supers known
                              #:provenance-table [prov-box #f]
                              #:provenance-record [rec-box #f]
+                             #:fn-parents [fn-parents (hash)]
                              #:lexicon [lex default-lexicon]
                              #:source-file [source-file #f])
   (define tokens (lexicon-tokens lex))
@@ -98,7 +99,10 @@
     (define body (if (hash-has-key? fns n)
                      (hash-ref fns n)
                      (hash-ref methods n)))
-    (define owner (owner-of-name methods n))
+    ;; A nested function belongs to the class of the method it is defined in,
+    ;; so its implicit receiver (self/cls/this) dispatches through that class.
+    (define owner (or (owner-of-name methods n)
+                      (fn-owner-class n (λ (x) (hash-ref fn-parents x #f)))))
     (define effects '())
     (define callees '())
     ;; The stable positional discriminator of a site: the ordinal of the call
@@ -210,12 +214,14 @@
   (define methods (collect-methods program))
   (define class-names (collect-class-names program))
   (define supers (collect-supers program))
+  (define fn-parents (collect-fn-parents program))
   (define known (make-hash))
   (for ([(n _) (in-hash fns)]) (hash-set! known n #t))
   (for ([(n _) (in-hash methods)]) (hash-set! known n #t))
   (compute-effect-rows fns methods class-names supers known
                        #:provenance-table prov-box
                        #:provenance-record rec-box
+                       #:fn-parents fn-parents
                        #:lexicon lex
                        #:source-file source-file))
 

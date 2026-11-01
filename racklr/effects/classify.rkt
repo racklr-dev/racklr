@@ -29,29 +29,34 @@
 (define (method-callee-qualified-names c owner class-names supers
                                        [tokens default-effect-tokens])
   (cond
-    [(not (uir-get? c)) '()]
+    [(not (member-access-callee? c)) '()]
     [else
-     (let* ([mname (get-field-symbol (uir-get-field c))]
-            [base (uir-get-base c)])
+     (let* ([mname (member-access-field c)]
+            [base (member-access-base c)]
+            [base-name (bare-name-symbol base)])
        (cond
-         [(and mname (super-call? base))
+         [(and mname (or (super-call? base)
+                         ;; JS/TS `super.m()`: the `super` keyword lowers to a
+                         ;; bare symbol, unlike the Python `super()` invocation.
+                         (eq? base-name 'super)))
           ;; super().m() → the enclosing class's parents, most-derived first.
           (if owner
               (map (λ (cls) (qualified-name-symbol cls mname))
                    (cdr (mro-chain owner supers)))
               '())]
-         [(and mname (uir-var? base))
-          (let ([base-name (string->symbol (uir-symbol-name (uir-var-name base)))])
-            (cond
-              [(tokens-self-name? tokens base-name)
-               (if owner
-                   (map (λ (cls) (qualified-name-symbol cls mname))
-                        (mro-chain owner supers))
-                   '())]
-              [(hash-has-key? class-names base-name)
-               (map (λ (cls) (qualified-name-symbol cls mname))
-                    (mro-chain base-name supers))]
-              [else '()]))]
+         [(and mname base-name)
+          (cond
+            ;; The host's implicit receiver name (Python `self`/`cls`, JS
+            ;; `this`): dispatch through the enclosing class's MRO.
+            [(tokens-self-name? tokens base-name)
+             (if owner
+                 (map (λ (cls) (qualified-name-symbol cls mname))
+                      (mro-chain owner supers))
+                 '())]
+            [(hash-has-key? class-names base-name)
+             (map (λ (cls) (qualified-name-symbol cls mname))
+                  (mro-chain base-name supers))]
+            [else '()])]
          [else '()]))]))
 
 ;; Classify a call callee against the known function names:

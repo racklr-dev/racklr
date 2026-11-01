@@ -19,12 +19,22 @@
          racklr/effects/class-resolve
          racklr/effects/classify
          racklr/effects/receiver-type
+         racklr/effects/receiver-chain
          racklr/effects/receiver-resolve
          racklr/effects/effect-roots
          racklr/effects/library-tokens
          racklr/effects/lexicon)
 
 (provide classify-call-all method-cap receiver-shape)
+
+;; Is the call's receiver the enclosing instance (`self`/`cls`, or the host
+;; dialect's name such as JS `this`)? The name set is host lexicon data, not an
+;; engine table; such a receiver is the owner class, but its class->module->
+;; domain fallback is applied only at the `unknown` tail below, so a more
+;; precise rule (edge, stdlib table, parent) still wins.
+(define (self-receiver-callee? callee tokens)
+  (and (member-access-callee? callee)
+       (tokens-self-name? tokens (bare-name-symbol (member-access-base callee)))))
 
 (define (classify-call-all callee known methods class-defs fn-defs comp-supers
                            class-attrs comp owner [import-env #f] [rt #f]
@@ -51,12 +61,15 @@
      ;; heuristic below: `loader.get_migration_by_prefix(...)` is a METHOD on a
      ;; tracked MigrationLoader, not a construction of the (pure-bare-named)
      ;; `get_migration_by_prefix` class.
-     (define rcls (and rt (uir-get? callee)
-                        (receiver-chain-class rt (uir-get-base callee)
+     ;; The receiver is read through the member-access encoding the front end
+     ;; uses — Python uir-get or JS/TS dot call — so `obj.m()`, `this.m()` and
+     ;; the lowered `x?.m()` chain all enter the same dataflow.
+     (define rcls (and rt (member-access-callee? callee)
+                        (receiver-chain-class rt (member-access-base callee)
                                               comp class-defs class-attrs comp-supers
                                               owner return-types methods fn-defs known
                                               import-env tokens)))
-     (define mname (and (uir-get? callee) (get-field-symbol (uir-get-field callee))))
+     (define mname (and (member-access-callee? callee) (member-access-field callee)))
      ;; A call to a known class name is a constructor (pure instantiation), not
      ;; an effectful call — this also seeds the receiver-type dataflow without
      ;; polluting the enclosing function with `unknown`. A class imported from
@@ -81,10 +94,8 @@
        ;; `KnownClass(...)`.
        [(and rt (receiver-class-of rt callee tokens)) (cons 'pure #f)]
        [else
-        (define re (and rcls mname
-                        (or (module-receiver-effect rcls tokens)
-                            (module-path-marker-effect rcls mname import-env lex)
-                            (receiver-effect comp rcls mname class-defs import-env lex))))
+        (define re (and (not (self-receiver-callee? callee tokens))
+                        (receiver-domain-effect comp rcls mname class-defs import-env lex)))
         (cond
           [(eq? re 'pure) (cons 'pure #f)]
           [(effect-cap? re)
@@ -158,7 +169,23 @@
                                                k)))
                              (cond
                                [(and rkey (hash-has-key? known rkey)) (cons 'edge rkey)]
-                               [else nn])]
+                               [else
+                                ;; `self.m()` / `this.m()` that no edge, stdlib
+                                ;; table or parent rule resolved: the enclosing
+                                ;; class's home module still names the effect
+                                ;; domain (class -> module -> domain). Only a
+                                ;; concrete domain capability is used — a
+                                ;; pure-tagged module does not make an unknown
+                                ;; callable attribute pure, because the attribute
+                                ;; may hold user code.
+                                (define sde (and (self-receiver-callee? callee tokens)
+                                                 (receiver-domain-effect comp rcls mname
+                                                                         class-defs import-env lex)))
+                                (cond
+                                  [(effect-cap? sde)
+                                   (note-evidence! 'dataflow)
+                                   (cons 'effect sde)]
+                                  [else nn])])]
                             [else nn])])])])])])])])]))
 
 ;; Syntactic shape of a call's receiver, used by diagnostics to bucket `unknown`
@@ -177,25 +204,22 @@
 ;;   'other
 (define (receiver-shape callee [param-names #f] [tokens default-effect-tokens])
   (cond
-    [(not (uir-get? callee)) 'bare-call]
+    [(not (member-access-callee? callee)) 'bare-call]
     [else
-     (define base (uir-get-base callee))
+     (define base (member-access-base callee))
+     (define base-name (bare-name-symbol base))
      (cond
-       [(and (uir-var? base)
-             (tokens-self-name? tokens
-                                (string->symbol (uir-symbol-name (uir-var-name base)))))
-        'self-method]
+       [(tokens-self-name? tokens base-name) 'self-method]
        [(uir-call? base) 'call-result]
-       [(uir-get? base)
+       [(member-access-callee? base)
         (define root (dotted-root base))
         (if (and root (tokens-self-name? tokens root)) 'self-attr 'chained)]
-       [(uir-var? base)
-        (define vname (string->symbol (uir-symbol-name (uir-var-name base))))
+       [(uir-symbol? base) 'symbol]
+       [base-name
         (cond
-          [(and param-names (memq vname param-names)) 'param]
+          [(and param-names (memq base-name param-names)) 'param]
           [param-names 'local]
           [else 'var])]
-       [(uir-symbol? base) 'symbol]
        [else 'other])]))
 
 ;; The derived capability for a call-graph method key `(component . Class.method)`,
