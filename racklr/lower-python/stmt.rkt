@@ -719,20 +719,34 @@
 
 (define (lower-parameters cst tk-type tk-value)
   ;; parameters: '(' typedargslist? ')'
-  ;; Each parameter is a tfpdef node; its default value is a sibling
-  ;; (group ASSIGN test) that FOLLOWS the tfpdef in a pre-order walk. Attach
-  ;; a default group to the most recently collected parameter.
-  (define result '())
+  ;;
+  ;; Parameters are `tfpdef` nodes; a default value is a sibling
+  ;; (group ASSIGN test) that FOLLOWS its parameter. A standalone `*` token
+  ;; opens Python's keyword-only region: when a tfpdef follows the `*`
+  ;; directly it is the var-positional `*args` parameter, otherwise every
+  ;; following parameter is keyword-only. `**` marks the var-keyword
+  ;; `**kwargs` parameter. The markers are tracked in source order and the
+  ;; binding kind is recorded on the lowered uir-typed-param; a default group
+  ;; keeps the kind of the parameter it belongs to.
+  (define result '())          ;; reversed (listof uir-typed-param)
+  (define marker 'positional)  ;; positional | kw-only | star | double-star
   (define (attach-default! d)
     (when (pair? result)
+      (define p (car result))
       (set! result
-            (cons (uir-typed-param (uir-typed-param-name (car result))
-                                   (uir-typed-param-type (car result))
+            (cons (uir-typed-param (uir-typed-param-name p)
+                                   (uir-typed-param-type p)
                                    d
-                                   #f)
+                                   (uir-typed-param-kind p))
                   (cdr result)))))
   (define (default-test node)
     ;; node is a (group ASSIGN test) default: return the lowered test or #f.
+    ;; AUTHORITATIVE default extraction for `def` parameters: in the tracked
+    ;; grammar a default is a sibling of its `tfpdef` inside typedargslist, so
+    ;; it reaches this walker. lower-tfpdef's own `default-expr` /
+    ;; `default-from-list` fields are a fallback for alternate parse shapes and
+    ;; stay #f here; keep the two in sync if the grammar's default placement
+    ;; changes.
     (and (cst-node? node)
          (eq? (any-tree-tag node) 'group)
          (let ([gk (node-children node)])
@@ -742,17 +756,42 @@
                        (with-handlers ([exn:fail? (lambda (_) #f)])
                          (eq? (tk-type rc) 'ASSIGN))))
                 (lower-expr (first gk) tk-type tk-value)))))
+  (define (add-parameter! p)
+    ;; The kind is set by the marker that preceded this parameter: `*` makes
+    ;; exactly the next parameter var-positional, `**` makes it var-keyword,
+    ;; anything else inside a star region is keyword-only.
+    (define kind
+      (case marker
+        [(star) 'var-positional]
+        [(double-star) 'var-keyword]
+        [(kw-only) 'kw-only]
+        [else #f]))
+    (set! result (cons (uir-typed-param (uir-typed-param-name p)
+                                        (uir-typed-param-type p)
+                                        (uir-typed-param-default p)
+                                        kind)
+                       result))
+    (when (eq? marker 'star) (set! marker 'kw-only))
+    (when (eq? marker 'double-star) (set! marker 'after-var-keyword)))
   (let walk ([node cst])
     (cond
       [(cst-node? node)
        (cond
          [(eq? (any-tree-tag node) 'tfpdef)
-          (set! result (cons (lower-tfpdef node tk-type tk-value) result))]
+          (add-parameter! (lower-tfpdef node tk-type tk-value))]
          [else
           (define d (default-test node))
           (if d
               (attach-default! d)
               (for ([c (any-tree-children node)]) (walk c)))])]
+      [(token-like? node tk-type)
+       (case (tk-type node)
+         [(STAR) (set! marker 'star)]
+         [(POWER) (set! marker 'double-star)]
+         ;; A comma directly after `*` means the star was a bare keyword-only
+         ;; separator, not the prefix of a var-positional parameter.
+         [(COMMA) (when (eq? marker 'star) (set! marker 'kw-only))]
+         [else (void)])]
       [(and (list? node) (pair? node)) (for-each walk node)]
       [else (void)]))
   (reverse result))
@@ -784,7 +823,11 @@
                          (with-handlers ([exn:fail? (lambda (_) #f)])
                            (eq? (tk-type rc) 'COLON))))
                   (lower-expr (first gk) tk-type tk-value))))))
-  ;; Find default: group containing ASSIGN + test
+  ;; Find default: group containing ASSIGN + test.
+  ;; Fallback only: for `def` parameters the authoritative extraction is
+  ;; lower-parameters' `default-test` (the default is a typedargslist sibling,
+  ;; not a tfpdef child); this code covers alternate parse shapes and is
+  ;; otherwise unused. Keep the two paths in sync.
   (define default-expr
     (for/or ([c raw-kids])
       (and (cst-node? c) (eq? (any-tree-tag c) 'group)

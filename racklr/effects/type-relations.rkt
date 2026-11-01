@@ -92,7 +92,7 @@
        (uir-typed-param (uir-typed-param-name p)
                         (uir-symbol (symbol->string cls))
                         (uir-typed-param-default p)
-                        #f)]
+                        (uir-typed-param-kind p))]
       [else p])))
 
 ;; Self-attribute assignments collected across every class: class-level field

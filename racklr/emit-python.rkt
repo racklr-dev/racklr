@@ -353,22 +353,50 @@
        (= (length (uir-call-args n)) 1)
        (uir-fn? (first (uir-call-args n)))))
 
+;; Render one parameter of a Python `def` signature. The `*` / `**` prefix
+;; comes from the parameter kind: `var-positional` is `*args`,
+;; `var-keyword` is `**kwargs`. Keyword-only parameters carry no prefix of
+;; their own — emit-param-list inserts the bare `*` separator before them.
+(define (emit-param p)
+  (cond
+    [(uir-symbol? p) (uir-symbol-name p)]
+    [(uir-typed-param? p)
+     (define pn (uir-symbol-name (uir-typed-param-name p)))
+     (define pt (uir-typed-param-type p))
+     (define pd (uir-typed-param-default p))
+     (define pt-str (if pt (string-append ": " (emit-expr pt)) ""))
+     (define pd-str (if pd (string-append " = " (emit-expr pd)) ""))
+     (case (uir-typed-param-kind p)
+       [(var-positional) (string-append "*" pn pt-str)]
+       [(var-keyword) (string-append "**" pn pt-str)]
+       [else (string-append pn pt-str pd-str)])]
+    [else (emit-expr p)]))
+
+;; Render a full Python parameter list (without the surrounding parentheses).
+;; A bare `*` separator is emitted before the first keyword-only parameter
+;; unless a var-positional parameter already opened the keyword-only region;
+;; a `def f(**kw)` list needs no separator.
+(define (emit-param-list params)
+  (define pieces '())
+  (define star-open? #f)
+  (for ([p (in-list params)])
+    (cond
+      [(and (uir-typed-param? p) (eq? (uir-typed-param-kind p) 'kw-only))
+       (unless star-open?
+         (set! pieces (cons "*" pieces))
+         (set! star-open? #t))
+       (set! pieces (cons (emit-param p) pieces))]
+      [(and (uir-typed-param? p) (eq? (uir-typed-param-kind p) 'var-positional))
+       (set! pieces (cons (emit-param p) pieces))
+       (set! star-open? #t)]
+      [else (set! pieces (cons (emit-param p) pieces))]))
+  (string-join (reverse pieces) ", "))
+
 (define (emit-funcdef uir indent [async? #f])
   (define spc (make-string (* indent 4) #\space))
   (define name (uir-fn-name uir))
   (define name-str (if name (uir-symbol-name name) "???"))
-  (define params-str
-    (string-join (map (λ (p) (cond [(uir-symbol? p) (uir-symbol-name p)]
-                                    [(uir-typed-param? p)
-                                     (let* ([pn (uir-symbol-name (uir-typed-param-name p))]
-                                            [pt (uir-typed-param-type p)]
-                                            [pd (uir-typed-param-default p)]
-                                            [pt-str (if pt (string-append ": " (emit-expr pt)) "")]
-                                            [pd-str (if pd (string-append " = " (emit-expr pd)) "")])
-                                       (string-append pn pt-str pd-str))]
-                                    [else (emit-expr p)]))
-                      (uir-fn-params uir))
-                 ", "))
+  (define params-str (emit-param-list (uir-fn-params uir)))
   (define return-str
     (let ([rt (uir-fn-return-type uir)])
       (if rt (string-append " -> " (emit-expr rt)) "")))
@@ -413,18 +441,7 @@
   (define self-param (car (uir-method-params uir)))
   (define rest-params (cdr (uir-method-params uir)))
   ;; Don't emit self as a separate param — it's always implicit
-  (define params-str
-    (string-join (map (λ (p) (cond [(uir-symbol? p) (uir-symbol-name p)]
-                                    [(uir-typed-param? p)
-                                     (let* ([pn (uir-symbol-name (uir-typed-param-name p))]
-                                            [pt (uir-typed-param-type p)]
-                                            [pd (uir-typed-param-default p)]
-                                            [pt-str (if pt (string-append ": " (emit-expr pt)) "")]
-                                            [pd-str (if pd (string-append " = " (emit-expr pd)) "")])
-                                       (string-append pn pt-str pd-str))]
-                                    [else (emit-expr p)]))
-                      rest-params)
-                 ", "))
+  (define params-str (emit-param-list rest-params))
   (string-append
    spc (if async? "async def " "def ") name "(self"
    (if (string=? params-str "") "" (string-append ", " params-str)) "):\n"

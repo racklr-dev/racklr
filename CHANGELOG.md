@@ -205,7 +205,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiles) with real `python3` execution.
 - `docs/self-emit.md` documents the self-emit design, the P6.1 seam and the
   honest loss model (Python is the runnable target today).
-
+- Python `def` parameter lists now populate the `typed-param` kind slot with
+  the calling convention the source spells: keyword-only parameters after a
+  bare `*` (`kw-only`), `*args` (`var-positional`) and `**kwargs`
+  (`var-keyword`). `lower-parameters` tracks the markers so a default stays on
+  its own parameter, and `emit-python` renders the markers back for functions
+  and methods.
+- `racklr-test/lower-python-params-test.rkt` covering lowering, emit
+  round-trips, class methods, composition with `/`, and serialization of the
+  star markers.
 
 ### Changed
 
@@ -340,6 +348,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comma operator, `a[0, 1]`) and optional chaining after a folded subscript
   (`a[0]?.b`) still lower to `uir-null` because the reconstruction cannot
   rebuild those parser shapes without fabricating tokens.
+- Python `def` parameter lists no longer drop the bare `*` keyword-only
+  separator or the `*`/`**` prefixes of rest-arity parameters. Previously
+  `def f(a, *, b=None)` lowered and re-emitted as `def f(a, b = None)`, which
+  silently accepts a second positional argument; the emitted signature now
+  keeps the source calling convention.
 
 ## [0.1.0rc1] - 2026-06-23
 
