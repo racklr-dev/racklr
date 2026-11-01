@@ -184,6 +184,9 @@
    (set "read" "readFile" "readFileSync" "readdir" "readdirSync")
    (set "write" "writeFile" "writeFileSync" "appendFile" "appendFileSync")
    (set "close" "flush" "seek" "tell")
+   ;; other-domain operation vocabulary: the JS host types only io/network
+   ;; roots by name for now, so it supplies no method→op tables
+   (hash)
    ;; builtin receiver method tables
    (hash
     "Array" (set "push" "pop" "shift" "unshift" "slice" "splice" "concat"

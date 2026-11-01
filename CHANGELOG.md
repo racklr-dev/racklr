@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Non-Django Python effect generalization: the Python lexicon now carries the
+  non-Django web-framework surface as DATA, and the import graph canonicalizes
+  modules by their package chain rather than by the scan root.
+  - `racklr/effects/imports/resolve.rkt` derives a scanned file's dotted module
+    name from its `__init__.py` package chain, so a repository checkout whose
+    package lives under `src/` (`…/flask/src/flask/app.py`) lowers as
+    `flask.app` and the corpus's own imports resolve. A scan root that is itself
+    a package directory keeps the historical dotted name, so the pinned Django
+    type-graph baseline is unchanged (verified: same sha256, same counters).
+  - `racklr/effects/imports/library-config.rkt` adds the Flask, Requests,
+    Werkzeug, Click, Jinja2, `itsdangerous`, `blinker`, `markupsafe`,
+    `urllib3`, `charset_normalizer`, `idna`, `certifi` and `dotenv` import-tag
+    rules with a documented fail-closed split (network/io/pure per module, plus
+    public re-export member rules for `from flask import …` / `from requests
+    import …`), and pure rules for the generic Python helpers they import
+    (`typing`, `functools`, `platform`, `urllib.parse`). `requests.models`
+    stays untagged on purpose: the receiver-TYPE table types `Response` body
+    parsing (pure) vs stream consumption (io) precisely.
+  - The lexicon gains a per-domain operation vocabulary
+    (`lexicon-domain-op-vocabulary`, supplied by the host lexicon), and
+    `method-ops` derives typed operations for more than db/io from it. The
+    Python lexicon supplies network read/write/neutral verbs, so receiver-type
+    dataflow now yields `network<Session>.read` / `network<Flask>.wsgi_app`
+    instead of the coarse `ops=()`. The JavaScript lexicon supplies an empty
+    table, proving the injection seam is host data, not a Python special case.
+  - `racklr-test/effects-non-django-python-test.rkt` gates the package-chain
+    module paths (src-layout checkout, package-root scan, docs/script fallback),
+    the framework/pure rules, the injected network vocabulary, typed ops through
+    receiver-type dataflow for `requests.Session` and `flask.Flask`, and a
+    whole-pipeline run of real source using both frameworks.
 - Inference-side modality, budget and grounded scope for effect rows (issue
   #111): a body's row is now composed through the effect algebra instead of a
   flat union. A direct classified effect is a `must` obligation at its call

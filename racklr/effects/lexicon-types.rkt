@@ -35,6 +35,7 @@
  lexicon-name lexicon-tokens lexicon-import-config
  lexicon-db-read-methods lexicon-db-write-methods
  lexicon-io-read-verbs lexicon-io-write-verbs lexicon-io-other-verbs
+ lexicon-domain-op-vocabulary
  lexicon-builtin-class-methods)
 
 ;; Naming/encoding conventions of a host language. Sets are sets of strings
@@ -78,6 +79,12 @@
    io-read-verbs         ; set: method-name verbs that read a stream
    io-write-verbs        ; set: method-name verbs that write a stream
    io-other-verbs        ; set: method-name verbs that manage a stream
+   ;; The other effect domains' primitive-operation vocabulary, so a host (or a
+   ;; library family within a host) types more than db/io. A hash from domain
+   ;; symbol to a hash from method-name string to the typed-op operation
+   ;; segment: `network<Session>.read` ← 'network + "get" → "read". A domain
+   ;; absent from this table keeps the coarse `ops=()` capability.
+   domain-op-vocabulary  ; hash: domain -> (hash method-name -> op-name)
    builtin-class-methods) ; hash: class-name -> set of pure method names
   #:transparent)
 

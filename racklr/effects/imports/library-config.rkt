@@ -7,11 +7,13 @@
 ;; so the racklr core carries no library-specific tokens. Add a library by
 ;; adding rules here — no code changes.
 
-(require racklr/effects/imports/effect-tag-types)
+(require racket/hash
+         racket/set
+         racklr/effects/imports/effect-tag-types)
 
 (provide effect-tag-config
          db-read-methods db-write-methods io-read-verbs io-write-verbs
-         io-other-verbs builtin-class-methods)
+         io-other-verbs domain-op-vocabulary builtin-class-methods)
 
 ;; Default configuration. Extend by adding a library here — no code changes.
 (define effect-tag-config
@@ -142,7 +144,173 @@
    ;; asyncio.TaskGroup construction is in-memory; the module is otherwise mixed.
    (effect-library "asyncio" (list (effect-rule "asyncio.TaskGroup" 'pure)))
    ;; isort.code sorts imports in a string (pure); isort.file writes files.
-   (effect-library "isort" (list (effect-rule "isort.code" 'pure)))))
+   (effect-library "isort" (list (effect-rule "isort.code" 'pure)))
+   ;; ── non-Django Python: web frameworks and their dependency surface ──
+   ;;
+   ;; The typed contract is Python-general, not Django-specific, so the lexicon
+   ;; carries the non-Django frameworks effect inference is measured against.
+   ;; Rules are most-specific-first. A module that mixes in-memory work with
+   ;; real I/O is tagged with the effect (fail-closed: a spurious effect is
+   ;; preferred to a hidden one), and its pure members get an explicit
+   ;; most-specific rule first. Module names are only ever here, never in the
+   ;; classifier.
+   ;;
+   ;; Flask: the application object and test client run the request/response
+   ;; lifecycle; helper/templating/console modules touch files and streams;
+   ;; registration, configuration, contexts, sessions and signals are in-memory.
+   (effect-library "flask"
+     (list (effect-rule "flask.app" 'network)
+           (effect-rule "flask.testing" 'network)
+           (effect-rule "flask.helpers" 'io)
+           (effect-rule "flask.templating" 'io)
+           (effect-rule "flask.cli" 'io)
+           (effect-rule "flask.logging" 'io)
+           (effect-rule "flask.debughelpers" 'io)
+           (effect-rule "flask.wrappers" 'io)
+           (effect-rule "flask.sansio" 'pure)
+           (effect-rule "flask.blueprints" 'pure)
+           (effect-rule "flask.config" 'pure)
+           (effect-rule "flask.ctx" 'pure)
+           (effect-rule "flask.globals" 'pure)
+           (effect-rule "flask.json" 'pure)
+           (effect-rule "flask.sessions" 'pure)
+           (effect-rule "flask.signals" 'pure)
+           (effect-rule "flask.views" 'pure)
+           (effect-rule "flask.typing" 'pure)
+           ;; The public re-export surface (`from flask import X`): a package
+           ;; attribute is one import away from an unscanned module, so the
+           ;; member rules carry the same domains as the submodule rules above.
+           ;; `flask.Flask` is the request/response lifecycle object.
+           (effect-rule "flask.Flask" 'network)
+           (effect-rule "flask.Request" 'io)
+           (effect-rule "flask.Response" 'io)
+           (effect-rule "flask.send_file" 'io)
+           (effect-rule "flask.send_from_directory" 'io)
+           (effect-rule "flask.render_template" 'io)
+           (effect-rule "flask.render_template_string" 'pure)
+           (effect-rule "flask.url_for" 'pure)
+           (effect-rule "flask.redirect" 'pure)
+           (effect-rule "flask.abort" 'pure)
+           (effect-rule "flask.jsonify" 'pure)
+           (effect-rule "flask.make_response" 'pure)
+           (effect-rule "flask.stream_with_context" 'pure)
+           (effect-rule "flask.flash" 'pure)
+           (effect-rule "flask.get_flashed_messages" 'pure)
+           (effect-rule "flask.has_request_context" 'pure)
+           (effect-rule "flask.has_app_context" 'pure)
+           (effect-rule "flask.after_this_request" 'pure)
+           (effect-rule "flask.copy_current_request_context" 'pure)
+           (effect-rule "flask.Blueprint" 'pure)
+           (effect-rule "flask.Config" 'pure)
+           (effect-rule "flask.Session" 'pure)
+           (effect-rule "flask.BlueprintSetupState" 'pure)
+           (effect-rule "flask.FlaskGroup" 'io)))
+   ;; Werkzeug (Flask's HTTP/WSGI toolkit): server and test client are network,
+   ;; stream/middleware/reloader plumbing is io, the data/routing/parsing
+   ;; surface is in-memory.
+   (effect-library "werkzeug"
+     (list (effect-rule "werkzeug.serving" 'network)
+           (effect-rule "werkzeug.test" 'network)
+           (effect-rule "werkzeug.wsgi" 'io)
+           (effect-rule "werkzeug.middleware" 'io)
+           (effect-rule "werkzeug.formparser" 'io)
+           (effect-rule "werkzeug.debug" 'io)
+           (effect-rule "werkzeug._reloader" 'io)
+           (effect-rule "werkzeug" 'pure)))
+   ;; Click (Flask's CLI toolkit): terminal output/prompting and command
+   ;; invocation are effects; decorators, parameter types and parsing are
+   ;; in-memory value construction.
+   (effect-library "click"
+     (list (effect-rule "click.echo" 'io)
+           (effect-rule "click.secho" 'io)
+           (effect-rule "click.prompt" 'io)
+           (effect-rule "click.confirm" 'io)
+           (effect-rule "click.pause" 'io)
+           (effect-rule "click.edit" 'io)
+           (effect-rule "click.getchar" 'io)
+           (effect-rule "click.get_binary_stream" 'io)
+           (effect-rule "click.get_text_stream" 'io)
+           (effect-rule "click.open_file" 'io)
+           (effect-rule "click.launch" 'process)
+           (effect-rule "click.termui" 'io)
+           (effect-rule "click.utils" 'io)
+           (effect-rule "click._termui_impl" 'io)
+           (effect-rule "click.testing" 'io)
+           (effect-rule "click.core" 'io)
+           (effect-rule "click.shell_completion" 'io)
+           (effect-rule "click.decorators" 'pure)
+           (effect-rule "click.exceptions" 'pure)
+           (effect-rule "click.formatting" 'pure)
+           (effect-rule "click.parser" 'pure)
+           (effect-rule "click.types" 'pure)
+           (effect-rule "click" 'pure)))
+   ;; Jinja2 (Flask's template engine): template LOADING hits the filesystem;
+   ;; rendering compiled templates is in-memory.
+   (effect-library "jinja2"
+     (list (effect-rule "jinja2.Environment.get_template" 'io)
+           (effect-rule "jinja2.Environment.select_template" 'io)
+           (effect-rule "jinja2.Environment.get_or_select_template" 'io)
+           (effect-rule "jinja2.environment.Environment.get_template" 'io)
+           (effect-rule "jinja2.environment.Environment.select_template" 'io)
+           (effect-rule "jinja2.loaders" 'io)
+           (effect-rule "jinja2" 'pure)))
+   ;; Flask's remaining dependency surface: signing, events, string markup,
+   ;; and .env loading.
+   (effect-library "itsdangerous" (list (effect-rule "itsdangerous" 'pure)))
+   (effect-library "blinker" (list (effect-rule "blinker" 'pure)))
+   (effect-library "markupsafe" (list (effect-rule "markupsafe" 'pure)))
+   (effect-library "dotenv" (list (effect-rule "dotenv" 'io)))
+   ;; Requests: sessions/adapters/the top-level API send and receive HTTP;
+   ;; cookies, structures, hooks, auth preparation and compatibility shims are
+   ;; in-memory. `requests.models` is deliberately UNTAGGED: its data objects
+   ;; mix pure body parsing (`Response.json`) with stream consumption
+   ;; (`Response.iter_content`), which the receiver-TYPE table types precisely.
+   (effect-library "requests"
+     (list (effect-rule "requests.sessions" 'network)
+           (effect-rule "requests.adapters" 'network)
+           (effect-rule "requests.api" 'network)
+           (effect-rule "requests.utils" 'io)
+           (effect-rule "requests.cookies" 'pure)
+           (effect-rule "requests.structures" 'pure)
+           (effect-rule "requests.hooks" 'pure)
+           (effect-rule "requests.exceptions" 'pure)
+           (effect-rule "requests.status_codes" 'pure)
+           (effect-rule "requests.compat" 'pure)
+           (effect-rule "requests._internal_utils" 'pure)
+           (effect-rule "requests._types" 'pure)
+           (effect-rule "requests.auth" 'pure)
+           (effect-rule "requests.certs" 'pure)
+           ;; The public re-export surface (`from requests import Session`).
+           ;; Sessions are the HTTP client; Request/PreparedRequest are
+           ;; in-memory data objects.
+           (effect-rule "requests.Session" 'network)
+           (effect-rule "requests.Request" 'pure)
+           (effect-rule "requests.PreparedRequest" 'pure)
+           (effect-rule "requests.packages" 'pure)
+           (effect-rule "requests.help" 'pure)))
+   ;; urllib3 (Requests' transport): pools/connections/responses are network;
+   ;; its configuration/value utilities are in-memory.
+   (effect-library "urllib3"
+     (list (effect-rule "urllib3.connectionpool" 'network)
+           (effect-rule "urllib3.connection" 'network)
+           (effect-rule "urllib3.poolmanager" 'network)
+           (effect-rule "urllib3.response" 'network)
+           (effect-rule "urllib3.util" 'pure)
+           (effect-rule "urllib3" 'network)))
+   ;; Requests' encoding/identity dependencies: pure in-memory transforms.
+   (effect-library "charset_normalizer" (list (effect-rule "charset_normalizer" 'pure)))
+   (effect-library "idna" (list (effect-rule "idna" 'pure)))
+   (effect-library "certifi" (list (effect-rule "certifi" 'pure)))
+   ;; ── generic Python helpers the frameworks import ──
+   ;; These stdlib modules are pure in-memory value transforms; their function
+   ;; handles are otherwise unresolved when imported from an unscanned module
+   ;; (`from typing import cast`, `from urllib.parse import urlparse`).
+   (effect-library "typing" (list (effect-rule "typing" 'pure)))
+   (effect-library "functools" (list (effect-rule "functools" 'pure)))
+   (effect-library "platform" (list (effect-rule "platform" 'pure)))
+   (effect-library "urllib"
+     (list (effect-rule "urllib.parse" 'pure)
+           (effect-rule "urllib.request" 'network)))))
 
 ;; ── primitive-operation vocabulary (per domain) ─────────────────────
 ;; The db/io verb tables and the builtin-receiver seed environment. This is
@@ -187,3 +355,33 @@
         "str"   (set "join" "format" "format_map" "split" "rsplit" "strip"
                      "lstrip" "rstrip" "lower" "upper" "replace" "startswith"
                      "endswith" "find" "index" "count")))
+
+;; ── the remaining domains' primitive-operation vocabulary ───────────
+;; The db/io tables above are per-domain verb sets because their typed ops are
+;; the two Django/standard-stream families the corpus was built on. Other
+;; domains are typed by the same mechanism, with the vocabulary as DATA here:
+;; `network.get` → network<Session>.read, `network.post` →
+;; network<Session>.write, and a neutral verb keeps its own name
+;; (`network.request` → network<Session>.request). A domain absent from this
+;; hash keeps the coarse `ops=()` capability (the domain is known, the
+;; operation is not).
+(define network-read-verbs
+  (set "get" "head" "options" "read" "recv" "recvfrom"))
+(define network-write-verbs
+  (set "post" "put" "patch" "delete" "send" "sendall" "write" "writelines"))
+(define network-other-verbs
+  (set "request" "open" "close" "connect" "disconnect" "stream"
+       "run" "test_client" "dispatch_request" "wsgi_app"))
+
+;; Domain → (method name → operation segment) for the domains whose vocabulary
+;; lives here. The db/io sets keep their dedicated fields for backward
+;; compatibility (their public bindings are part of the lexicon contract).
+(define (verbs->typed-ops read-verbs write-verbs other-verbs)
+  (hash-union (for/hash ([v (in-set read-verbs)]) (values v "read"))
+              (for/hash ([v (in-set write-verbs)]) (values v "write"))
+              (for/hash ([v (in-set other-verbs)]) (values v v))
+              #:combine (λ (a b) a)))
+
+(define domain-op-vocabulary
+  (hash 'network (verbs->typed-ops network-read-verbs network-write-verbs
+                                   network-other-verbs)))

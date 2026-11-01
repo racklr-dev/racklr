@@ -43,9 +43,12 @@ Options:
 - `--sites` — print per-site lines
 - `--tsv PATH` — write the deterministic per-site TSV
 
-The tool derives each corpus root's dotted package name by walking the
-`__init__.py` chain (`django/django` -> `django`), so module paths match the
-import sources in the scanned files.
+A module's dotted name comes from its PACKAGE CHAIN, not from the scan root:
+`path->module-path` walks the `__init__.py` chain up from each file, so a
+repository checkout whose package lives under `src/` (`…/flask/src/flask/app.py`)
+resolves as `flask.app` and the corpus's own imports resolve, while a scan root
+that is itself a package directory (`django/django/core`) keeps the historical
+dotted name (`django.core…`) and the pinned Django baseline is unchanged.
 
 ## The lever taxonomy
 
@@ -164,6 +167,48 @@ network 9/6, inherits 126, fn-effect-row 979.
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change
 that moves the number.
+
+## Non-Django Python (Flask + Requests)
+
+The same instrument/contract is measured against real non-Django frameworks:
+shallow checkouts of `pallets/flask` and `psf/requests` scanned as
+`racket effervesce/tools/type-graph.rkt flask requests` (the invocation used in
+issue #109; 120 files including the frameworks' own tests, examples and docs).
+The corpus is external and not vendored, so these numbers are a spot-check of
+the generalization, not a pinned gate; the pinned Django baseline remains the
+regression gate.
+
+Before the non-Django Python lexicon data and the package-chain module paths
+(racklr `0a26a01`): 120 parsed / 0 failed, 1890 named functions, 1183 effectful,
+998 unknown functions in 83 files, `entries with typed ops: 0 / 1936`.
+
+After:
+
+- 120 parsed / 0 failed, 1890 named functions, 1119 effectful,
+  781 unknown functions in 76 files,
+  `entries with typed ops: 52 / 1832` — e.g.
+  `network<Session>.read` (`Session.get`), `network<Session>.request`,
+  `network<Flask>.run`, `network<FlaskClient>.test_client`.
+- The real-context census over the frameworks' own source only
+  (`flask/src/flask` + `requests/src/requests`, 43 files) moves the same way:
+  unknown call sites 385 → 215, unknown functions 284 → 197, and the
+  `bare-call-lexicon` lever 121 → 45 sites, `unbound-binding-resolution`
+  91 → 42.
+- The residual unknowns are still the receiver-dataflow levers above
+  (`return-type-projection` 40 sites, `multi-level-chain` 30,
+  `attribute-alias-typing` 17, `parameter-dataflow` 13, …); the framework
+  lexicon removes the `bare-call-lexicon` / `import-handle-lexicon` share of
+  them, it does not eliminate the dataflow work.
+
+The shared Django baseline is unaffected by the framework data: `racket
+tools/baseline-check.rkt` printed
+`baseline COVERAGE-FAILED sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2`
+— graph matches the pin, 231 unknown functions / 64 unknown files — on both the
+base commit and this branch, and `effects-non-django-python-test.rkt` pins the
+112-file Django module-name projection digest plus the historical derivation as
+an oracle. A later, independent re-pin on `main`
+(`sha256:78cc470af372edd7d04664cc05b4419c7be01fbba9788e99a02453d3175ba79e`,
+merged into the branch by the operator) keeps the same 231 / 64 counters.
 
 ## Determinism
 
