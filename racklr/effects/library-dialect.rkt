@@ -73,4 +73,9 @@
    1
    "__init__"
    "kwarg"
-   "__withEffects"))
+   "__withEffects"
+   ;; A literal VALUE's receiver type (the builtin type table keys): a string /
+   ;; f-string literal is a `str`, a list literal a `list`, a dict literal a
+   ;; `dict`. Receiver typing then resolves `xs = []; xs.append(v)` through the
+   ;; builtin type table instead of leaving it `unknown`.
+   (hash 'uir-string "str" 'uir-fstring "str" 'uir-list "list" 'uir-record "dict")))

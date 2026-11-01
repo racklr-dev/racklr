@@ -1869,6 +1869,238 @@
                                   #:import-env env))
   (check-equal? (modality (hash-ref rows (cons "python.py" 'Serializer.start)) 'db) 'may))
 
+;; ── type-projection chains (P0.3) ───────────────────────────────────
+;; Unknown sites whose receiver is a stdlib/framework object need the object's
+;; TYPE projected from the concrete call chain: a module-qualified class
+;; reference (`smtplib.SMTP()`), an imported module function's result
+;; (`re.match(...)`), a value-returning method (`Path(...) / f` →
+;; `.with_suffix(...)`), a `with ... as` binding, a parameter's default value,
+;; and a parameter bound by several same-domain module markers (the memcache
+;; backends). Each resolves through receiver-type dataflow + the imported-type
+;; tables instead of staying `unknown`.
+
+(define (test-projection-module-class-ctor)
+  ;; `conn = smtplib.SMTP(); conn.starttls()`: the module-qualified class
+  ;; reference types conn as SMTP; its method table classifies network.
+  (define app
+    (prog (fn "open"
+              (uir-block
+               (list (uir-set! (v "conn") (uir-call (dot (v "smtplib") "SMTP") '()))
+                     (uir-call (dot (v "conn") "starttls") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "smtplib" (handle 'module "smtplib" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'open)))
+  (check-equal? (row-names r) '(network))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-module-function-result)
+  ;; `m = re.match(...)` then `m.groups()`: the module function's RESULT type
+  ;; (Match) flows through the receiver env; groups is pure.
+  (define app
+    (prog (fn "ver"
+              (uir-block
+               (list (uir-set! (v "m") (uir-call (dot (v "re") "match")
+                                                 (list (uir-string "x"))))
+                     (uir-call (dot (v "m") "groups") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "re" (handle 'module "re" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'ver)))
+  (check-equal? (row-names r) '())
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-submodule-binding)
+  ;; `from email import generator` synthesizes an fn handle (path "email", name
+  ;; "generator"); its effective module path is "email.generator", so
+  ;; `generator.Generator()` types g and `g.flatten(...)` classifies io.
+  (define app
+    (prog (fn "render"
+              (uir-block
+               (list (uir-set! (v "g") (uir-call (dot (v "generator") "Generator") '()))
+                     (uir-call (dot (v "g") "flatten") (list (v "msg"))))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "generator" (handle 'fn "email" "generator")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'render)))
+  (check-equal? (row-names r) '(io))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-method-result-path)
+  ;; `p = Path(...) / "f"` keeps the Path type through the binary operator, and
+  ;; `m = p.with_suffix(".mo")` keeps it through the value-returning method;
+  ;; `m.stat()` is then io, not unknown.
+  (define app
+    (prog (fn "pair"
+              (uir-block
+               (list (uir-set! (v "p")
+                               (uir-call (sym "/")
+                                         (list (uir-call (v "Path") '())
+                                               (uir-string "f"))))
+                     (uir-set! (v "m") (uir-call (dot (v "p") "with_suffix")
+                                                 (list (uir-string ".mo"))))
+                     (uir-call (dot (v "m") "stat") '()))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'pair)))
+  (check-equal? (row-names r) '(io))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-with-as-binding)
+  ;; `with concurrent.futures.ThreadPoolExecutor() as executor:` binds the
+  ;; context manager's result type; `executor.submit(...)` is pure scheduling.
+  (define ex (dot (dot (v "concurrent") "futures") "ThreadPoolExecutor"))
+  (define app
+    (prog (fn "run"
+              (uir-with (list (list (uir-call ex '()) (v "executor")))
+                        (uir-call (dot (v "executor") "submit") (list (v "f")))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "concurrent" (handle 'module "concurrent" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '())
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-param-default-receiver)
+  ;; `def run(server_cls=WSGIServer): s = server_cls(); s.process_request_thread()`:
+  ;; the parameter's DEFAULT VALUE types the receiver, so the call resolves to
+  ;; the stdlib receiver-type table (pure) instead of `unknown`.
+  (define server (prog (py-class "WSGIServer" '())))
+  (define app
+    (prog (fn "run"
+              (uir-block
+               (list (uir-set! (v "s") (uir-call (v "server_cls") '()))
+                     (uir-call (dot (v "s") "process_request_thread") '())))
+              #:params (list (uir-typed-param (sym "server_cls") #f (v "WSGIServer") #f)))))
+  (define env
+    (import-env (hash "server.py" "app.server" "app.py" "app") (hash) (hash)))
+  (define rows (infer-effects-all (list (cons "server.py" server) (cons "app.py" app))
+                                  #:import-env env))
+  (define r (hash-ref rows (cons "app.py" 'run)))
+  (check-equal? (row-names r) '())
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-param-module-union)
+  ;; The memcache backends bind `library` to pylibmc at one call site and to
+  ;; pymemcache at another; both are module receivers of the SAME cache domain,
+  ;; so the parameter gets a deterministic representative and `self._lib.get`
+  ;; classifies cache instead of unknown.
+  (define base
+    (prog (py-class "Base"
+                    (list (uir-method (sym "__init__")
+                                      (list (uir-typed-param (sym "self") #f #f #f)
+                                            (uir-typed-param (sym "library") #f #f #f))
+                                      (uir-set! (uir-get (v "self") (sym "_lib"))
+                                                (v "library"))
+                                      'public)
+                          (py-method "fetch"
+                                     (uir-call (uir-get (uir-get (v "self") (sym "_lib"))
+                                                        (sym "get"))
+                                               (list (uir-string "k"))))))))
+  (define app
+    (prog (py-class/super "PylibmcCache" (v "Base")
+                          (list (py-method "__init__"
+                                           (uir-call (uir-get (uir-call (v "super") '())
+                                                              (sym "__init__"))
+                                                     (list (uir-call (sym "kwarg")
+                                                                     (list (v "library")
+                                                                           (v "pylibmc"))))))))
+          (py-class/super "PymemcacheCache" (v "Base")
+                          (list (py-method "__init__"
+                                           (uir-call (uir-get (uir-call (v "super") '())
+                                                              (sym "__init__"))
+                                                     (list (uir-call (sym "kwarg")
+                                                                     (list (v "library")
+                                                                           (v "pymemcache"))))))))))
+  (define env
+    (import-env (hash "base.py" "app.base" "app.py" "app") (hash) (hash)))
+  (define rows (infer-effects-all (list (cons "base.py" base) (cons "app.py" app))
+                                  #:import-env env))
+  (define r (hash-ref rows (cons "base.py" 'Base.fetch)))
+  (check-equal? (row-names r) '(cache))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-property-mro)
+  ;; `@cached_property _cache` returning `self._class()` is projected as the
+  ;; cached property's result class; a method on a SUBCLASS resolves it through
+  ;; the MRO (the memcached `PyLibMCCache.touch` pattern).
+  (define client (prog (py-class "Client" (list (py-method "touch" (uir-null))))))
+  (define base
+    (prog (py-class "Base"
+                    (list (py-method "__init__"
+                                     (uir-set! (uir-get (v "self") (sym "_class"))
+                                               (v "Client")))
+                          (uir-decorated (list (uir-call (v "cached_property") '()))
+                                         (py-method "_cache"
+                                                    (uir-return
+                                                     (uir-call (uir-get (v "self") (sym "_class"))
+                                                               '()))))))))
+  (define app
+    (prog (py-class/super "PyLibMCCache" (v "Base")
+                          (list (py-method "touch"
+                                           (uir-call (uir-get (uir-get (v "self") (sym "_cache"))
+                                                              (sym "touch"))
+                                                     '()))))))
+  (define env
+    (import-env (hash "client.py" "django.core.cache"
+                      "base.py" "app.base"
+                      "app.py" "app")
+                (hash) (hash)))
+  (define rows (infer-effects-all (list (cons "client.py" client)
+                                        (cons "base.py" base)
+                                        (cons "app.py" app))
+                                  #:import-env env))
+  (define r (hash-ref rows (cons "app.py" 'PyLibMCCache.touch)))
+  (check-equal? (row-names r) '(cache))
+  (check-false (row-lookup r 'unknown)))
+
+
+(define (test-projection-submodule-module-function)
+  ;; `from xml.dom import pulldom` is a submodule binding (fn handle path
+  ;; "xml.dom", name "pulldom"): its effective module path is
+  ;; "xml.dom.pulldom", so `pulldom.parse(...)` → DOMEventStream and
+  ;; `stream.getEvent()` classifies io.
+  (define app
+    (prog (fn "read"
+              (uir-block
+               (list (uir-set! (v "stream") (uir-call (dot (v "pulldom") "parse")
+                                                      (list (v "f"))))
+                     (uir-call (dot (v "stream") "getEvent") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "pulldom" (handle 'fn "xml.dom" "pulldom")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'read)))
+  (check-equal? (row-names r) '(io))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-lowercase-imported-class)
+  ;; `from datetime import datetime` synthesizes an fn handle whose path and name
+  ;; are both "datetime" (a lowercase class imported from its own module); the
+  ;; result table must still resolve `datetime.now()` → datetime, so
+  ;; `now.strftime(...)` is pure, not unknown. (Submodule-path normalization
+  ;; must not invent a non-existent "datetime.datetime" module.)
+  (define app
+    (prog (fn "stamp"
+              (uir-block
+               (list (uir-set! (v "now") (uir-call (dot (v "datetime") "now") '()))
+                     (uir-call (dot (v "now") "strftime") (list (uir-string "%Y"))))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "datetime" (handle 'fn "datetime" "datetime")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
+                      (cons "app.py" 'stamp)))
+  (check-false (row-lookup r 'unknown)))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -2026,4 +2258,14 @@
   (test-self-external-parent-fallback)
   (test-super-alias-import-typing)
   (test-module-qualified-super-resolution)
+  (test-projection-module-class-ctor)
+  (test-projection-module-function-result)
+  (test-projection-submodule-binding)
+  (test-projection-method-result-path)
+  (test-projection-with-as-binding)
+  (test-projection-param-default-receiver)
+  (test-projection-param-module-union)
+  (test-projection-property-mro)
+  (test-projection-submodule-module-function)
+  (test-projection-lowercase-imported-class)
   (displayln "All infer tests passed."))
