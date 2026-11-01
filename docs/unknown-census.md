@@ -16,7 +16,7 @@ Two diagnostics can count unknowns, and they disagree by an order of magnitude:
 - **Real context** (`tools/unknown-census.rkt`): builds the module table,
   export graph, derived `Class.method` capabilities, type relations, and MRO,
   then runs the whole-program effect fixpoint (`infer-effects-all`). Only sites
-  the real context cannot resolve are counted: 249 call sites on the same
+  the real context cannot resolve are counted: 215 call sites on the same
   corpus at the same revision.
 
 The empty-context number overcounts the surface and cannot aim work; a lever
@@ -96,25 +96,25 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-01, racklr `8db186a` + this change)
+## Baseline (observed 2026-11-01, racklr `11eb4a2` + this change)
 
 `django/django/core`:
 
 ```
 files scanned: 112   parsed: 112   failed: 0
 functions: 979 (in 101 files with inferred functions)
-unknown call sites: 249   unknown functions: 250   unknown files: 66
+unknown call sites: 215   unknown functions: 236   unknown files: 65
 
-receiver shapes: local 75, bare-call 55, self-attr 39, param 36,
-                 chained 19, call-result 13, self-method 12
-local binding kinds (of 75): call-result 44, loop-var 12, attr 10,
+receiver shapes: local 63, bare-call 53, param 36, self-attr 23,
+                 chained 18, call-result 11, self-method 11
+local binding kinds (of 63): call-result 32, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
-  return-type-projection   69   self-attr-typing         39
-  parameter-dataflow       36   element-type-dataflow    22
-  multi-level-chain        19   higher-order-row-hole    17
-  attribute-alias-typing   15   mro-edge-resolution      12
+  return-type-projection   55   parameter-dataflow       36
+  self-attr-typing         23   element-type-dataflow    22
+  multi-level-chain        18   attribute-alias-typing   15
+  higher-order-row-hole    15   mro-edge-resolution      11
   literal-constructor-typing 10 bare-call-lexicon         9
   unbound-binding-resolution 1
 ```
@@ -124,39 +124,39 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3980   unknown functions: 3650   unknown files: 449
+unknown call sites: 3911   unknown functions: 3612   unknown files: 449
 
-receiver shapes: local 1126, param 736, self-attr 669, bare-call 507,
-                 chained 328, call-result 316, self-method 294, other 4
-local binding kinds (of 1126): call-result 453, unbound 232, loop-var 192,
-                 attr 155, comp-var 59, literal 22, exception 9, alias 4
+receiver shapes: local 1108, param 733, self-attr 639, bare-call 503,
+                 chained 327, call-result 312, self-method 285, other 4
+local binding kinds (of 1108): call-result 437, unbound 231, loop-var 192,
+                 attr 155, comp-var 59, literal 21, exception 9, alias 4
 
 levers:
-  return-type-projection    831    parameter-dataflow        736
-  self-attr-typing          669    multi-level-chain         328
-  bare-call-lexicon         299    mro-edge-resolution       294
-  element-type-dataflow     272    unbound-binding-resolution 232
-  attribute-alias-typing    226    higher-order-row-hole      45
-  literal-constructor-typing 35    exception-type-dataflow     9
+  return-type-projection    811    parameter-dataflow        733
+  self-attr-typing          639    multi-level-chain         327
+  bare-call-lexicon         299    mro-edge-resolution       285
+  element-type-dataflow     272    unbound-binding-resolution 231
+  attribute-alias-typing    226    higher-order-row-hole      41
+  literal-constructor-typing 34    exception-type-dataflow     9
   unclassified                4
 ```
 
 One full-corpus run takes on the order of 8-15 min wall including parser
-generation (723-908 s observed on this machine) and peaks at ~275 MB RSS, so
+generation (452-908 s observed on this machine) and peaks at ~275 MB RSS, so
 the census fits a small harness memory budget.
 
 The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the
-same 249 sites / 250 functions / 66 files and the same shape histogram on
-`django/django/core`, and the same 3980 / 3650 / 449 and the same shape and
+same 215 sites / 236 functions / 65 files and the same shape histogram on
+`django/django/core`, and the same 3911 / 3612 / 449 and the same shape and
 local-binding-kind histograms on `django/django`, so the census agrees with
 the diagnostic already used by the loop.
 
 The effect-graph gate is unchanged by this diagnostic. On
 `django/django/core`, `racket tools/baseline-check.rkt` reports
-`baseline COVERAGE-FAILED sha256:14bac7860833329849c4d81740ecccd01870b72cb8355f947f70956e179623ba`:
+`baseline COVERAGE-FAILED sha256:94fcb2b2b58254f4162c4ebf80bb3ee6876048d4c61e12b6e65c86f5d7d11263`:
 the graph **matches the pin** (the pass/fail half is green — no drift) while the
-Phase-0.3 unknown-elimination obligation is still open (250 unknown functions /
-66 unknown files, `<= 0` required). The census in this document is the aiming
+Phase-0.3 unknown-elimination obligation is still open (236 unknown functions /
+65 unknown files, `<= 0` required). The census in this document is the aiming
 instrument for that open obligation, not a claim that it is discharged. The
 same run reports 112 parsed / 0 failed, 979 named functions, db 169/54,
 network 9/6, inherits 126, fn-effect-row 979.
