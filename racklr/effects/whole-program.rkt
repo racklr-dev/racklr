@@ -15,6 +15,8 @@
          racklr/effects/collect
          racklr/effects/walk
          racklr/effects/rows
+         racklr/effects/invocation-row
+         racklr/effects/invocation-scope
          (prefix-in alg: racklr/effects/algebra/main)
          racklr/effects/shape
          racklr/effects/receiver-type
@@ -167,7 +169,12 @@
                     (or (and class-env (receiver-types-self-attrs class-env)) (hash))))
 
   ;; Pass 3: classification + call-graph edges.
-  (define direct-rows (make-hash))
+  (define bodies (make-hash))       ;; key → body
+  ;; Per-key classification table, keyed by call-node identity: the body
+  ;; evaluator recomposes each row from these classifications each fixpoint
+  ;; round without re-running the classifier.
+  (define class-tables (make-hash)) ;; key → (eq-hash call-node → classification)
+  (define blessed-caps (make-hash)) ;; key → declared effect-cap, if any
   (define edges (make-hash))
   ;; Structured provenance: every call-graph edge (with the callee expression
   ;; the classifier saw) and every direct ground. Propagation needs no path
@@ -181,7 +188,8 @@
     (define rt (rt-of k))
     (define blessed (and (hash-has-key? methods k)
                         (method-cap k import-env lex)))
-    (define effects (if blessed (list blessed) '()))
+    (when blessed (hash-set! blessed-caps k blessed))
+    (define class-table (make-hash))
     ;; A blessed capability is asserted at the method definition by the DATA
     ;; config, so it is its own ground: the tokens are the module path, class,
     ;; and method the capability was derived from.
@@ -260,6 +268,7 @@
                                         import-env rt return-types cov-box
                                         #:lexicon lex)]
                 [site (callee-site-string callee)])
+           (hash-set! class-table node cls)
            (case (car cls)
              [(edge)
               (set! callees (cons (cdr cls) callees))
@@ -272,7 +281,6 @@
                                                                    #:file comp
                                                                    #:position position))))]
              [(effect)
-              (set! effects (cons (cdr cls) effects))
               (when prov
                 ;; The coverage label records what the classifier needed to
                 ;; establish this ground: no receiver dataflow (a structural
@@ -292,7 +300,6 @@
                                    #:position position)))]
              [(pure) (void)]
              [(unknown)
-              (set! effects (cons 'unknown effects))
               (when prov
                 (provenance-add-ground! prov
                                         (make-callee-site (function-fq k) 'unknown callee
@@ -353,16 +360,34 @@
                                 (unbox unknown-tally))))]))]
         [else (void)]))
     (walk-body body visit!)
-    (hash-set! direct-rows k (effects->algebra-row effects))
+    (hash-set! bodies k body)
+    (hash-set! class-tables k class-table)
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
                                                             (string<? (format "~a.~a" (car a) (cdr a))
                                                                       (format "~a.~a" (car b) (cdr b)))))))
 
-  ;; The whole-program fixpoint is the algebra's: iterate `join` (the least
-  ;; upper bound over rows) from the direct rows until the table stops
-  ;; changing. Same operation as the single-file pass, same driver, so the two
-  ;; fixpoints cannot drift apart.
-  (define rows (alg:least-fixpoint direct-rows edges))
+  ;; The whole-program row fixpoint: recompose every body from its classified
+  ;; call sites and its callees' current rows until the table is stable. The
+  ;; shared evaluator owns the control-flow composition and the SCC widening;
+  ;; the single-file pass runs the same driver, so the two cannot drift apart.
+  (define key<? (λ (a b) (string<? (format "~a.~a" (car a) (cdr a))
+                                   (format "~a.~a" (car b) (cdr b)))))
+  (define rows
+    (inference-rows (sort all-keys key<?)
+                    (λ (k) (hash-ref bodies k))
+                    (λ (k)
+                      (define table (hash-ref class-tables k))
+                      (λ (node) (hash-ref table node (cons 'unknown #f))))
+                    #:tokens tokens
+                    #:known-class? (λ (s) (hash-has-key? class-defs s))
+                    ;; A declared capability is asserted at the method
+                    ;; definition, so it seeds the method's row inside the
+                    ;; fixpoint and callers inherit it (`join`: the declared
+                    ;; evidence is coarse — unbounded budget — but its effect
+                    ;; presence and any typed-op scope survive).
+                    #:seed (λ (k)
+                             (define cap (hash-ref blessed-caps k #f))
+                             (if cap (capability-row cap) (alg:empty-algebra-row)))))
   (when rec-box (set-box! rec-box prov))
   ;; Materialize the algebra rows back to the UIR row contract.
   (for/hash ([(k r) (in-hash rows)])

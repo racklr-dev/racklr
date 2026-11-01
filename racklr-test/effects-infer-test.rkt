@@ -96,7 +96,7 @@
                       (uir-call (dot (v "llm") "query")
                                 (list (uir-string "hi"))))))
   (define r (hash-ref (infer-effects p) 'summarize))
-  (check-equal? (modality r 'llm) 'may)
+  (check-equal? (modality r 'llm) 'must)
   (check-equal? (row-names r) '(llm)))
 
 (define (test-direct-db-dotted)
@@ -105,7 +105,7 @@
                       (uir-call (dot (dot (v "db") "user") "update")
                                 (list (uir-record '()) (uir-record '()))))))
   (define r (hash-ref (infer-effects p) 'update))
-  (check-equal? (modality r 'db) 'may)
+  (check-equal? (modality r 'db) 'must)
   (check-equal? (row-names r) '(db)))
 
 (define (test-django-model-objects)
@@ -114,15 +114,15 @@
                       (uir-call (dot (dot (v "User") "objects") "filter")
                                 (list (uir-record '()))))))
   (define r (hash-ref (infer-effects p) 'q))
-  (check-equal? (modality r 'db) 'may))
+  (check-equal? (modality r 'db) 'must))
 
 (define (test-direct-network)
   (define p (prog (fn "f" (uir-call (v "fetch") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
 
 (define (test-direct-cache)
   (define p (prog (fn "r" (uir-call (v "revalidate_path") (list (uir-string "/p"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'r) 'cache) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'r) 'cache) 'must))
 
 (define (test-transitive)
   ;; h calls g, g calls db → h inherits db.
@@ -131,8 +131,8 @@
                                (list (uir-string "idx") (uir-string "q"))))
              (fn "h" (uir-call (v "g") (list (uir-string "seed"))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'g) 'db) 'may)
-  (check-equal? (modality (hash-ref rows 'h) 'db) 'may)
+  (check-equal? (modality (hash-ref rows 'g) 'db) 'must)
+  (check-equal? (modality (hash-ref rows 'h) 'db) 'must)
   (check-equal? (row-names (hash-ref rows 'h)) '(db)))
 
 (define (test-higher-order-unknown)
@@ -154,7 +154,7 @@
   ;; outer itself performs nothing directly and calls nothing.
   (check-equal? (hash-ref rows 'outer) (empty-row))
   ;; inner is still a separate node with llm.
-  (check-equal? (modality (hash-ref rows 'inner) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'inner) 'llm) 'must))
 
 (define (test-recursion-converges)
   ;; r calls r on one branch and llm on the other; fixpoint must terminate.
@@ -168,27 +168,27 @@
 
 (define (test-httpx-network)
   (define p (prog (fn "f" (uir-call (dot (v "httpx") "get") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
 
 (define (test-requests-network)
   (define p (prog (fn "f" (uir-call (dot (v "requests") "get") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
 
 (define (test-redis-cache)
   (define p (prog (fn "f" (uir-call (dot (v "redis") "get") (list (uir-string "k"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'cache) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'cache) 'must))
 
 (define (test-anthropic-llm)
   (define p (prog (fn "f" (uir-call (dot (dot (v "anthropic") "messages") "create") '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-agno-llm)
   (define p (prog (fn "f" (uir-call (dot (dot (v "agno") "agent") "Agent") '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-langgraph-llm)
   (define p (prog (fn "f" (uir-call (dot (dot (v "langgraph") "graph") "StateGraph") '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-django-objects-string-field)
   ;; The Python lowerer emits attribute names as uir-string (not uir-symbol);
@@ -197,40 +197,40 @@
                       (uir-call (uir-get (uir-get (v "Order") (uir-string "objects"))
                                          (uir-string "all"))
                                 '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
 
 ;; ── JS/TS/JSX `dot`-encoded member access ───────────────────────────
 
 (define (test-js-dot-axios-network)
   (define p (prog (fn "f" (uir-call (jsdot (v "axios") "get")
                                     (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
 
 (define (test-js-dot-db-db)
   (define p (prog (fn "f" (uir-call (jsdot (v "db") "query")
                                     (list (uir-string "SELECT 1"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'db) 'must))
 
 (define (test-js-dot-model-objects-db)
   (define p (prog (fn "q"
                       (uir-call (jsdot (jsdot (v "User") "objects") "filter")
                                 (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
 
 (define (test-js-dot-redis-cache)
   (define p (prog (fn "f" (uir-call (jsdot (v "redis") "get")
                                     (list (uir-string "k"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'cache) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'cache) 'must))
 
 (define (test-js-dot-anthropic-llm)
   (define p (prog (fn "f" (uir-call (jsdot (jsdot (v "anthropic") "messages") "create")
                                     '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-js-dot-bare-fetch-network)
   ;; A bare callee (non-dotted) still classifies: fetch(...) → network.
   (define p (prog (fn "f" (uir-call (v "fetch") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
 
 (define (test-handler-primitive-is-pure)
   ;; __handle is a runtime primitive: calling it adds no direct effect and no
@@ -370,7 +370,7 @@
   (define p (prog (fn "f" (uir-call (dot (v "warnings") "warn")
                                     (list (uir-string "deprecated"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'io) 'may)
+  (check-equal? (modality r 'io) 'must)
   (check-equal? (row-names r) '(io)))
 
 (define (test-dunder-method-pure)
@@ -427,7 +427,7 @@
 (define (test-sys-exit-process)
   ;; sys.exit raises SystemExit — a process effect.
   (define p (prog (fn "f" (uir-call (dot (v "sys") "exit") (list (uir-number "1"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'must))
 
 (define (test-container-method-pure)
   ;; `errors.append(x)`, `mapping.items()`, `s.keys()` on arbitrary receivers
@@ -455,9 +455,9 @@
                   (fn "g" (uir-call (dot (v "connection") "commit") '()))
                   (fn "h" (uir-call (dot (v "router") "db_for_write") (list (v "model"))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'f) 'db) 'may)
-  (check-equal? (modality (hash-ref rows 'g) 'db) 'may)
-  (check-equal? (modality (hash-ref rows 'h) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'f) 'db) 'must)
+  (check-equal? (modality (hash-ref rows 'g) 'db) 'must)
+  (check-equal? (modality (hash-ref rows 'h) 'db) 'must))
 
 (define (test-django-declarative-constructor-pure)
   ;; Model field + query expression constructors are pure class instantiation,
@@ -489,18 +489,18 @@
   ;; self.queryset.filter(...) → db (receiver is an arbitrary object chain).
   (define p (prog (fn "q" (uir-call (dot (dot (v "self") "queryset") "filter")
                                      (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
 
 (define (test-dotted-orm-save-db)
   ;; obj.save() → db (Model instance save).
   (define p (prog (fn "s" (uir-call (dot (v "obj") "save") '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 's) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 's) 'db) 'must))
 
 (define (test-dotted-orm-values-list-db)
   ;; qs.values_list(...) → db.
   (define p (prog (fn "v" (uir-call (dot (v "qs") "values_list")
                                     (list (uir-string "id"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'v) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'v) 'db) 'must))
 
 (define (test-bare-filter-is-pure-not-db)
   ;; A bare `filter(...)` is the Python builtin (pure), not an ORM call: the
@@ -514,7 +514,7 @@
   (define p (prog (fn "f" (uir-call (dot (v "requests") "get")
                                     (list (uir-string "/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'network) 'may)
+  (check-equal? (modality r 'network) 'must)
   (check-equal? (row-names r) '(network)))
 
 
@@ -525,44 +525,44 @@
 
 (define (test-bare-open-io)
   (define p (prog (fn "f" (uir-call (v "open") (list (uir-string "/tmp/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
 
 (define (test-bare-print-io)
   (define p (prog (fn "f" (uir-call (v "print") (list (uir-string "x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
 
 (define (test-os-makedirs-io)
   (define p (prog (fn "f" (uir-call (dot (v "os") "makedirs")
                                     (list (uir-string "/tmp/d"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
 
 (define (test-stream-write-io)
   ;; self.stdout.write(...) → io (dotted method name).
   (define p (prog (fn "f" (uir-call (dot (dot (v "self") "stdout") "write")
                                     (list (uir-string "x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
 
 (define (test-subprocess-process)
   (define p (prog (fn "f" (uir-call (dot (v "subprocess") "run")
                                     (list (v "cmd"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'must))
 
 (define (test-os-system-process)
   (define p (prog (fn "f" (uir-call (dot (v "os") "system")
                                     (list (uir-string "ls"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'process) 'must))
 
 (define (test-time-sleep-time)
   (define p (prog (fn "f" (uir-call (dot (v "time") "sleep")
                                     (list (uir-number "1"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'time) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'time) 'must))
 
 (define (test-django-send-mail-email)
   ;; django.core.mail.send_mail(...) → email.
   (define p (prog (fn "f" (uir-call (dot (dot (dot (v "django") "core") "mail")
                                           "send_mail")
                                     (list (uir-string "s") (uir-string "b"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'email) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'email) 'must))
 
 ;; ── pure stdlib dotted calls ─────────────────────────────────────────
 ;; `json.dumps`/`re.compile`/`math.floor`/`datetime.now`/`os.path.join` are
@@ -602,7 +602,7 @@
   ;; op-level time check runs before whole-module purity, so it is `time`.
   (define p (prog (fn "f" (uir-call (dot (v "datetime") "now") '()))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'time) 'may)
+  (check-equal? (modality r 'time) 'must)
   (check-false (row-lookup r 'unknown)))
 
 (define (test-os-path-getsize-is-io)
@@ -611,7 +611,7 @@
   (define p (prog (fn "f" (uir-call (dot (dot (v "os") "path") "getsize")
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'io) 'may)
+  (check-equal? (modality r 'io) 'must)
   (check-false (row-lookup r 'unknown)))
 
 ;; ── root-aware ORM heuristic ─────────────────────────────────────────
@@ -626,7 +626,7 @@
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
   (check-false (row-lookup r 'db))
-  (check-equal? (modality r 'io) 'may))
+  (check-equal? (modality r 'io) 'must))
 
 (define (test-dict-get-not-db)
   ;; dict.get collides with the QuerySet `get` op; the builtin-type root must win.
@@ -657,7 +657,7 @@
   ;; (non-stdlib, non-builtin) receiver root still resolves to db.
   (define p (prog (fn "f" (uir-call (dot (v "queryset") "filter")
                                     (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'db) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'db) 'must))
 
 
 ;; ── Python intra-program method calls ───────────────────────────────
@@ -677,22 +677,22 @@
                             (list (py-method "save" (uir-call (dot (v "db") "commit") '()))
                                   (py-method "run"  (uir-call (dot (v "self") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'A.save) 'db) 'may)
-  (check-equal? (modality (hash-ref rows 'A.run) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'A.save) 'db) 'must)
+  (check-equal? (modality (hash-ref rows 'A.run) 'db) 'must))
 
 (define (test-cls-method-resolution)
   (define p (prog (py-class "A"
                             (list (py-method "save" (uir-call (dot (v "llm") "query") '()))
                                   (py-method "run"  (uir-call (dot (v "cls") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'A.run) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'A.run) 'llm) 'must))
 
 (define (test-other-class-method-resolution)
   ;; A bare function f calls B.m() through the class name -> edge B.m.
   (define p (prog (py-class "B" (list (py-method "m" (uir-call (dot (v "llm") "query") '()))))
                   (fn "f" (uir-call (dot (v "B") "m") '()))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'f) 'llm) 'must))
 
 (define (test-self-method-scoped-to-owner)
   ;; A.m is pure, B.m hits db; A.run calls self.m() and must resolve to A.m
@@ -725,8 +725,8 @@
                   (py-class/super "Derived" (v "Base")
                                   (list (py-method "run" (uir-call (dot (v "self") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'Base.save) 'db) 'may)
-  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'Base.save) 'db) 'must)
+  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'must))
 
 (define (test-multiple-inheritance-mixin-resolution)
   ;; Derived(A, Mixin) inherits Mixin.save (db) through its SECOND base, even
@@ -738,7 +738,7 @@
                              '()
                              (list (py-method "run" (uir-call (dot (v "self") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'must))
 
 (define (test-inherited-cls-method-resolution)
   (define p (prog (py-class/super "Base" (uir-null)
@@ -746,7 +746,7 @@
                   (py-class/super "Derived" (v "Base")
                                   (list (py-method "run" (uir-call (dot (v "cls") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'Derived.run) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'Derived.run) 'llm) 'must))
 
 (define (test-inherited-other-class-method-resolution)
   ;; A bare function calls Derived.m() where m is inherited from Base.
@@ -755,7 +755,7 @@
                   (py-class/super "Derived" (v "Base") '())
                   (fn "f" (uir-call (dot (v "Derived") "m") '()))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'f) 'llm) 'must))
 
 (define (test-inherited-method-most-derived-wins)
   ;; Base.m is pure, Derived overrides it to hit db. self.m() inside Derived
@@ -766,7 +766,7 @@
                                   (list (py-method "m" (uir-call (dot (v "db") "x") '()))
                                         (py-method "run" (uir-call (dot (v "self") "m") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'Derived.run) 'db) 'must))
 
 (define (test-dotted-super-name-resolution)
   ;; class A(models.Model): a dotted super name lowers to a uir-get whose last
@@ -776,7 +776,7 @@
                   (py-class/super "A" (uir-get (v "models") (uir-string "Model"))
                                   (list (py-method "run" (uir-call (dot (v "self") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'A.run) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'A.run) 'db) 'must))
 
 (define (test-super-call-resolution)
   ;; Derived.__init__ calls super().__init__(); Base.__init__ hits db. The
@@ -790,7 +790,7 @@
                                                                       (uir-string "__init__"))
                                                              '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'Derived.__init__) 'db) 'may))
+  (check-equal? (modality (hash-ref rows 'Derived.__init__) 'db) 'must))
 
 (define (test-super-call-skips-self-override)
   ;; Derived overrides m (db); Base.m is pure. super().m() must resolve to
@@ -855,7 +855,7 @@
                                                                '()))))))
   (check-equal? (modality (hash-ref (infer-effects app) 'Derived.__init__) 'unknown) 'unknown)
   (define rows (infer-effects-all (list (cons "base.rkt" base) (cons "app.rkt" app))))
-  (check-equal? (modality (hash-ref rows (cons "app.rkt" 'Derived.__init__)) 'db) 'may))
+  (check-equal? (modality (hash-ref rows (cons "app.rkt" 'Derived.__init__)) 'db) 'must))
 
 (define (test-whole-program-cross-file-inheritance)
   ;; BaseService.compute (db) lives in one program; A.run() in a separate
@@ -868,8 +868,8 @@
                                     (list (py-method "run" (uir-call (dot (v "self") "compute") '()))))))
   (check-equal? (modality (hash-ref (infer-effects app) 'A.run) 'unknown) 'unknown)
   (define rows (infer-effects-all (list (cons "base.rkt" base) (cons "app.rkt" app))))
-  (check-equal? (modality (hash-ref rows (cons "base.rkt" 'BaseService.compute)) 'db) 'may)
-  (check-equal? (modality (hash-ref rows (cons "app.rkt" 'A.run)) 'db) 'may))
+  (check-equal? (modality (hash-ref rows (cons "base.rkt" 'BaseService.compute)) 'db) 'must)
+  (check-equal? (modality (hash-ref rows (cons "app.rkt" 'A.run)) 'db) 'must))
 
 (define (test-whole-program-collision-stays-distinct)
   ;; Two files each define their own class Command with a handle() method; the
@@ -882,9 +882,9 @@
                                   (list (py-method "handle" (uir-call (dot (v "llm") "query") '()))))))
   (define rows (infer-effects-all (list (cons "a.rkt" a) (cons "b.rkt" b))))
   ;; a.rkt's Command.run → a.rkt's Command.handle → db (NOT b.rkt's llm).
-  (check-equal? (modality (hash-ref rows (cons "a.rkt" 'Command.handle)) 'db) 'may)
-  (check-equal? (modality (hash-ref rows (cons "a.rkt" 'Command.run)) 'db) 'may)
-  (check-equal? (modality (hash-ref rows (cons "b.rkt" 'Command.handle)) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows (cons "a.rkt" 'Command.handle)) 'db) 'must)
+  (check-equal? (modality (hash-ref rows (cons "a.rkt" 'Command.run)) 'db) 'must)
+  (check-equal? (modality (hash-ref rows (cons "b.rkt" 'Command.handle)) 'llm) 'must))
 
 (define (test-constructor-init-param-flows-to-sibling-method)
   ;; Wrapper.__init__(self, inner) stores self.inner = inner. A caller that
@@ -950,7 +950,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
   (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'may)
+  (check-equal? (modality r 'db) 'must)
   (check-equal? (entry-ops (row-lookup r 'db)) '(db<Connection>.write)))
 
 (define (test-imported-receiver-dataflow)
@@ -967,7 +967,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
   (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'may)
+  (check-equal? (modality r 'db) 'must)
   (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
 
 (define (test-imported-class-ctor-pure)
@@ -998,7 +998,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
   (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'may))
+  (check-equal? (modality r 'db) 'must))
 
 (define (test-external-singleton-method-domain)
   ;; `router.allow_migrate_model(...)` where `router` is a lowercase external
@@ -1013,7 +1013,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
   (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'may))
+  (check-equal? (modality r 'db) 'must))
 
 (define (test-external-class-receiver-dataflow)
   ;; `loader = MigrationLoader(...)` then `loader.get_migration(...)`: the
@@ -1033,7 +1033,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
   (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'may))
+  (check-equal? (modality r 'db) 'must))
 
 (define (test-param-type-propagation-unannotated-method)
   ;; `handle(self)` passes its tracked `loader` to `self.handle_merge(loader)`;
@@ -1476,7 +1476,7 @@
                     (list (py-method "m" (uir-call (jsdot (v "console") "log") '()))
                           (py-method "run" (uir-call (jsdotv (v "this") "m") '()))))))
   (define rows (infer-effects p #:lexicon javascript-lexicon))
-  (check-equal? (modality (hash-ref rows 'Svc.run) 'io) 'may))
+  (check-equal? (modality (hash-ref rows 'Svc.run) 'io) 'must))
 
 (define (test-self-attr-and-this-attr-parity)
   ;; `self.attr` (Python uir-var receiver) and `this.attr` (JS uir-symbol
@@ -1763,7 +1763,7 @@
                             (fn #f (uir-call (dot (v "llm") "query")
                                              (list (uir-string "hi")))))))
   (define r (hash-ref (infer-effects p) 'summarize))
-  (check-equal? (modality r 'llm) 'may)
+  (check-equal? (modality r 'llm) 'must)
   (check-equal? (row-names r) '(llm)))
 
 (define (test-set!-async-fn-decl)
@@ -1771,14 +1771,14 @@
                                  (list (uir-string "hi")))))
   (define p (prog (uir-set! (sym "summarize")
                             (uir-call (sym "async-fn") (list inner)))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'summarize) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'summarize) 'llm) 'must))
 
 (define (test-set!-gen-fn-decl)
   (define inner (fn #f (uir-call (dot (v "llm") "query")
                                  (list (uir-string "hi")))))
   (define p (prog (uir-set! (sym "summarize")
                             (uir-call (sym "gen-fn") (list inner)))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'summarize) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'summarize) 'llm) 'must))
 
 (define (test-set!-fn-annotate-writes-back)
   (define p (prog (uir-set! (sym "summarize")
@@ -1821,7 +1821,7 @@
                             (uir-call (sym "=>")
                                       (list (uir-list '())
                                             (uir-call (jsdot (v "llm") "query") '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 ;; ── JS/TS anonymous `function` expressions ──────────────────────────
 ;; TS lowers `function (params) { body }` to (call "function" (list params body)),
@@ -1840,7 +1840,7 @@
                             (uir-call (sym "function")
                                       (list (uir-list '())
                                             (uir-call (jsdot (v "llm") "query") '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 ;; ── JS/TS const/let/var-bound arrow & function encodings ─────────────
 ;; TS lowers `const f = () => ...` to
@@ -1857,7 +1857,7 @@
                                       (uir-call (sym "=>")
                                                 (list (uir-list '())
                                                       (uir-call (jsdot (v "llm") "query") '())))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-let-arrow-inferred)
   (define p (prog (var-decl "let"
@@ -1865,7 +1865,7 @@
                                       (uir-call (sym "=>")
                                                 (list (uir-list '())
                                                       (uir-call (jsdot (v "llm") "query") '())))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-var-arrow-inferred)
   (define p (prog (var-decl "var"
@@ -1873,7 +1873,7 @@
                                       (uir-call (sym "=>")
                                                 (list (uir-list '())
                                                       (uir-call (jsdot (v "llm") "query") '())))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-const-arrow-caller-inherits)
   ;; main calls a const-bound arrow f; f's llm effect must propagate to main.
@@ -1885,8 +1885,8 @@
   (define p (prog f
                   (fn "main" (uir-call (v "f") '()))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'f) 'llm) 'may)
-  (check-equal? (modality (hash-ref rows 'main) 'llm) 'may))
+  (check-equal? (modality (hash-ref rows 'f) 'llm) 'must)
+  (check-equal? (modality (hash-ref rows 'main) 'llm) 'must))
 
 (define (test-const-function-expr-inferred)
   (define p (prog (var-decl "const"
@@ -1894,7 +1894,7 @@
                                       (uir-call (sym "function")
                                                 (list (uir-list '())
                                                       (uir-call (jsdot (v "llm") "query") '())))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'may))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'llm) 'must))
 
 (define (test-const-arrow-annotate-wraps)
   ;; annotate-effects must descend into the const wrapper and wrap the arrow in
@@ -1945,7 +1945,7 @@
   (define rows (infer-effects-all (list (cons "m.rkt" p))))
   (check-equal? (hash-ref rows (cons "m.rkt" 'f)) (empty-row))
   (check-equal? (hash-ref rows (cons "m.rkt" 'g)) (empty-row))
-  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'h)) 'io) 'may)
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'h)) 'io) 'must)
   (check-equal? (hash-ref rows (cons "m.rkt" 'i)) (empty-row)))
 
 (define (test-self-stdlib-parent-fallback)
@@ -1978,7 +1978,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'ASGIRequest._get_post)))
   (check-equal? (row-names r) '(io))
-  (check-equal? (modality r 'io) 'may))
+  (check-equal? (modality r 'io) 'must))
 
 (define (test-super-stdlib-parent-typing)
   ;; super().__init__() with no corpus parent: the stdlib exception protocol is
@@ -1996,7 +1996,7 @@
                                                         '()))))))
   (define rows (infer-effects-all (list (cons "m.rkt" p))))
   (check-equal? (hash-ref rows (cons "m.rkt" 'BadHeader.__init__)) (empty-row))
-  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'SingleZip.__init__)) 'io) 'may))
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'SingleZip.__init__)) 'io) 'must))
 
 (define (test-super-alias-import-typing)
   ;; A superclass written as an import alias (`class JSerializer(PySer)`) must
@@ -2015,7 +2015,7 @@
                 (hash)))
   (define rows (infer-effects-all (list (cons "python.py" python) (cons "json.py" json))
                                   #:import-env env))
-  (check-equal? (modality (hash-ref rows (cons "json.py" 'JSerializer.start)) 'db) 'may))
+  (check-equal? (modality (hash-ref rows (cons "json.py" 'JSerializer.start)) 'db) 'must))
 
 (define (test-module-qualified-super-resolution)
   ;; `class Serializer(base.Serializer)` must resolve `base` through the import
@@ -2036,7 +2036,7 @@
                 (hash)))
   (define rows (infer-effects-all (list (cons "python.py" python) (cons "base.py" base))
                                   #:import-env env))
-  (check-equal? (modality (hash-ref rows (cons "python.py" 'Serializer.start)) 'db) 'may))
+  (check-equal? (modality (hash-ref rows (cons "python.py" 'Serializer.start)) 'db) 'must))
 
 ;; ── type-projection chains (P0.3) ───────────────────────────────────
 ;; Unknown sites whose receiver is a stdlib/framework object need the object's

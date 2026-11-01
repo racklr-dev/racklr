@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Inference-side modality, budget and grounded scope for effect rows (issue
+  #111): a body's row is now composed through the effect algebra instead of a
+  flat union. A direct classified effect is a `must` obligation at its call
+  site; `sequence` keeps it, `choose` keeps it only when every branch must,
+  and loop bodies/comprehensions/short-circuit operands demote it to `may`
+  (`repeatable`), a `try` body demotes it (`weaken-must`), and a callee's
+  `must` propagates only through an unconditional call. Budgets are static
+  invocation upper bounds (direct site 1, branches max, sequences sum, loops and
+  call-graph cycles unbounded via SCC widening). Scope is inferred
+  (`reads=<resource>` / `writes=<resource>`) only when the call chain grounds
+  the direction (typed op verb or the guard vocabulary's DATA verb tables) and
+  the resource (typed op receiver class, or a known-class receiver root),
+  composing through the algebra's `scope-lub`. The shared evaluator
+  (`racklr/effects/invocation-row.rkt`, `invocation-scope.rkt`) drives both
+  single-file and whole-program inference; declared whole-program method
+  capabilities seed the fixpoint. On the `django/django/core` probe the effect
+  set and the unknown counts are unchanged (231 unknown functions / 64 files,
+  1238 entries), while modalities now include `must`, 321 entries carry a
+  finite budget and 15 carry a grounded scope. Write-back keeps its existing
+  runtime behavior: an inferred `must` is emitted as `may` (an analysis
+  obligation is not a runtime obligation when a caller-installed handler may
+  interpret the effect), while a hand-written row keeps its declared modality;
+  budget/ops/scope still guard.
+
+- `racklr-test/effects-modality-budget-test.rkt` covering guaranteed vs
+  conditional modality, early-return reachability, sequential/loop/branch
+  budgets, `must` propagation, recursive SCC widening, `unknown` preservation,
+  grounded/conflicting/unrooted scopes, and the new region combinators.
+
 - Stable site origins for effect-edge provenance (nc-4A19):
   `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural
   receiver chain (from the UIR callee, never a rendered expression), and a

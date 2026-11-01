@@ -14,10 +14,17 @@
 ;;
 ;; `materialize-type-relations` seeds the syntax-visible self-attr relation
 ;; (class fields + `self.attr = ...` in method bodies). `close-type-relations!`
-;; then runs the deterministic join: a monotone fixpoint that closes assign,
-;; self-attr, param and return over the whole program. Iteration is over sorted
-;; keys and every fold is a strict single-class fold, so the fixed point does
-;; not depend on hash iteration order.
+;; closes assign / self-attr / param / return deterministically: sorted key
+;; iteration and strict single-class folds make the round map independent of
+;; hash order.
+;;
+;; The single-class projection is not monotone, so a feedback loop through the
+;; four relations can oscillate. `type-relations-widen.rkt` detects a repeated
+;; full state (impossible for a converging input) and widens exactly the entries
+;; that moved in the cycle to unresolved, then freezes them. Converging inputs
+;; never widen, so their relation values are unchanged, and the loop terminates
+;; on any input. Each widening prints one explicit diagnostic line; there is no
+;; silent truncation.
 
 (require racklr/uir
          racklr/effects/class-resolve
@@ -26,7 +33,8 @@
          racklr/effects/shape
          racklr/effects/receiver-type
          racklr/effects/library-tokens
-         racklr/effects/lexicon)
+         racklr/effects/lexicon
+         "type-relations-widen.rkt")
 
 (provide type-relations? type-relations
          type-relations-assign type-relations-self-attr
@@ -160,9 +168,8 @@
                   (make-hash)))
 
 ;; Deterministic join: close assign / self-attr / param / return to a fixed
-;; point. Each round recomputes all four relations from the current others;
-;; sorted key iteration + strict single-class folds make the result
-;; independent of hash order. Terminates by construction up to a cap.
+;; point (see type-relations-widen.rkt for the widening that guarantees
+;; termination).
 (define (close-type-relations! tr
                                #:comp-programs comp-programs
                                #:class-defs class-defs
@@ -174,7 +181,15 @@
                                #:fn-defs fn-defs
                                #:comp-supers comp-supers
                                #:fn-parents [fn-parents (hash)]
-                               #:tokens [tokens default-effect-tokens])
+                               #:tokens [tokens default-effect-tokens]
+                               ;; #:max-rounds is a diagnostic budget only (#f =
+                               ;; no budget): #:widen? proves termination.
+                               #:max-rounds [max-rounds #f]
+                               ;; #:widen? #f is diagnosis-only (raw iteration).
+                               #:widen? [widen? #t]
+                               ;; Optional box: (list count by-rel) per widening.
+                               #:widening-report [widening-report #f]
+                               #:trace? [trace? (and (getenv "TYPE_RELATIONS_TRACE") #t)])
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define param (type-relations-param tr))
@@ -360,24 +375,22 @@
                                   tokens import-env comp owner)))
     (set-type-relations-return! tr return))
 
-  (let loop ([round 0])
-    (define prev-assign (hash-copy assign))
-    (define prev-self-attr (hash-copy self-attr))
-    (define prev-param (hash-copy param))
-    (define prev-return (hash-copy return))
-    (rebuild-self-attrs!)
-    (rebuild-assign!)
-    (set! param (collect-params!))
-    (set-type-relations-param! tr param)
-    (collect-returns!)
-    (set! return (type-relations-return tr))
-    (cond
-      [(and (equal? prev-assign assign)
-            (equal? prev-self-attr self-attr)
-            (equal? prev-param param)
-            (equal? prev-return return))
-       tr]
-      [(>= round 100)
-       (eprintf "type-relations: join did not converge in ~a rounds\n" round)
-       tr]
-      [else (loop (add1 round))])))
+  (define-values (assign* self-attr* param* return*)
+    (run-join!
+     (λ ()
+       (rebuild-self-attrs!)
+       (rebuild-assign!)
+       (set! param (collect-params!))
+       (set-type-relations-param! tr param)
+       (collect-returns!)
+       (set! return (type-relations-return tr))
+       (values assign self-attr param return))
+     #:max-rounds max-rounds
+     #:widen? widen?
+     #:trace? trace?
+     #:widening-report widening-report))
+  (set-type-relations-assign! tr assign*)
+  (set-type-relations-self-attr! tr self-attr*)
+  (set-type-relations-param! tr param*)
+  (set-type-relations-return! tr return*)
+  tr)

@@ -39,6 +39,9 @@
   sequence
   choose
   scope
+  repeatable
+  unbounded-budget
+  weaken-must
   row-leq?
   row-equiv?)
 
@@ -211,6 +214,57 @@
             [ea (demote ea)]
             [else (demote eb)])))
   (make-algebra-row (uir-effect-row entries) (merge-provenance a b names)))
+
+;; ── inference-side region combinators ───────────────────────────────
+;;
+;; These map a row through a control-flow region. They are the same
+;; (effect, evidence) rows the algebra operates on, so the inference driver
+;; composes whole bodies out of `sequence` / `choose` and these three, and the
+;; resulting row already carries modality, budget and scope. `evidence` is
+;; preserved unchanged: a region changes what the row *claims* about the
+;; computation, not which call sites grounded it.
+
+;; A row region that may execute zero or more times (a loop body, a
+;; comprehension element, an except handler): presence survives, but `must`
+;; cannot (zero iterations), so `must` weakens to `may`, and the invocation
+;; bound is unbounded (`#f`). `unknown` stays `unknown`: it is a deferral
+;; marker, not an obligation, so it is never silently dropped or absorbed.
+(define (repeatable r)
+  (define entries
+    (for/list ([e (in-list (uir-effect-row-entries (algebra-row->uir r)))])
+      (struct-copy uir-effect-entry e
+                   [modality (case (entry-modality e)
+                               [(must) 'may]
+                               [(unknown) 'unknown]
+                               [else (entry-modality e)])]
+                   [budget #f])))
+  (make-algebra-row (uir-effect-row entries)
+                    (algebra-row-provenance r)))
+
+;; A region whose budget cannot be bounded but whose obligation is unchanged:
+;; a loop test is evaluated at least once (so its `must` survives) and then
+;; may repeat (so its budget is unbounded).
+(define (unbounded-budget r)
+  (define entries
+    (for/list ([e (in-list (uir-effect-row-entries (algebra-row->uir r)))])
+      (struct-copy uir-effect-entry e [budget #f])))
+  (make-algebra-row (uir-effect-row entries)
+                    (algebra-row-provenance r)))
+
+;; A region whose `must` obligations are not guaranteed on every path through
+;; the enclosing computation: an exception can abandon a `try` body before its
+;; later statements run, so the body's obligations weaken to permissions while
+;; its budget (an upper bound per attempt) and scope (the resource touched when
+;; it does run) stay.
+(define (weaken-must r)
+  (define entries
+    (for/list ([e (in-list (uir-effect-row-entries (algebra-row->uir r)))])
+      (struct-copy uir-effect-entry e
+                   [modality (if (eq? (entry-modality e) 'must)
+                                 'may
+                                 (entry-modality e))])))
+  (make-algebra-row (uir-effect-row entries)
+                    (algebra-row-provenance r)))
 
 ;; Discharge the effects a handler covers: return the row the handler body
 ;; still performs, and the row of effects the handler interprets (with their
