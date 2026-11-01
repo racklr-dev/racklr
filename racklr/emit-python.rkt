@@ -3,6 +3,7 @@
 (require racklr/uir
          racklr/emit-contract
          racklr/emit-effects
+         racklr/effects/guard-vocabulary
          racklr/effects/infer
          racklr/effects/python-annot)
 
@@ -215,11 +216,19 @@
    (if annotation (string-append spc annotation "\n") "")
    spc "@__withEffects(" (render-effect-row 'python row) ")"))
 
+;; Render a vocabulary list as a Python tuple literal. The scope read/write
+;; verbs and the modality set come from the lexicon DATA module, so the guard
+;; enforces exactly the vocabulary the classifier can emit.
+(define (python-tuple strings)
+  (string-append "(" (string-join (map (λ (v) (format "~s" v)) strings) ", ") ")"))
+
 (define (effects-guard-preamble)
   (string-append
    "import inspect\n"
    "__effects_stack = []\n"
    "__handlers_stack = []\n"
+   "__write_ops = " (python-tuple (scope-write-verbs)) "\n"
+   "__read_ops = " (python-tuple (scope-read-verbs)) "\n"
    "def __effects_current():\n"
    "    return __effects_stack[-1] if __effects_stack else None\n"
    "def __current_handler(name):\n"
@@ -241,11 +250,9 @@
    "            raise RuntimeError(\"effect operation prohibited: \" + name + \".\" + op)\n"
    "        scope = entry.get(\"scope\")\n"
    "        if scope:\n"
-   "            write_ops = (\"write\", \"update\", \"create\", \"delete\", \"save\", \"insert\", \"put\", \"remove\", \"set\", \"push\", \"clear\", \"drop\", \"mutate\", \"add\")\n"
-   "            read_ops = (\"query\", \"fetch\", \"get\", \"read\", \"find\", \"filter\", \"all\", \"select\", \"search\", \"list\", \"exists\", \"load\", \"peek\", \"count\")\n"
-   "            if scope.startswith(\"reads=\") and op in write_ops:\n"
+   "            if scope.startswith(\"reads=\") and op in __write_ops:\n"
    "                raise RuntimeError(\"effect scope violation: \" + name + \".\" + op + \" outside \" + scope)\n"
-   "            if scope.startswith(\"writes=\") and op in read_ops:\n"
+   "            if scope.startswith(\"writes=\") and op in __read_ops:\n"
    "                raise RuntimeError(\"effect scope violation: \" + name + \".\" + op + \" outside \" + scope)\n"
    "        performed = ctx[\"performed\"]\n"
    "        performed.setdefault(name, {\"any\": 0})\n"
@@ -268,7 +275,7 @@
    "    finally:\n"
    "        __handlers_stack.pop()\n"
    "def __withEffects(row):\n"
-   "    _valid_modalities = (\"may\", \"must\", \"must-not\")\n"
+   "    _valid_modalities = " (python-tuple (guard-modalities)) "\n"
    "    for _name, _entry in row.items():\n"
    "        _modality = _entry.get(\"modality\", \"may\")\n"
    "        if _modality not in _valid_modalities:\n"
@@ -276,6 +283,9 @@
    "        _budget = _entry.get(\"max\")\n"
    "        if _budget is not None and (not isinstance(_budget, int) or _budget < 0):\n"
    "            raise ValueError(\"invalid effect budget: %r\" % (_budget,))\n"
+   "        _scope = _entry.get(\"scope\")\n"
+   "        if _scope is not None and (not isinstance(_scope, str) or not (_scope.startswith(\"reads=\") or _scope.startswith(\"writes=\"))):\n"
+   "            raise ValueError(\"unsupported effect scope encoding: %r\" % (_scope,))\n"
    "    def _check(frame):\n"
    "        for _k, _entry in row.items():\n"
    "            if _entry.get(\"modality\", \"may\") == \"must\":\n"

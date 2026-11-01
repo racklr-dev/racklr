@@ -119,7 +119,17 @@ the contract owns how it is spelled, so a row cannot be dropped silently.
 Fields without native syntax are documented, not discarded. A Koka typed row
 spells names only, so budgets, scopes, ops and prohibitions are recorded in a
 `// @effects {...}` comment next to the typed row, and a `must-not` entry is
-never granted as a typed effect. Koka's grammar only accepts `<effects>` in
+never granted as a typed effect. (Koka has no way to distinguish `may` from
+`must` in the typed row, so both render as `<db>` and the modality distinction
+is only in the comment.)
+
+The Python/JS runtime guards enforce a scope by classifying the performed op as
+a read or a write. That vocabulary is rendered from the classifier's DATA verb
+tables (`racklr/effects/guard-vocabulary.rkt`, backed by
+`racklr/effects/imports/library-config.rkt`), not hand-written in the emitters,
+so a new lexicon verb is enforced by construction. A scope value that is not
+`reads=...` or `writes=...` has no enforcement branch and is rejected at guard
+construction instead of silently skipping enforcement. Koka's grammar only accepts `<effects>` in
 front of a result type, so a function with a known row but no declared result
 type carries it as the documented comment alone. The JSON target has no
 functions or effect vocabulary, so function rows do not appear there.

@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.
+- Emitted effect rows now have one owner of their spelling
+  (`racklr/emit-effects.rkt`): Python/JS/TS object literals, Clojure `defn`
+  metadata, and Koka typed effect rows, with a documented `@effects`
+  annotation for fields a target cannot spell. Python and JS gain a
+  `# @effects {...}` / `/** @effects {...} */` annotation next to their runtime
+  guard; Koka and Clojure emit inferred rows instead of discarding them.
+- The Python/JS runtime guards' scope read/write vocabulary is rendered from the
+  classifier's DATA verb tables (`racklr/effects/guard-vocabulary.rkt`) instead
+  of hand-written lists, and a scope encoding other than `reads=...` or
+  `writes=...` now fails at guard construction rather than silently no-oping.
+
+### Notes
+
+- Koka's typed effect row is names-only: `may` and `must` both render as `<db>`
+  and the modality distinction survives only in the documented `// @effects`
+  comment, so a Koka reader should not read the typed row as stronger than the
+  contract row. A row on a Koka function with no declared result type is emitted
+  as the documented comment alone, because the grammar only accepts `<effects>`
+  in front of a result type.
 
 ## [0.1.0rc1] - 2026-06-23
 

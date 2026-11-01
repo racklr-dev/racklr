@@ -3,6 +3,7 @@
 (require racklr/uir
          racklr/emit-contract
          racklr/emit-effects
+         racklr/effects/guard-vocabulary
          racklr/effects/infer)
 
 (provide emit-javascript)
@@ -632,10 +633,23 @@
           (string-join (map emit-js (uir-fn-params fn)) ", ")
           (emit-body (uir-fn-body fn))))
 
+;; Render a vocabulary list as a JS lookup object (verb → 1) / array. The
+;; scope read/write verbs and the modality set come from the lexicon DATA
+;; module, so the guard enforces exactly the vocabulary the classifier can emit.
+(define (js-lookup strings)
+  (string-append "{ "
+                 (string-join (map (λ (v) (format "~s:1" v)) strings) ", ")
+                 " }"))
+
+(define (js-array strings)
+  (string-append "[" (string-join (map (λ (v) (format "~s" v)) strings) ", ") "]"))
+
 (define (effects-guard-preamble)
   (string-append
    "var __effects_stack = [];\n"
    "var __handlers_stack = [];\n"
+   "var __writeOps = " (js-lookup (scope-write-verbs)) ";\n"
+   "var __readOps = " (js-lookup (scope-read-verbs)) ";\n"
    "function __effects_current() {\n"
    "  return __effects_stack.length ? __effects_stack[__effects_stack.length - 1] : null;\n"
    "}\n"
@@ -657,10 +671,8 @@
    "    if (_ops.length && _ops.indexOf(op) === -1) throw new Error(\"effect operation prohibited: \" + name + \".\" + op);\n"
    "    var _scope = _e.scope;\n"
    "    if (_scope) {\n"
-   "      var _writeOps = { \"write\":1, \"update\":1, \"create\":1, \"delete\":1, \"save\":1, \"insert\":1, \"put\":1, \"remove\":1, \"set\":1, \"push\":1, \"clear\":1, \"drop\":1, \"mutate\":1, \"add\":1 };\n"
-   "      var _readOps = { \"query\":1, \"fetch\":1, \"get\":1, \"read\":1, \"find\":1, \"filter\":1, \"all\":1, \"select\":1, \"search\":1, \"list\":1, \"exists\":1, \"load\":1, \"peek\":1, \"count\":1 };\n"
-   "      if (_scope.indexOf(\"reads=\") === 0 && _writeOps[op]) throw new Error(\"effect scope violation: \" + name + \".\" + op + \" outside \" + _scope);\n"
-   "      if (_scope.indexOf(\"writes=\") === 0 && _readOps[op]) throw new Error(\"effect scope violation: \" + name + \".\" + op + \" outside \" + _scope);\n"
+   "      if (_scope.indexOf(\"reads=\") === 0 && __writeOps[op]) throw new Error(\"effect scope violation: \" + name + \".\" + op + \" outside \" + _scope);\n"
+   "      if (_scope.indexOf(\"writes=\") === 0 && __readOps[op]) throw new Error(\"effect scope violation: \" + name + \".\" + op + \" outside \" + _scope);\n"
    "    }\n"
    "    var _perf = _ctx.performed;\n"
    "    if (!_perf[name]) _perf[name] = { any: 0 };\n"
@@ -687,13 +699,15 @@
    "  }\n"
    "}\n"
    "function __withEffects(row, fn) {\n"
-   "  var _valid = [\"may\", \"must\", \"must-not\"];\n"
+   "  var _valid = " (js-array (guard-modalities)) ";\n"
    "  for (var _k in row) {\n"
    "    var _e = row[_k];\n"
    "    var _m = _e.modality || \"may\";\n"
    "    if (_valid.indexOf(_m) === -1) throw new Error(\"invalid effect modality: \" + _m);\n"
    "    var _b = _e.max;\n"
    "    if (_b != null && (typeof _b !== \"number\" || _b < 0)) throw new Error(\"invalid effect budget: \" + _b);\n"
+   "    var _s = _e.scope;\n"
+   "    if (_s != null && (typeof _s !== \"string\" || (_s.indexOf(\"reads=\") !== 0 && _s.indexOf(\"writes=\") !== 0))) throw new Error(\"unsupported effect scope encoding: \" + _s);\n"
    "  }\n"
    "  function _check(frame) {\n"
    "    for (var _k in row) {\n"

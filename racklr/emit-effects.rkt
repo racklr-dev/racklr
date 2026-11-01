@@ -31,8 +31,7 @@
   effect-row-empty?
   render-effect-row
   render-effect-annotation
-  render-effect-documented
-  render-effect-names)
+  render-effect-documented)
 
 ;; Targets with a native effect vocabulary for function rows. A target absent
 ;; from this list has no function/effect surface at all (the JSON data target)
@@ -187,10 +186,6 @@
           (and (koka-row-lossy? row)
                (render-effect-documented target row))]
          [else #f])))
-
-;; The grantable effect names of a row in the target's native name form.
-(define (render-effect-names row)
-  (map effect-entry-name (grantable-entries row)))
 
 (module+ main
   (displayln "racklr/emit-effects — effect-row emit contract loaded."))

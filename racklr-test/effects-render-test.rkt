@@ -79,11 +79,11 @@
 ;; ── unknown is not a concrete effect ────────────────────────────────
 
 (let ([r (row (entry "llm") (entry "unknown" #:modality 'unknown))])
-  (check-equal? (render-effect-names r) '("llm")
-                "unknown entries are not materialized")
   (check-equal? (render-effect-row 'koka r) "<llm>"
                 "unknown entries do not reach the typed row")
-  (check-not-false (render-effect-row 'python r)
-                   "the concrete part of the row still renders"))
+  (check-false (string-contains? (render-effect-row 'python r) "unknown")
+               "unknown entries are not materialized")
+  (check-true (string-contains? (render-effect-row 'python r) "llm")
+              "the concrete part of the row still renders"))
 
 (displayln "All emit-contract tests passed.")
