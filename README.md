@@ -97,6 +97,12 @@ Effect rows give generated code a readable boundary: a function declares which c
 
 - `infer.rkt`: effect inference; composes rows up the call graph from annotations and known effects, and defers higher-order calls whose callee is not statically known.
 - `contract.rkt`: contract checking; subtyping between rows, budgets as upper bounds, and prohibitions.
+- `provenance.rkt` + `graph/provenance.rkt`: every inference run records the
+  evidence for each effect edge (classifying call site, source tokens, receiver
+  type, call chain) as structured data, projected into the typed hypergraph
+  substrate; `provenance-paths` answers "why is this function `db`" with the
+  exact caller→callee chain, and the projection refuses an effect edge with no
+  ground.
 - `python-annot.rkt`: Python annotation surface (`__effects__` attribute / decorator) extracted into a UIR effect row.
 - `clojure-annot.rkt`: Clojure annotation surface (`^{:effects ...}` metadata) extracted into a UIR effect row.
 
@@ -140,6 +146,7 @@ Run each suite directly from inside `racklr-test/`. `raco test racklr-test/*.rkt
 ```bash
 cd racklr-test
 racket effects-infer-test.rkt        # effect inference
+racket provenance-test.rkt           # effect-edge provenance + graph query
 racket effects-contract-test.rkt     # contract checking
 racket emit-contract-test.rkt        # emit contract + single dispatch
 racket effects-python-annot-test.rkt # Python effect annotations
@@ -156,6 +163,17 @@ racket uir-test.rkt                  # UIR types + serialization
 ```
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.
+
+Provenance completeness can also be checked over a real corpus (same submodule
+and grammar prerequisites as the shared baseline):
+
+```bash
+racket tools/provenance-corpus.rkt                 # django/django/core
+racket tools/provenance-corpus.rkt django/django   # wider probe
+```
+
+It prints the effect-edge and provenance counts and exits non-zero if any
+effect edge has no reachable ground; it never re-pins the baseline.
 
 ## Dependencies
 

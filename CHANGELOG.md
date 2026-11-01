@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Effect-edge provenance is first-class in the graph substrate. Inference
+  (`infer-effects`, `infer-effects-all`) optionally records every classifying
+  call site (tokens, receiver type, classification kind) and the inferred call
+  graph (`#:provenance-record`); `racklr/graph/provenance.rkt` projects it into
+  the typed hypergraph as `fn-effect`, `grounds`, and `call-site` edges.
+  `provenance-paths` returns the exact caller→callee chain for a given
+  function/effect edge, and the projection refuses an effect edge that no
+  ground can reach.
+- `racklr-test/provenance-test.rkt` covering direct, chained, receiver-typed,
+  unresolved, declared, recursive, and cross-file provenance, plus the
+  no-unprovenanced-edge invariant, a cross-check between the record-level and
+  atom-level reachability checks, and a projection-bug case (a dropped
+  call-site link).
+- `tools/provenance-corpus.rkt` runs the same completeness check over a real
+  Python corpus (default `django/django/core`) and reports the counts without
+  touching the shared baseline.
+
 - Tracked modern Python 3 grammar in `grammars/python3/` (`Python3Lexer.g4`,
   `Python3Parser.g4`). Adds assignment expressions (`:=`, PEP 572),
   positional-only parameters (`/`, PEP 570) in `def` and `lambda`, and PEP 695
