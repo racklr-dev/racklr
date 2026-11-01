@@ -18,6 +18,7 @@
  uir-let uir-let? uir-let-name uir-let-value uir-let-body
  uir-var uir-var? uir-var-name
  uir-set! uir-set!? uir-set!-name uir-set!-value
+ uir-walrus uir-walrus? uir-walrus-name uir-walrus-value
  uir-ann-set! uir-ann-set!? uir-ann-set!-lhs uir-ann-set!-type uir-ann-set!-value
  uir-if uir-if? uir-if-test uir-if-then uir-if-else
  uir-block uir-block? uir-block-stmts
@@ -31,6 +32,7 @@
  uir-decorated uir-decorated? uir-decorated-decorators uir-decorated-inner
  uir-get uir-get? uir-get-base uir-get-field
  uir-paren uir-paren? uir-paren-inner
+ uir-type-alias uir-type-alias? uir-type-alias-name uir-type-alias-type-params uir-type-alias-value
  ;; Pattern matching (match/case)
  uir-match uir-match? uir-match-subject uir-match-cases
  uir-case uir-case? uir-case-pattern uir-case-guard uir-case-body
@@ -119,6 +121,9 @@
 (struct uir-set! (name value) #:transparent)     ;; name: uir-symbol, value: uir?
 ;; Annotated assignment: x: int = 5 or x: int (no value)
 (struct uir-ann-set! (lhs type value) #:transparent)  ;; value can be #f for annotation-only
+;; Assignment expression (Python walrus): (name := value). Unlike uir-set! or
+;; uir-let this is an expression: it yields the assigned value where it appears.
+(struct uir-walrus (name value) #:transparent)  ;; name: uir-var/uir-symbol, value: uir?
 (struct uir-if (test then else) #:transparent)   ;; test/then/else: all uir?
 (struct uir-block (stmts) #:transparent)         ;; stmts: (listof uir?)
 (struct uir-return (value) #:transparent)        ;; value: uir?
@@ -149,6 +154,9 @@
 
 ;; Parenthesized expression
 (struct uir-paren (inner) #:transparent)
+;; PEP 695 type alias declaration: `type Name[TypeParams] = value`.
+;; name: uir-symbol, type-params: (listof uir-symbol), value: uir?
+(struct uir-type-alias (name type-params value) #:transparent)
 
 ;; ── Match/Case (Python 3.10+) ────────────────────────────────────
 

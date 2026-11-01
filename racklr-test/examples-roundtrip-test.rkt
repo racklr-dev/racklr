@@ -42,7 +42,7 @@
 ;; ── Parsers ─────────────────────────────────────────────────────────
 
 (define-values (py-parse py-tokenize py-tok-type py-tok-value)
-  (gen-and-load-py "../grammars-v4/python/python3/Python3Parser.g4"))
+  (gen-and-load-py "../grammars/python3/Python3Parser.g4"))
 (define py-mod-path (*last-module-path*))  ; capture before later loads overwrite it
 
 (define-values (js-parse js-tokenize js-tok-type js-tok-value)

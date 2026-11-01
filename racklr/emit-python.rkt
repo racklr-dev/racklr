@@ -27,6 +27,8 @@
                            (if (uir-ann-set!-value uir)
                                (string-append " = " (emit-expr (uir-ann-set!-value uir)))
                                "")))]
+        [(uir-type-alias? uir)
+         (string-append spc (emit-type-alias uir))]
         [(uir-if? uir)
           ;; Emit as ternary if both branches are expressions (not blocks)
           (if (and (not (uir-block? (uir-if-then uir)))
@@ -636,10 +638,30 @@
                 (string-append base-str "." (uir-string-value field))
                 (string-append base-str "[" (emit-expr field) "]")))]
         [(uir-paren? uir)
-          (string-append "(" (emit-expr (uir-paren-inner uir)) ")")]
+          ;; A walrus always renders parenthesized, so a source `(x := 1)`
+          ;; must not gain a second pair of parentheses.
+          (if (uir-walrus? (uir-paren-inner uir))
+              (emit-expr (uir-paren-inner uir))
+              (string-append "(" (emit-expr (uir-paren-inner uir)) ")"))]
+        [(uir-walrus? uir)
+          (string-append "(" (emit-expr (uir-walrus-name uir))
+                         " := " (emit-expr (uir-walrus-value uir)) ")")]
+        [(uir-type-alias? uir)
+          (emit-type-alias uir)]
         [(uir-spread? uir)
           (string-append "*(" (emit-expr (uir-spread-expr uir)) ")")]
         [else (format "<?~a>" (uir-tag uir))]))
+
+;; ── PEP 695 type alias emission ─────────────────────────────────────
+
+(define (emit-type-alias uir)
+  (define name (emit-expr (uir-type-alias-name uir)))
+  (define tps (uir-type-alias-type-params uir))
+  (define tp-str
+    (if (null? tps)
+        ""
+        (string-append "[" (string-join (map emit-expr tps) ", ") "]")))
+  (string-append "type " name tp-str " = " (emit-expr (uir-type-alias-value uir))))
 
 ;; ── Match/case emission ─────────────────────────────────────────────
 

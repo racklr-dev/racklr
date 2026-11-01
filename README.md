@@ -64,12 +64,22 @@ Supports: lexer modes, tokenVocab imports (auto-loads lexer grammar from same di
 Core tree types: `source-pos` struct (line, col, offset), `cst-node` (tag + children + range), `cst-leaf` (tag + text + range), and `any-tree?` predicate.
 
 ### uir.rkt
-Universal Intermediate Representation. Defines 40+ node types across Tier 0 (computational) and Tier 1 (OOP/module): `uir-null`, `uir-bool`, `uir-number`, `uir-string`, `uir-symbol`, `uir-list`, `uir-record`, `uir-var`, `uir-fn`, `uir-call`, `uir-if`, `uir-block`, `uir-return`, `uir-set!`, `uir-let`, `uir-while`, `uir-for-each`, `uir-try`, `uir-throw`, `uir-with`, `uir-class`, `uir-define-class`, `uir-get`, `uir-import`, `uir-export`, `uir-decorated`, `uir-fstring`, `uir-paren`, `uir-ternary`, `uir-spread`, `uir-new`, `uir-unary-op`, and 14 match/case pattern types. Schema documented in `docs/uir-schema.md`.
+Universal Intermediate Representation. Defines 40+ node types across Tier 0 (computational) and Tier 1 (OOP/module): `uir-null`, `uir-bool`, `uir-number`, `uir-string`, `uir-symbol`, `uir-list`, `uir-record`, `uir-var`, `uir-fn`, `uir-call`, `uir-if`, `uir-block`, `uir-return`, `uir-set!`, `uir-let`, `uir-while`, `uir-for-each`, `uir-try`, `uir-throw`, `uir-with`, `uir-class`, `uir-define-class`, `uir-get`, `uir-import`, `uir-export`, `uir-decorated`, `uir-fstring`, `uir-paren`, `uir-walrus`, `uir-type-alias`, `uir-ternary`, `uir-spread`, `uir-new`, `uir-unary-op`, and 14 match/case pattern types. Schema documented in `docs/uir-schema.md`.
 
 ### lower-python.rkt / emit-python.rkt (1,744 + 470 lines)
 Python 3 lowering and emit. Handles: functions (def, lambda, async, decorated), classes, for/while loops, try/except/finally, with, if/elif/else, match/case, return/yield/await, assignments (including augmented), imports, list/set/dict comprehensions, generators, f-strings, ternary expressions, all operators.
 
-Known limitations: walrus operator (`:=`) not in grammar; match/case class patterns and dotted-name value patterns hit parser edge cases.
+Modern Python 3 syntax is supported by the tracked grammar in `grammars/python3/`
+(the vendored `grammars-v4` Python3 grammar predates it): assignment expressions
+(`:=`, PEP 572), positional-only parameters (`/`, PEP 570) — in both `def` and
+`lambda` — and PEP 695 `type` alias statements, including generic aliases
+(`type ListOrSet[T] = list[T] | set[T]`).
+
+Known limitations: the positional-only marker is not represented in UIR, so it
+drops at emit (call shape is preserved; the emitted parameters are
+positional-or-keyword). Type-parameter bounds/defaults (`[T: int]`, `[T = int]`)
+parse and lower but only the parameter names survive to emit. Match/case class
+patterns and dotted-name value patterns hit parser edge cases.
 
 ### lower-javascript.rkt / emit-javascript.rkt (1,058 + 399 lines)
 JavaScript (ES2020) lowering and emit. Handles: function/arrow/async/generator functions, classes with methods/getters/setters, object/array literals, spread/rest, for/for-in/for-of/while/do-while, try/catch/throw, switch/case, break/continue, import/export, ternary, unary operators, `new`/`this`.
@@ -109,7 +119,7 @@ Recursive descent with backtracking. Each grammar rule becomes a `parse-XXX` fun
 
 ## Adding a New Language
 
-1. Find or create ANTLR4 `.g4` grammar files in `grammars-v4/<lang>/`
+1. Find or create ANTLR4 `.g4` grammar files. Pristine vendored grammars live in the untracked `grammars-v4/<lang>/` checkout; authored or modified grammars are tracked in `grammars/<lang>/` (see `grammars/koka/` and `grammars/python3/`)
 2. If using separate lexer/parser grammars, ensure `tokenVocab = <LexerName>` is set in the parser grammar
 3. Generate and test: `(parse-g4-file "grammars-v4/<lang>/<Lang>Parser.g4")` → `(generate-parser-module cst #:source-path path)`
 4. Write lowering pass: CST → UIR
@@ -129,6 +139,7 @@ racket lower-clojure-test.rkt        # Clojure lowering + emit
 racket lower-typescript-test.rkt     # TypeScript lowering
 racket tsx-integration-test.rkt      # TSX/React end-to-end
 racket lower-python-test.rkt         # Python lowering + emit
+racket modern-python-test.rkt        # modern Python: walrus, positional-only, type alias
 racket lower-javascript-test.rkt     # JavaScript lowering + emit
 racket gend-parser-test.rkt          # parser generator
 racket g4-parse-test.rkt             # grammar parser

@@ -39,6 +39,11 @@
         [(uir-ann-set!? v) `(ann-set! ,(uir->sexp (uir-ann-set!-lhs v))
                                       ,(uir->sexp (uir-ann-set!-type v))
                                       ,(uir->sexp (uir-ann-set!-value v)))]
+        [(uir-walrus? v) `(walrus ,(uir->sexp (uir-walrus-name v))
+                                   ,(uir->sexp (uir-walrus-value v)))]
+        [(uir-type-alias? v) `(type-alias ,(uir->sexp (uir-type-alias-name v))
+                                         ,(map uir->sexp (uir-type-alias-type-params v))
+                                         ,(uir->sexp (uir-type-alias-value v)))]
         [(uir-if? v) `(if ,(uir->sexp (uir-if-test v))
                           ,(uir->sexp (uir-if-then v))
                           ,(uir->sexp (uir-if-else v)))]
@@ -216,6 +221,8 @@
     [`(var ,n) (uir-var (sexp->uir n))]
     [`(set! ,n ,v) (uir-set! (sexp->uir n) (sexp->uir v))]
     [`(ann-set! ,lhs ,type ,value) (uir-ann-set! (sexp->uir lhs) (sexp->uir type) (sexp->uir value))]
+    [`(walrus ,n ,v) (uir-walrus (sexp->uir n) (sexp->uir v))]
+    [`(type-alias ,n ,tps ,v) (uir-type-alias (sexp->uir n) (map sexp->uir tps) (sexp->uir v))]
     [`(if ,tst ,thn ,els) (uir-if (sexp->uir tst) (sexp->uir thn) (sexp->uir els))]
     [`(block ,ss) (uir-block (map sexp->uir ss))]
     [`(return ,v) (uir-return (sexp->uir v))]
