@@ -96,7 +96,7 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-01, racklr `c349f37` + this change)
+## Baseline (observed 2026-11-01, racklr `8db186a` + this change)
 
 `django/django/core`:
 
@@ -124,15 +124,15 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3983   unknown functions: 3653   unknown files: 449
+unknown call sites: 3980   unknown functions: 3650   unknown files: 449
 
 receiver shapes: local 1126, param 736, self-attr 669, bare-call 507,
-                 chained 328, call-result 319, self-method 294, other 4
+                 chained 328, call-result 316, self-method 294, other 4
 local binding kinds (of 1126): call-result 453, unbound 232, loop-var 192,
                  attr 155, comp-var 59, literal 22, exception 9, alias 4
 
 levers:
-  return-type-projection    834    parameter-dataflow        736
+  return-type-projection    831    parameter-dataflow        736
   self-attr-typing          669    multi-level-chain         328
   bare-call-lexicon         299    mro-edge-resolution       294
   element-type-dataflow     272    unbound-binding-resolution 232
@@ -147,7 +147,7 @@ the census fits a small harness memory budget.
 
 The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the
 same 249 sites / 250 functions / 66 files and the same shape histogram on
-`django/django/core`, and the same 3983 / 3653 / 449 and the same shape and
+`django/django/core`, and the same 3980 / 3650 / 449 and the same shape and
 local-binding-kind histograms on `django/django`, so the census agrees with
 the diagnostic already used by the loop.
 
