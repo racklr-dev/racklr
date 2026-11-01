@@ -17,7 +17,7 @@ These are the non-negotiable contracts. A change that breaks one is not done, no
 
 ## Working expectations
 
-- Confirm the baseline is green before touching anything. Record the baseline hash you observed, then record it again after (with the graph diff when it moves).
+- Confirm the baseline before touching anything. Record the hash and the verdict you observed, then record both again after (with the graph diff when it moves). `baseline DRIFT` is a regression; `baseline COVERAGE-FAILED` is the open unknown-elimination obligation, not a pass.
 - Work in a plan-execute-verify loop. State the goal in one line, list the concrete steps, do one step, verify it, then move on.
 - Report only what you observed. Say plainly when you could not verify something.
 - A zero exit is not success. `raco test` is unreliable here. Grep the output for FAILURE and ERROR and read the real exit code.
@@ -55,7 +55,7 @@ The gate. Run it from the right working directory.
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`.
 - Baseline machinery: `cd racklr-test && racket baseline-check-test.rkt` (the content-addressing gate itself).
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt`. These must run from `effervesce/`; `check/verify-test.rkt` opens its fixture relative to the current directory.
-- The shared baseline: `racket tools/baseline-check.rkt` must print `baseline OK sha256:<hash>` and exit 0. `baseline/type-graph.snapshot` is the canonical serialization of the type-graph output and `baseline/type-graph.sha256` pins its hash; a mismatch prints the exact graph diff. A drift is a regression until proven otherwise, and re-pinning is a deliberate `racket tools/baseline-check.rkt --update` whose snapshot diff is the review.
+- The shared baseline and coverage verdict: `racket tools/baseline-check.rkt` prints exactly one verdict. `baseline OK sha256:<hash>` (exit 0) requires both a graph match and a discharged unknown-elimination obligation (zero unknown leaves); `baseline DRIFT` (exit 1) is a moved graph; `baseline COVERAGE-FAILED sha256:<hash>` (exit 3) is a matching graph with unknown leaves remaining; `baseline GATE-FAILED` (exit 4) is a vacuous non-vacuity control or a summary that disagrees with the named `fn-effect-row` witnesses. A run that passes every check is not a green gate while unknown leaves remain. `baseline/type-graph.snapshot` is the canonical serialization of the type-graph output and `baseline/type-graph.sha256` pins its hash; re-pinning is a deliberate `racket tools/baseline-check.rkt --update` whose snapshot diff is the review.
 - Two Python3 front-end suites are known to fail at the parse stage (`gen-python3-test.rkt`, `lower-python-test.rkt`) because of the `single_input` compound-statement limitation. Documented, not to be "fixed" as part of unrelated work.
 - No false greens. Never suppress a failing check to manufacture green.
 - No silent skips. A test that skips most of its assertions is a bug in the test, not a pass.

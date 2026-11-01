@@ -43,17 +43,32 @@ code.
 - Racklr suites: `cd racklr-test && racket <suite>-test.rkt`.
 - Effervesce suites: `cd effervesce && racket <suite>-test.rkt` (must run from
   `effervesce/`).
-- Shared baseline: `racket tools/baseline-check.rkt` must print
-  `baseline OK sha256:<hash>` and exit 0. The hash pins
-  `baseline/type-graph.snapshot`, the canonical serialization of the type-graph
-  output; a mismatch prints the exact graph diff. Drift is a regression until
-  proven otherwise, and re-pinning is a deliberate `--update` whose snapshot
-  diff is the review.
+- Shared baseline and coverage verdict: `racket tools/baseline-check.rkt`
+  prints exactly one verdict. Pass/fail and coverage are separate, so a run
+  that matches the pin is not green while its unknown-elimination obligation is
+  open.
+  - `baseline OK sha256:<hash>`, exit 0: the graph matches the pin and the
+    unknown-elimination obligation (Phase-0.3 bar: zero unknown leaves) is
+    discharged.
+  - `baseline DRIFT`, exit 1: the graph moved; the changed counters and the
+    exact atom lines added or removed are printed.
+  - `baseline COVERAGE-FAILED sha256:<hash>`, exit 3: the graph matches the pin
+    but unknown effect leaves remain.
+  - `baseline GATE-FAILED`, exit 4: a known-bad non-vacuity control was not
+    rejected, or the summary counters disagree with the named `fn-effect-row`
+    witnesses. Never green in this state.
+
+  The hash pins `baseline/type-graph.snapshot`, the canonical serialization of
+  the type-graph output; a mismatch prints the exact graph diff. Drift is a
+  regression until proven otherwise, and re-pinning is a deliberate `--update`
+  whose snapshot diff is the review.
 
 ## Working rules
 
-- Confirm the baseline is green before touching anything. Record the baseline
-  hash you observed before and after (with the graph diff when it moves).
+- Confirm the baseline before touching anything. Record the hash and the
+  verdict: `baseline DRIFT` is a regression, while `baseline COVERAGE-FAILED`
+  with the recorded unknown counts is the open Phase-0.3 obligation, not a
+  reason to re-pin. Record both again after the change.
 - Report only what you observed. Say plainly when you could not verify
   something. Never manufacture a green result or suppress a failing check.
 - Fix the underlying representation, not the symptom.

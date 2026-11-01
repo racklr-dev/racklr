@@ -1,6 +1,6 @@
 #lang racket
 
-;; tools/baseline-check.rkt — content-addressed shared baseline.
+;; tools/baseline-check.rkt — content-addressed shared baseline + coverage verdict.
 ;;
 ;; Usage (from the repository root, with the submodules initialised):
 ;;
@@ -15,7 +15,26 @@
 ;; lines that moved, so a drift review is a graph diff, not a judgment over
 ;; remembered integers.
 ;;
-;; Exit codes: 0 = matches (or was updated), 1 = drift, 2 = could not run.
+;; Pass/fail and coverage are separate verdicts (jolt-hegel OBSERVATIONS.md):
+;;
+;;   baseline OK sha256:<hash>               exit 0 — the graph matches the pin
+;;                                           and the unknown-elimination
+;;                                           obligation (Phase-0.3 bar: zero
+;;                                           unknown leaves) is discharged
+;;   baseline DRIFT                          exit 1 — the graph moved
+;;   baseline COVERAGE-FAILED sha256:<hash>  exit 3 — the graph matches the pin,
+;;                                           every check can pass, and unknown
+;;                                           leaves remain
+;;   baseline GATE-FAILED                    exit 4 — a non-vacuity control was
+;;                                           vacuous, or the summary counters
+;;                                           disagree with the named rows
+;;
+;; A run that passes every check but leaves unknown leaves is not green. The
+;; coverage counts are cross-checked against the named fn-effect-row witnesses
+;; in the graph, and the known-bad non-vacuity controls in
+;; tools/gate-controls.rkt must reject before any verdict is reported.
+;;
+;; Exit code 2 is "could not run".
 
 (require racket/cmdline
          racket/file
@@ -23,7 +42,9 @@
          racket/port
          racket/string
          racket/system
-         "baseline-snapshot.rkt")
+         "baseline-snapshot.rkt"
+         "coverage-verdict.rkt"
+         "gate-controls.rkt")
 
 (define default-probe-dirs '("django/django/core"))
 (define type-graph-relative "effervesce/tools/type-graph.rkt")
@@ -184,6 +205,28 @@
   (printf "  re-pin only if the graph change is intended: racket tools/baseline-check.rkt --update\n")
   (void))
 
+;; ── gate integrity and coverage verdict ─────────────────────────────
+
+;; A non-vacuity control failing is a hard gate failure: a gate that cannot
+;; prove it rejects a known-bad input must not be green.
+(define (gate-failed! message details)
+  (printf "baseline GATE-FAILED\n")
+  (printf "  :status :gate-failed\n")
+  (printf "  ~a\n" message)
+  (for ([detail (in-list details)])
+    (printf "  ~a\n" detail))
+  (exit 4))
+
+(define (print-coverage-detail! verdict)
+  (define census (coverage-verdict-census verdict))
+  (define obligation (coverage-verdict-obligation verdict))
+  (printf "  unknown functions: ~a (obligation: <= ~a)\n"
+          (coverage-census-unknown-functions census)
+          (coverage-obligation-unknown-functions obligation))
+  (printf "  unknown files: ~a (obligation: <= ~a)\n"
+          (coverage-census-unknown-files census)
+          (coverage-obligation-unknown-files obligation)))
+
 ;; ── main ────────────────────────────────────────────────────────────
 
 (define (main)
@@ -208,19 +251,68 @@
    (set! probe-dirs (if (null? dirs) default-probe-dirs dirs)))
   (define root (repo-root))
   (define probes-string (string-join probe-dirs " "))
+
+  ;; Gate integrity before any verdict: the known-bad controls must reject and
+  ;; the known-good controls must pass, or no verdict from this run is
+  ;; trustworthy.
+  (define controls (run-gate-controls))
+  (unless (gate-controls-ok? controls)
+    (gate-failed!
+     "a non-vacuity control was vacuous; the gate cannot prove it rejects a known-bad input"
+     (for/list ([control (in-list (gate-control-failures controls))])
+       (format "FAILED control: ~a — ~a"
+               (gate-control-name control)
+               (gate-control-detail control)))))
+
   (define-values (report atom-lines) (run-probe! root probe-dirs))
+
+  ;; The summary counters are the observation; the named fn-effect-row atoms are
+  ;; the witness. A disagreement means the unknown count is unknowable, so the
+  ;; gate fails closed instead of reporting either number as coverage.
+  (define observed-census (census-from-report report))
+  (define witness-census (census-from-atom-lines atom-lines))
+  (define disagreements (census-disagreements observed-census witness-census))
+  (unless (null? disagreements)
+    (gate-failed!
+     "the summary counters disagree with the named fn-effect-row witnesses"
+     (for/list ([disagreement (in-list disagreements)])
+       (format "~a: summary ~a, named rows ~a"
+               (first disagreement)
+               (second disagreement)
+               (third disagreement)))))
+  (define coverage (assess-coverage observed-census (p0-3-obligation)))
+
   (if update?
       (begin
         (print-update! root probes-string atom-lines report)
+        (printf "  coverage: ~a\n" (coverage-status-line coverage))
+        (printf "  ~a\n" (coverage-census->string observed-census))
         (exit 0))
       (let-values ([(pinned-text pinned-hash) (pinned-files root)])
         (define current-text (build-snapshot report atom-lines root probes-string))
         (define current-hash (snapshot-content-id current-text))
         (cond
           [(string=? current-hash pinned-hash)
-           (printf "baseline OK ~a\n" pinned-hash)]
+           (if (coverage-met? coverage)
+               (begin
+                 (printf "baseline OK ~a\n" pinned-hash)
+                 (printf "  :status :passed\n")
+                 (printf "  coverage: met\n")
+                 (print-coverage-detail! coverage)
+                 (exit 0))
+               (begin
+                 (printf "baseline COVERAGE-FAILED ~a\n" pinned-hash)
+                 (printf "  ~a\n" (coverage-status-line coverage))
+                 (printf "  graph: matches the pin (the pass/fail half is green)\n")
+                 (print-coverage-detail! coverage)
+                 (printf "  a run is not green while unknown leaves remain\n")
+                 (exit 3)))]
           [else
            (print-drift! pinned-text pinned-hash current-text current-hash max-diff)
+           (printf "  :status :failed\n")
+           (printf "  coverage at this revision: ~a\n"
+                   (coverage-status-line coverage))
+           (print-coverage-detail! coverage)
            (exit 1)]))))
 
 (module+ main

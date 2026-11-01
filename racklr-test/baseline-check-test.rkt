@@ -7,13 +7,16 @@
 ;;
 ;; Covers the pieces the content-addressed baseline rests on: SHA-256 against
 ;; the FIPS vectors, the canonical snapshot document (summary extraction, path
-;; rewriting, deterministic ordering, parsing) and the exact graph diff. The
-;; full end-to-end check (running type-graph over Django) is the shared
-;; baseline gate itself: `racket tools/baseline-check.rkt`.
+;; rewriting, deterministic ordering, parsing), the exact graph diff, and the
+;; coverage verdict that keeps a passing run from being a green gate while
+;; unknown leaves remain. The full end-to-end check (running type-graph over
+;; Django) is the shared baseline gate itself: `racket tools/baseline-check.rkt`.
 
 (require rackunit
          "../tools/sha256.rkt"
-         "../tools/baseline-snapshot.rkt")
+         "../tools/baseline-snapshot.rkt"
+         "../tools/coverage-verdict.rkt"
+         "../tools/gate-controls.rkt")
 
 ;; ── fixtures ────────────────────────────────────────────────────────
 
@@ -160,6 +163,101 @@
   (check-true (string-contains? (first removed) "Base"))
   (check-true (string-contains? (first added) "ExtraBase")))
 
+;; ── coverage verdict (pass/fail is separate from coverage) ──────────
+
+;; The Phase-0.3 bar, written down: zero unknown leaves. A run can pass the
+;; graph comparison and still be :coverage-failed. These fixtures are the
+;; known-bad and known-good inputs that keep that verdict from being vacuous.
+
+(define clean-entry
+  (string-append
+   "(EffectLink (ConceptNode db) (ConceptNode may)"
+   " (ConceptNode ()) (ConceptNode #f) (ConceptNode #f))"))
+
+(define unknown-entry
+  (string-append
+   "(EffectLink (ConceptNode unknown) (ConceptNode unknown)"
+   " (ConceptNode ()) (ConceptNode #f) (ConceptNode #f))"))
+
+(define (fn-row-atom file name entries)
+  (string-append "(Fn-effect-rowLink (ConceptNode \"" file "::" name "\") "
+                 (string-join entries " ")
+                 ")"))
+
+;; Two unknown functions in one file, plus one clean row.
+(define known-bad-witness-lines
+  (list (fn-row-atom "django/core/a.py" "f" (list unknown-entry))
+        (fn-row-atom "django/core/a.py" "g" (list unknown-entry))
+        (fn-row-atom "django/core/b.py" "h" (list clean-entry))))
+
+(define known-good-witness-lines
+  (list (fn-row-atom "django/core/a.py" "f" (list clean-entry))))
+
+(define (census-report unknown-functions unknown-files)
+  (string-append
+   "=== scoreboard (R1) ===\n"
+   (format "unknown functions:      ~a\n" unknown-functions)
+   (format "unknown files:          ~a\n" unknown-files)))
+
+(define (test-obligation-is-p0-3-zero-unknown-leaves)
+  (define obligation (p0-3-obligation))
+  (check-equal? (coverage-obligation-unknown-functions obligation) 0)
+  (check-equal? (coverage-obligation-unknown-files obligation) 0)
+  (check-true (coverage-met? (assess-coverage (coverage-census 0 0) obligation)))
+  ;; A decrease is an observation, not a discharged obligation.
+  (check-true (coverage-failed? (assess-coverage (coverage-census 1 0) obligation)))
+  (check-true (coverage-failed? (assess-coverage (coverage-census 0 1) obligation))))
+
+(define (test-coverage-verdict-is-distinct-from-pass-fail)
+  (define obligation (p0-3-obligation))
+  (define failed (assess-coverage (coverage-census 250 66) obligation))
+  (check-equal? (coverage-verdict-status failed) 'coverage-failed)
+  (check-true (coverage-failed? failed))
+  (check-false (coverage-met? failed))
+  (check-equal? (coverage-status-line failed) ":status :coverage-failed")
+  (check-equal? (coverage-status-line (assess-coverage (coverage-census 0 0) obligation))
+                ":status :met"))
+
+(define (test-census-from-report-reads-counters)
+  (define census (census-from-report (census-report 250 66)))
+  (check-equal? (coverage-census-unknown-functions census) 250)
+  (check-equal? (coverage-census-unknown-files census) 66))
+
+(define (test-census-from-report-missing-counter-fails-closed)
+  ;; A report that lost its unknown counter must raise, not read as zero.
+  (check-exn exn:fail?
+             (λ () (census-from-report "unknown functions: 3\n"))))
+
+(define (test-census-from-atom-lines-counts-named-rows)
+  (define census (census-from-atom-lines known-bad-witness-lines))
+  (check-equal? (coverage-census-unknown-functions census) 2)
+  (check-equal? (coverage-census-unknown-files census) 1)
+  ;; Named rows, not a percentage: one clean row does not dilute a bad one.
+  (check-equal? (census-from-atom-lines (list (first known-bad-witness-lines)
+                                              (first known-good-witness-lines)))
+                (coverage-census 1 1)))
+
+(define (test-observation-and-witness-disagreement-is-detected)
+  (define observed (census-from-report (census-report 0 0)))
+  (define witness (census-from-atom-lines known-bad-witness-lines))
+  (define disagreements (census-disagreements observed witness))
+  (check-equal? (length disagreements) 2)
+  (check-equal? (map car disagreements) '(unknown-functions unknown-files))
+  (check-equal? (census-disagreements observed observed) '()))
+
+(define (test-non-vacuity-controls-can-reject-and-accept)
+  (define controls (run-gate-controls))
+  (check-true (gate-controls-ok? controls))
+  (check-true (>= (length controls) 4))
+  ;; The known-bad control must exist and must be the one that is allowed to
+  ;; fail; a green gate that cannot produce :coverage-failed proves nothing.
+  (define bad-control
+    (findf (λ (c) (string-contains? (gate-control-name c) "known-bad"))
+           controls))
+  (check-not-false bad-control)
+  (check-true (gate-control-passed? bad-control))
+  (check-true (string-contains? (gate-control-detail bad-control) ":coverage-failed")))
+
 (module+ main
   (test-sha256-fips-vectors)
   (test-bytes->hex-pads-single-digits)
@@ -176,4 +274,11 @@
   (test-parse-without-header-marker-fails)
   (test-diff-of-identical-snapshots-is-empty)
   (test-diff-reports-summary-and-body-changes)
+  (test-obligation-is-p0-3-zero-unknown-leaves)
+  (test-coverage-verdict-is-distinct-from-pass-fail)
+  (test-census-from-report-reads-counters)
+  (test-census-from-report-missing-counter-fails-closed)
+  (test-census-from-atom-lines-counts-named-rows)
+  (test-observation-and-witness-disagreement-is-detected)
+  (test-non-vacuity-controls-can-reject-and-accept)
   (displayln "All baseline-check tests passed."))
