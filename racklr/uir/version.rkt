@@ -1,7 +1,11 @@
 #lang racket
 
-(require json)
-(require "serialize.rkt")
+(require json
+         "serialize.rkt"
+         "types.rkt"
+         "kernel.rkt"
+         "schema-io.rkt"
+         "schema-data.rkt")
 
 (provide
  UIR-SCHEMA-VERSION
@@ -18,7 +22,11 @@
 ;; The bare `uir->sexp` / `sexp->uir` pair stays version-free: it is the
 ;; in-memory representation the hypergraph and the checkers consume.
 
-(define UIR-SCHEMA-VERSION 1)
+;; The payload version is declared by the schema value itself (single
+;; source of truth); the hand-written kernel checks that the schema value it
+;; loads is a schema it supports. Bumping the version in schema-data.rkt is
+;; therefore a schema-version event, not a constant edit in two places.
+(define UIR-SCHEMA-VERSION (uir-schema-version UIR-SCHEMA))
 
 ;; from-version -> (payload-sexp -> payload-sexp)
 (define uir-migrations (make-hasheqv))
@@ -33,6 +41,11 @@
     (error 'register-uir-migration! "migration must be a procedure, got ~e" migrate))
   (hash-set! uir-migrations from-version migrate))
 
+;; v2 adds the optional trailing `typed-param` parameter-kind slot. A version-1
+;; payload is valid as-is (the reader fills the kind with #f), so the v1 -> v2
+;; migration is the identity.
+(register-uir-migration! 1 (lambda (payload) payload))
+
 (define (migrate-uir-payload payload from-version [migrations uir-migrations])
   (let loop ([p payload] [v from-version])
     (if (>= v UIR-SCHEMA-VERSION)
@@ -44,10 +57,10 @@
                    v (add1 v)))
           (loop (step p) (add1 v))))))
 
-(define (uir->versioned-sexp v)
-  `(uir ,UIR-SCHEMA-VERSION ,(uir->sexp v)))
+(define (uir->versioned-sexp v [layouts UIR-LAYOUTS])
+  `(uir ,UIR-SCHEMA-VERSION ,(uir->sexp v layouts)))
 
-(define (versioned-sexp->uir s [migrations uir-migrations])
+(define (versioned-sexp->uir s [migrations uir-migrations] [layouts UIR-LAYOUTS])
   (match s
     [`(uir ,version ,payload)
      (unless (and (exact-nonnegative-integer? version)
@@ -55,10 +68,14 @@
        (error 'versioned-sexp->uir
               "unsupported UIR schema version ~e (current: ~a)"
               version UIR-SCHEMA-VERSION))
-     (sexp->uir (migrate-uir-payload payload version migrations))]
+     (sexp->uir (migrate-uir-payload payload version migrations) layouts)]
     [_ (error 'versioned-sexp->uir "not a versioned UIR s-expression: ~e" s)]))
 
 ;; ── JSON encoding (versioned) ──────────────────────────────────────
+;;
+;; The writer is generic: symbols become JSON strings. The reader is
+;; schema-aware (schema-io.rkt): it restores symbols in `symbol` field
+;; positions, so JSON round trips hold for every schema-declared node kind.
 
 (define (uir-sexp->jsexpr s)
   (cond [(symbol? s) (symbol->string s)]
@@ -66,29 +83,9 @@
         [(pair? s) (cons (uir-sexp->jsexpr (car s)) (uir-sexp->jsexpr (cdr s)))]
         [else s]))
 
-(define uir-tag-set (set 'uir 'null 'bool 'number 'string 'fstring 'list 'record 'symbol
-                         'fn 'call 'let 'var 'set! 'ann-set! 'walrus 'type-alias 'if 'block 'return 'for-each 'while 'try 'with 'await 'yield 'decorated 'get 'paren
-                         'class 'method 'field 'new 'interface 'module 'import 'export 'enum 'enum-variant
-                         'component 'element 'attribute 'event 'slot 'text-node 'style 'effect 'state 'jsx-expr 'spread
-                         'effect-row 'effect-entry 'subtype 'effect-decl 'effect-op 'effect-handler
-                         'match 'case 'pat-literal 'pat-capture 'pat-wildcard 'pat-value 'pat-or 'pat-as
-                         'pat-sequence 'pat-star 'pat-mapping 'pat-double-star 'pat-class 'pat-group
-                         'eff-system 'eff-capability 'eff-capability-op 'eff-ref 'eff-given 'eff-handler
-                         'eff-component 'eff-state 'eff-action 'eff-invariant 'eff-policy))
+(define (uir->json v [layouts UIR-LAYOUTS])
+  (jsexpr->string (uir-sexp->jsexpr (uir->versioned-sexp v layouts))))
 
-(define (uir-jsexpr->sexp j)
-  (match j
-    [(? list? l)
-     (if (and (pair? l) (string? (car l))
-              (set-member? uir-tag-set (string->symbol (car l))))
-         (cons (string->symbol (car l))
-               (map uir-jsexpr->sexp (cdr l)))
-         (map uir-jsexpr->sexp l))]
-    [(? pair? p) (cons (uir-jsexpr->sexp (car p)) (uir-jsexpr->sexp (cdr p)))]
-    [_ j]))
-
-(define (uir->json v)
-  (jsexpr->string (uir-sexp->jsexpr (uir->versioned-sexp v))))
-
-(define (json->uir jstr)
-  (versioned-sexp->uir (uir-jsexpr->sexp (string->jsexpr jstr))))
+(define (json->uir jstr [layouts UIR-LAYOUTS])
+  (versioned-sexp->uir (jsexpr->uir-sexp (string->jsexpr jstr) layouts)
+                       uir-migrations layouts))

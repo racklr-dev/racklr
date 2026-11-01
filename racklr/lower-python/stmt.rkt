@@ -728,7 +728,8 @@
       (set! result
             (cons (uir-typed-param (uir-typed-param-name (car result))
                                    (uir-typed-param-type (car result))
-                                   d)
+                                   d
+                                   #f)
                   (cdr result)))))
   (define (default-test node)
     ;; node is a (group ASSIGN test) default: return the lowered test or #f.
@@ -810,7 +811,8 @@
                          (lower-expr (first gk) tk-type tk-value))))))))
   (uir-typed-param (uir-symbol (or name "?"))
                    (or type-expr #f)
-                   (or default-expr default-from-list #f)))
+                   (or default-expr default-from-list #f)
+                   #f))
 
 ;; Lower lambdef into uir-fn (anonymous function)
 (define (lower-suite cst tk-type tk-value)

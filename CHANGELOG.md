@@ -25,7 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/provenance-corpus.rkt` runs the same completeness check over a real
   Python corpus (default `django/django/core`) and reports the counts without
   touching the shared baseline.
-
+- The UIR schema is now self-describing data: `UIR-SCHEMA` in
+  `racklr/uir/schema-data.rkt` is a UIR value declaring every node kind, field,
+  and codec, and the hand-written, versioned kernel
+  (`racklr/uir/kernel.rkt`, `schema-io.rkt`, `schema-check.rkt`,
+  `schema-macro.rkt`) generates the node kinds from it. The schema validates
+  against its own declarations and round-trips through its own serialization
+  using only the hand-written kernel layouts. Adding a node kind is a
+  schema-value edit.
+- `typed-param` carries an optional parameter-kind payload slot
+  (`#f`, `kw-only`, `var-positional`, `var-keyword`) expressed as a trailing
+  defaulted schema field (`param-kind` codec). UIR payload version 2 adds the
+  slot; the v1 -> v2 migration is the identity, so version-1 payloads stay
+  readable. This is the UIR-layer part of the parameter-marker work landing
+  separately; constructors are exact-arity, so call sites pass `#f` explicitly.
 - Tracked modern Python 3 grammar in `grammars/python3/` (`Python3Lexer.g4`,
   `Python3Parser.g4`). Adds assignment expressions (`:=`, PEP 572),
   positional-only parameters (`/`, PEP 570) in `def` and `lambda`, and PEP 695
@@ -60,7 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open blockers: all twelve front-end blockers are marked resolved, the latest
   whole-tree scan is 907/907 `ok` with 0 blockers, and the measurement command
   runs from the tracked grammar instead of the untracked `grammars-v4/` tree.
-
+- UIR node kinds are generated from the schema value instead of hand-written
+  struct definitions (`racklr/uir/types.rkt` is now the loader/validator for
+  the schema). The generated structs are `#:transparent` and exported through
+  `struct-out`, so `match` and `struct-copy` work on the public bindings.
+- `json->uir` now restores `symbol`-typed fields as symbols rather than
+  strings (method visibility, effect-entry modality, effect-policy kind,
+  node-kind kind, schema-field name/type, and parameter-kind slots). JSON round
+  trips now hold for every schema-declared kind.
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.
@@ -83,6 +103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract row. A row on a Koka function with no declared result type is emitted
   as the documented comment alone, because the grammar only accepts `<effects>`
   in front of a result type.
+
+### Fixed
+
+- `json->uir` previously could not read a `typed-param` payload at all: the
+  tag was missing from the JSON tag set, so any function with parameters failed
+  to round-trip through JSON. The tag set is now derived from the schema
+  layouts, covering every declared kind.
 
 ## [0.1.0rc1] - 2026-06-23
 

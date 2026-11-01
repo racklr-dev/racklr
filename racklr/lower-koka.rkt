@@ -174,6 +174,7 @@
   (define kt (and grp (find-node-child grp 'ktype)))
   (uir-typed-param (uir-symbol (tk-value (token-with-type p tk-type 'IDENT)))
                    (if kt (lower-ktype kt tk-type tk-value) #f)
+                   #f
                    #f))
 
 (define (lower-ktype node tk-type tk-value)

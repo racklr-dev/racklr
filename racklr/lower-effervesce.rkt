@@ -322,7 +322,7 @@
   (define g (find-node-child n 'group))
   (define type (and g (let ([t (find-node-child g 'type_)])
                         (and t (uir-symbol (type-text t tv))))))
-  (uir-typed-param name type #f))
+  (uir-typed-param name type #f #f))
 
 ;; The `('->' type_)?` clause, which the parser wraps in a `group` node.
 (define (lower-arrow-type n tv)

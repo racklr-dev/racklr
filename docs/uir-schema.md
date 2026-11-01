@@ -4,13 +4,71 @@ The UIR is a three-tier intermediate representation for cross-language transpila
 Tier 0 (Core) captures computational semantics. Tier 1 (OOP/Module) adds object-oriented
 and module-system constructs. Tier 2 (UI Component) models declarative component trees.
 
-Currently implemented: **Tier 0** (partial — the subset needed for JSON).
+## Schema as data
+
+The schema is written in UIR itself. `UIR-SCHEMA` (`racklr/uir/schema-data.rkt`) is
+a `uir-schema` node holding one `uir-node-kind` per node type; every node kind
+records its tag, its Racket constructor name, and one `uir-schema-field` per
+field. A field records its name and its **codec** — the field's type, one of
+`UIR-FIELD-CODECS` in `racklr/uir/kernel.rkt` (`uir`, `list-uir`, `spliced-uir`,
+`optional-uir`, `spliced-pair-uir`, `catch-list`, `with-item-list`,
+`handler-op-list`, `eff-op-list`, `text`, `raw`, `bool`, `string`, `symbol`,
+`name`, `param-kind`, `int`, and the optional/marker variants).
+
+The bootstrap is a fixed point, not a special case:
+
+- The **hand-written, versioned kernel** owns the vocabulary the schema is
+  written in: the three bootstrap node kinds `schema`, `node-kind`, and
+  `schema-field`; the codecs; and the generic reader/writer. It lives in
+  `racklr/uir/kernel.rkt` (vocabulary and layouts), `schema-io.rkt` (generic
+  serialization), `schema-check.rkt` (validation), and `schema-macro.rkt` (the
+  code generator). `UIR-KERNEL-VERSION` versions it.
+- The code generator (`schema-macro.rkt`) synthesises, from the schema value,
+  every other struct, constructor, predicate, accessor, and serialization
+  layout. `racklr/uir/types.rkt` is only "load schema, validate, generate".
+- `check-schema!` validates the schema value **under the declarations it itself
+  contains**, and checks the kernel-owned declarations against the hand-written
+  `KERNEL-LAYOUTS`. The schema value also round-trips through its own
+  serialization using only the kernel layouts, which is the fixed point: the
+  trust root reads and writes the schema without the generated vocabulary.
+- Adding a node kind is an addition to the schema value only. Append a
+  `(uir-node-kind ...)` declaration (or pass an extended schema value to the
+  generator) and the constructor, predicate, accessors, and serialization come
+  with it. `racklr-test/uir-test.rkt` proves this with a `demo` node kind added
+  to an extended schema value, no core struct definition touched. The
+  generator is a macro, so after editing the schema value rebuild with
+  `raco make` (or `raco setup`); a stale `.zo` would keep the old vocabulary.
+
+The schema value declares the payload `version` (re-exported as
+`UIR-SCHEMA-VERSION`, used by the migration path below) and the
+`kernel-version` it requires; `check-schema!` refuses a kernel mismatch.
+Version 2 added the optional trailing `typed-param` parameter-kind slot; the
+v1 -> v2 migration is the identity because the reader fills the missing slot
+with `#f`.
+
+### Fields default to payload compatibility, not constructor arity
+
+An `uir-schema-field` is `(name codec default-marker)`. The marker is
+`required` or `false` (the field's default value is Racket `#f`). Only a
+**trailing suffix** of fields may be defaulted. The serialized payload omits
+trailing fields that hold their default value, and the reader fills them back
+in, so older payloads stay readable (`typed-param`'s `kind` slot is the first
+use: a legacy three-element payload reads as kind `#f`).
+
+Every kind stays a flat, transparent Racket struct and its generated
+constructor is **exact-arity** — one positional argument per field. A default
+marker never makes a constructor argument optional; call sites pass every
+field explicitly. Adding a kind with a defaulted field or a field of a new
+codec is still a schema-data edit for the kind itself; new *codecs* are kernel
+work and bump `UIR-KERNEL-VERSION`.
 
 ## Node types
 
-All UIR node types are defined as Racket structs in `uir.rkt`. They are transparent
-(`#:transparent`) and support round-trip serialization via `uir->sexp` / `sexp->uir`
-and `uir->json` / `json->uir`.
+Every UIR node type is a transparent (`#:transparent`) Racket struct. The
+structs, constructors, predicates, and accessors are generated from the schema
+value, so the tables below describe `UIR-SCHEMA` as well as the public
+procedures. All nodes support round-trip serialization via `uir->sexp` /
+`sexp->uir` and `uir->json` / `json->uir`.
 
 ### `uir-null`
 

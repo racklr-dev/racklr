@@ -132,7 +132,7 @@
 (define (test-higher-order-unknown)
   ;; A call through a parameter (cb) is deferred: entry named unknown.
   (define p (prog (fn "k" (uir-call (v "cb") (list (uir-number "1")))
-                      #:params (list (uir-typed-param (sym "cb") #f #f)))))
+                      #:params (list (uir-typed-param (sym "cb") #f #f #f)))))
   (define r (hash-ref (infer-effects p) 'k))
   (check-equal? (modality r 'unknown) 'unknown)
   (check-equal? (row-names r) '(unknown)))
@@ -893,8 +893,8 @@
      (uir-class (uir-symbol "Wrapper") '() '()
                 (list
                  (uir-method (uir-symbol "__init__")
-                             (list (uir-typed-param (uir-symbol "self") #f #f)
-                                   (uir-typed-param (uir-symbol "inner") #f #f))
+                             (list (uir-typed-param (uir-symbol "self") #f #f #f)
+                                   (uir-typed-param (uir-symbol "inner") #f #f #f))
                              (uir-set! (uir-get (v "self") (sym "inner")) (v "inner"))
                              'public)
                  (uir-method (uir-symbol "run") '()
@@ -920,8 +920,8 @@
                (list
                 (py-method "value" (uir-call (dot (v "db") "commit") '()))
                 (uir-method (uir-symbol "copy_from")
-                            (list (uir-typed-param (uir-symbol "self") #f #f)
-                                  (uir-typed-param (uir-symbol "other") #f #f))
+                            (list (uir-typed-param (uir-symbol "self") #f #f #f)
+                                  (uir-typed-param (uir-symbol "other") #f #f #f))
                             (uir-call (dot (v "other") "value") '())
                             'public)
                 (py-method "dup"
@@ -1041,14 +1041,14 @@
      (py-class "Command"
                (list
                 (uir-method (uir-symbol "handle")
-                            (list (uir-typed-param (uir-symbol "self") #f #f))
+                            (list (uir-typed-param (uir-symbol "self") #f #f #f))
                             (prog (uir-set! (v "loader") (uir-call (v "MigrationLoader") '()))
                                   (uir-call (dot (v "self") "handle_merge")
                                             (list (v "loader"))))
                             'public)
                 (uir-method (uir-symbol "handle_merge")
-                            (list (uir-typed-param (uir-symbol "self") #f #f)
-                                  (uir-typed-param (uir-symbol "loader") #f #f))
+                            (list (uir-typed-param (uir-symbol "self") #f #f #f)
+                                  (uir-typed-param (uir-symbol "loader") #f #f #f))
                             (uir-call (dot (v "loader") "get_migration")
                                       (list (uir-string "app")))
                             'public)))))
@@ -1072,8 +1072,8 @@
      (py-class "Command"
                (list
                 (uir-method (uir-symbol "find_migration")
-                            (list (uir-typed-param (uir-symbol "self") #f #f)
-                                  (uir-typed-param (uir-symbol "loader") (v "MigrationLoader") #f))
+                            (list (uir-typed-param (uir-symbol "self") #f #f #f)
+                                  (uir-typed-param (uir-symbol "loader") (v "MigrationLoader") #f #f))
                             (uir-call (dot (v "loader") "get_migration_by_prefix")
                                       (list (uir-string "app") (uir-string "0001")))
                             'public)))))
@@ -1407,7 +1407,7 @@
   (define models (prog (py-class "QuerySet" (list (py-method "filter" (uir-null))))))
   (define app
     (prog (uir-fn (uir-symbol "run")
-                  (list (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f))
+                  (list (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f #f))
                   (uir-call (dot (v "qs") "filter") '())
                   #f #f)))
   (define env
@@ -1427,7 +1427,7 @@
     (prog (py-class "Command"
                     (list (uir-method (uir-symbol "handle")
                                       (list (uir-symbol "self")
-                                            (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f))
+                                            (uir-typed-param (uir-symbol "qs") (v "QuerySet") #f #f))
                                       (uir-call (dot (v "qs") "filter") '())
                                       'public)))))
   (define r2 (hash-ref (infer-effects-all (list (cons "models.py" models)

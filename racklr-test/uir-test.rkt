@@ -567,6 +567,8 @@
           [else p]))
   (define migrations (make-hasheqv))
   (hash-set! migrations 0 v0->v1)
+  ;; v1 -> v2 is the identity (v2 only adds a trailing defaulted payload slot).
+  (hash-set! migrations 1 (lambda (p) p))
   (check-equal? (migrate-uir-payload '(number "42") UIR-SCHEMA-VERSION migrations)
                 '(number "42")
                 "migration at current version is a no-op")
@@ -624,7 +626,224 @@
   (check-equal? (uir-tag (uir-effect-entry (uir-symbol "e") 'may '() #f #f)) 'effect-entry)
   (check-equal? (uir-tag (uir-subtype (uir-effect-row '()) (uir-effect-row '()))) 'subtype))
 
+;; ── Optional parameter kinds (trailing defaulted payload field) ────
+
+(define (test-typed-param-construction)
+  (define p (uir-typed-param (uir-symbol "x") (uir-symbol "int") #f 'kw-only))
+  (check-true (uir? p) "uir-typed-param satisfies uir?")
+  (check-equal? (uir-tag p) 'typed-param "uir-typed-param tag is 'typed-param")
+  (check-equal? (uir-symbol-name (uir-typed-param-name p)) "x" "uir-typed-param name")
+  (check-equal? (uir-symbol-name (uir-typed-param-type p)) "int" "uir-typed-param type")
+  (check-false (uir-typed-param-default p) "uir-typed-param default is #f")
+  (check-equal? (uir-typed-param-kind p) 'kw-only "uir-typed-param kind")
+  (check-equal? (uir-typed-param-kind
+                 (uir-typed-param (uir-symbol "y") #f #f #f))
+                #f
+                "a parameter without a kind reads back as #f"))
+
+(define (test-typed-param-serialization)
+  ;; The kind field is trailing and defaulted: the payload omits it at #f and
+  ;; writes it as a string otherwise, so JSON's symbol/string mapping keeps it.
+  (define with-kind (uir-typed-param (uir-symbol "x") #f #f 'var-positional))
+  (define without-kind (uir-typed-param (uir-symbol "x") #f #f #f))
+  (check-equal? (uir->sexp without-kind)
+                '(typed-param (symbol "x") #f #f)
+                "defaulted kind field is omitted from the sexp payload")
+  (check-equal? (uir->sexp with-kind)
+                '(typed-param (symbol "x") #f #f "var-positional")
+                "a set kind serializes as a string")
+  (check-equal? (sexp->uir (uir->sexp with-kind)) with-kind
+                "typed-param sexp round trip")
+  (check-equal? (json->uir (uir->json with-kind)) with-kind
+                "typed-param JSON round trip")
+  (check-equal? (uir->json with-kind)
+                "[\"uir\",2,[\"typed-param\",[\"symbol\",\"x\"],false,false,\"var-positional\"]]"
+                "typed-param JSON payload")
+  ;; Legacy payloads stay readable: the v2 payload extension is the optional
+  ;; trailing kind, and the v1 -> v2 migration is the identity.
+  (check-equal? (sexp->uir '(typed-param (symbol "x") #f #f)) without-kind
+                "three-element typed-param payload fills kind = #f")
+  (check-equal? (versioned-sexp->uir '(uir 1 (typed-param (symbol "x") #f #f)))
+                without-kind
+                "v1 payload is read through the identity migration")
+  (check-equal? (versioned-sexp->uir (uir->versioned-sexp with-kind)) with-kind
+                "current versioned payload round trip")
+  ;; The kind domain is closed.
+  (check-exn exn:fail?
+             (lambda () (sexp->uir '(typed-param (symbol "x") #f #f "bogus")))
+             "an unknown parameter kind is refused when reading sexp")
+  (check-exn exn:fail?
+             (lambda ()
+               (json->uir
+                "[\"uir\",2,[\"typed-param\",[\"symbol\",\"x\"],false,false,\"bogus\"]]"))
+             "an unknown parameter kind is refused when reading JSON"))
+
+(define (test-schema-field-defaults)
+  ;; The typed-param kind slot is described as data: a trailing `param-kind`
+  ;; field with a #f default.
+  (define d (schema-kind-decl-by-tag UIR-SCHEMA 'typed-param))
+  (check-equal? (schema-kind-field-names d) '(name type default kind)
+                "typed-param schema fields")
+  (check-equal? (schema-kind-field-codecs d)
+                '(uir optional-uir optional-uir param-kind)
+                "typed-param schema codecs")
+  (check-equal? (schema-kind-field-defaults d)
+                '(required required required false)
+                "typed-param schema default markers")
+  (define l (layout-by-tag 'typed-param UIR-LAYOUTS))
+  (check-equal? (uir-layout-defaults l) '(required required required false)
+                "the generated layout carries the default markers")
+  ;; Defaulted fields must be a trailing suffix, must be #f-defaultable codecs,
+  ;; and must use a known marker.
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema!
+                (schema-append-kind
+                 UIR-SCHEMA 'bad-defaulted 'uir-bad-defaulted #f
+                 '((a uir required) (b optional-uir false) (c uir required)))))
+             "a required field after a defaulted field is refused")
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema!
+                (schema-append-kind
+                 UIR-SCHEMA 'bad-defaulted 'uir-bad-defaulted #f
+                 '((a uir nonsense)))))
+             "an unknown default marker is refused")
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema!
+                (schema-append-kind
+                 UIR-SCHEMA 'bad-defaulted 'uir-bad-defaulted #f
+                 '((a uir false)))))
+             "a non-#f-defaultable codec cannot default to #f"))
+
+;; ── The schema as self-describing UIR data ─────────────────────────
+
+(define (test-schema-is-uir-data)
+  ;; The schema is a UIR value: node kinds, fields, and types are data.
+  (check-true (uir? UIR-SCHEMA) "the schema value is a UIR node")
+  (check-equal? (uir-tag UIR-SCHEMA) 'schema "the schema value's UIR tag")
+  (check-true (uir-schema? UIR-SCHEMA) "the schema value is a uir-schema")
+  (check-true (> (length (schema-kind-decls UIR-SCHEMA)) 80)
+              "the schema declares every node kind")
+  (check-true (uir? (first (schema-kind-decls UIR-SCHEMA)))
+              "node kind declarations are themselves UIR data")
+  ;; The fixed point: the hand-written kernel alone writes the schema to UIR
+  ;; data and reads it back to the identical value. KERNEL-LAYOUTS knows only
+  ;; the bootstrap vocabulary, so this needs no generated layout.
+  (check-equal? (sexp->uir (uir->sexp UIR-SCHEMA KERNEL-LAYOUTS) KERNEL-LAYOUTS)
+                UIR-SCHEMA
+                "kernel-only UIR round trip of the schema value")
+  ;; With the full registry the schema round-trips as ordinary UIR data.
+  (check-equal? (sexp->uir (uir->sexp UIR-SCHEMA)) UIR-SCHEMA
+                "full UIR round trip of the schema value")
+  (check-equal? (json->uir (uir->json UIR-SCHEMA)) UIR-SCHEMA
+                "JSON round trip of the schema value"))
+
+(define (test-schema-self-describes)
+  ;; The schema validates against the declarations it itself contains.
+  (check-true (check-schema! UIR-SCHEMA)
+              "the schema validates under its own declarations")
+  (check-equal?
+   (for/list ([d (in-list (schema-kind-decls UIR-SCHEMA))]
+              #:when (uir-node-kind-kernel? d))
+     (uir-node-kind-kind d))
+   '(schema node-kind schema-field)
+   "the schema declares its own bootstrap node kinds")
+  ;; The kernel-owned declarations match the hand-written kernel exactly.
+  (for ([l (in-list KERNEL-LAYOUTS)])
+    (define d (schema-kind-decl-by-tag UIR-SCHEMA (uir-layout-tag l)))
+    (check-true (uir-node-kind? d)
+                (format "kernel kind ~a is declared by the schema" (uir-layout-tag l)))
+    (check-equal? (schema-kind-field-names d) (uir-layout-field-names l)
+                  (format "kernel kind ~a fields match the kernel" (uir-layout-tag l)))
+    (check-equal? (schema-kind-field-codecs d) (uir-layout-codecs l)
+                  (format "kernel kind ~a codecs match the kernel" (uir-layout-tag l))))
+  ;; Every declared non-kernel kind was generated into the layout registry.
+  (for ([d (in-list (schema-kind-decls UIR-SCHEMA))]
+        #:unless (uir-node-kind-kernel? d))
+    (define tag (uir-node-kind-kind d))
+    (define l (layout-by-tag tag UIR-LAYOUTS))
+    (check-true (and l #t) (format "node kind ~a has a generated layout" tag))
+    (check-equal? (schema-kind-field-codecs d) (uir-layout-codecs l)
+                  (format "node kind ~a codecs match the schema" tag))))
+
+(define (test-schema-versioning)
+  (check-equal? UIR-SCHEMA-VERSION (uir-schema-version UIR-SCHEMA)
+                "the payload version is declared by the schema value")
+  (check-equal? UIR-SCHEMA-VERSION 2
+                "v2 adds the optional trailing typed-param kind slot")
+  (check-equal? UIR-KERNEL-VERSION (uir-schema-kernel-version UIR-SCHEMA)
+                "the schema declares the hand-written kernel version it requires")
+  (check-equal? UIR-KERNEL-VERSION 2
+                "kernel v2 knows field defaults and the param-kind codec")
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema! (struct-copy uir-schema UIR-SCHEMA [kernel-version 99])))
+             "a schema from another kernel version is refused")
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema!
+                (schema-append-kind UIR-SCHEMA 'bad-kind 'uir-bad-kind #f
+                                    '((x nonsense-codec)))))
+             "an unknown field codec is refused")
+  (check-exn exn:fail?
+             (lambda ()
+               (check-schema! (schema-append-kind UIR-SCHEMA 'fn 'uir-fn2 #f '())))
+             "a duplicate node kind tag is refused")
+  (check-exn exn:fail?
+             (lambda () (validate-uir-against-schema 42 UIR-SCHEMA))
+             "the schema validator refuses a non-UIR value"))
+
+;; An extended schema: the same canonical schema plus one new node kind, added
+;; as data only. The generator synthesises its struct, constructor, predicate,
+;; accessors, layout, and serialization clause; no core file changes.
+(module ext racket
+  (require racklr/uir/kernel
+           racklr/uir/schema-data
+           racklr/uir/schema-check
+           racklr/uir/schema-macro
+           (for-syntax racklr/uir/kernel
+                       racklr/uir/schema-data
+                       racklr/uir/schema-check))
+  (begin-for-syntax
+    (define EXT-SCHEMA
+      (schema-append-kind UIR-SCHEMA 'demo 'uir-demo #f
+                          '((name uir) (flag bool)))))
+  (define EXT-SCHEMA
+    (schema-append-kind UIR-SCHEMA 'demo 'uir-demo #f
+                        '((name uir) (flag bool))))
+  (check-schema! EXT-SCHEMA)
+  (define-uir-kinds EXT-SCHEMA)
+  (provide (all-defined-out)))
+
 (module+ main
+  (require (prefix-in ext: (submod ".." ext)))
+  ;; Layout registry plus the one generated from the extended schema value.
+  (define ext-layouts (append UIR-LAYOUTS ext:UIR-LAYOUTS))
+
+  (define (test-schema-extension)
+    (check-false (schema-kind-decl-by-tag UIR-SCHEMA 'demo)
+                 "the canonical schema has no demo kind")
+    (define node (ext:uir-demo (uir-symbol "extended") #t))
+    (check-true (ext:uir-demo? node) "the generated predicate recognises the new kind")
+    (check-equal? (ext:uir-demo-name node) (uir-symbol "extended")
+                  "the generated accessor reads the new kind")
+    (check-equal? (ext:uir-demo-flag node) #t
+                  "the generated accessor reads a scalar field")
+    (check-true (uir? node ext-layouts)
+                "generic uir? accepts the generated kind through a layout registry")
+    (check-equal? (uir-tag node ext-layouts) 'demo
+                  "generic uir-tag sees the generated kind")
+    (check-false (uir? node)
+                 "the canonical registry does not know the generated kind")
+    (check-equal? (uir->sexp node ext-layouts) '(demo (symbol "extended") #t)
+                  "the generated serializer writes the new kind")
+    (check-equal? (sexp->uir (uir->sexp node ext-layouts) ext-layouts) node
+                  "the generated reader reads the new kind")
+    (check-equal? (json->uir (uir->json node ext-layouts) ext-layouts) node
+                  "the generated JSON codec reads and writes the new kind"))
+
   (test-null-construction)
   (test-bool-construction)
   (test-number-construction)
@@ -665,4 +884,11 @@
   (test-versioned-sexp)
   (test-schema-migration)
   (test-uir-tag)
+  (test-typed-param-construction)
+  (test-typed-param-serialization)
+  (test-schema-field-defaults)
+  (test-schema-is-uir-data)
+  (test-schema-self-describes)
+  (test-schema-versioning)
+  (test-schema-extension)
   (displayln "All uir tests passed."))
