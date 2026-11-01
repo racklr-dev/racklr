@@ -37,7 +37,12 @@
   (cond [(= (length kids) 1)
          (lower-expr-atom (first kids) tk-type tk-value)]
          [(= (length kids) 2)
-          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
+          (cond [(folded-postfix-suffix? (first kids) (second kids))
+                 ;; The generated parser folds a postfix chain after a leading
+                 ;; identifier into the trailing singleExpression of the
+                 ;; IdentifierExpression alternative; reattach it to the base.
+                 (lower-folded-suffix (first kids) (second kids) tk-type tk-value)]
+                [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
                  ;; Await expression: await + expr
                  (uir-await (lower-single-expression (second kids) tk-type tk-value))]
                 [(unary-prefix? (first kids))
@@ -291,6 +296,225 @@
                                   [else (uir-null)])
                             (uir-null))])])]
         [else (uir-null)]))
+
+;; ── Folded postfix suffix ────────────────────────────────────────────
+;;
+;; The generated TypeScript parser folds the postfix part of an expression
+;; that follows a leading identifier into the trailing `singleExpression?` of
+;; the IdentifierExpression alternative (`identifierName singleExpression?`)
+;; instead of producing the MemberIndexExpression the grammar declares. So
+;; `a[0]` arrives as
+;;   singleExpression(identifierName(a), singleExpression(arrayLiteral))
+;; and `a[0].b` as
+;;   singleExpression(identifierName(a), singleExpression(chain ...)).
+;; Without reattaching that suffix the subscript is dropped, which both loses
+;; the expression and emits `const x` declarations that no JS parser accepts.
+;;
+;; Rather than lower each operator itself, the reconstruction builds a
+;; synthetic CST in the shapes the grammar's member/call/binary alternatives
+;; produce and hands that back to `lower-single-expression`, so precedence,
+;; recursion and the uir-null fallback stay in one place. Shapes the
+;; reconstruction cannot rebuild (optional chaining, multi-element brackets)
+;; return #f and lower to uir-null exactly as they did before.
+
+(define (folded-postfix-suffix? base suffix)
+  (and (cst-node? base)
+       (cst-node? suffix)
+       (eq? (tag-of suffix) 'singleExpression)
+       (folded-suffix-start? suffix)))
+
+(define (folded-suffix-children n)
+  (filter (λ (k) (not (eq? k 'none))) (kids-of n)))
+
+(define (folded-suffix-start? n)
+  (and (cst-node? n)
+       (eq? (tag-of n) 'singleExpression)
+       (let ([ks (folded-suffix-children n)])
+         (and (pair? ks)
+              (let ([k (first ks)])
+                (and (cst-node? k)
+                     (or (eq? (tag-of k) 'arrayLiteral)
+                         (and (eq? (tag-of k) 'singleExpression)
+                              (folded-suffix-start? k)))))))))
+
+;; ── Synthetic CST nodes for the normal lowering path ────────────────
+;;
+;; Each builder mirrors the CST the generated parser produces for the same
+;; construct written without the folded IdentifierExpression. No token is
+;; fabricated: every call takes the token or node the folded suffix already
+;; carries.
+
+(define (make-member-dot-node obj dot-token name-node)
+  (node 'singleExpression (list obj 'none dot-token 'none name-node 'none)))
+
+(define (make-member-index-node obj open-token expr-seq close-token)
+  (node 'singleExpression (list obj 'none open-token expr-seq close-token 'none)))
+
+(define (make-call-node obj call-node)
+  (node 'singleExpression (list obj call-node)))
+
+(define (make-binary-node left op-token right-node)
+  (node 'singleExpression (list left op-token right-node)))
+
+(define (make-ternary-node test q-token conseq colon-token alt-node)
+  (node 'singleExpression (list test q-token conseq colon-token alt-node)))
+
+(define (make-postfix-node expr op-token)
+  (node 'singleExpression (list expr op-token)))
+
+(define (single-expression-node? n)
+  (and (cst-node? n) (eq? (tag-of n) 'singleExpression)))
+
+(define (identifier-name-node? n)
+  (and (cst-node? n) (eq? (tag-of n) 'identifierName)))
+
+;; Operators the JavaScript emitter renders as infix syntax. A folded operator
+;; outside this set is left unreconstructed rather than emitted as a call.
+(define infix-operator-values
+  (set "+" "-" "*" "/" "%" "**" "=" "==" "===" "!=" "!=="
+       "<" ">" "<=" ">=" "&&" "||"
+       "+=" "-=" "*=" "/=" "**="))
+
+;; First token held inside an operator node (a group, or an assignmentOperator
+;; wrapper) such as `+` in `group(Plus)` or `+=` in `assignmentOperator`.
+(define (contained-op-token n tk-type)
+  (let loop ([n n])
+    (cond [(tok? n tk-type) n]
+          [(cst-node? n)
+           (and (pair? (kids-of n)) (loop (first (kids-of n))))]
+          [else #f])))
+
+;; The operator token for a folded binary/assignment step, or #f. The parser
+;; carries some operators as bare tokens (`&&`) and others wrapped in a group
+;; node (`+`), so both forms are accepted.
+(define (folded-binary-op k tk-type tk-value)
+  (define t (cond [(cst-node? k) (contained-op-token k tk-type)]
+                  [(tok? k tk-type) k]
+                  [else #f]))
+  (and t (set-member? infix-operator-values (tk-value t)) t))
+
+;; The expression and bracket tokens of a `[expr]` subscript, which the parser
+;; represents as an arrayLiteral. Returns #f unless the bracket holds exactly
+;; one expression; multi-element brackets (the comma operator) are a known gap.
+(define (folded-index-parts array-lit tk-type)
+  (define grp (find-kid array-lit 'group))
+  (define elist (and grp (find-kid grp 'elementList)))
+  (define elements
+    (if elist
+        (let loop ([ks (kids-of elist)] [acc '()])
+          (cond [(null? ks) (reverse acc)]
+                [(and (cst-node? (first ks)) (eq? (tag-of (first ks)) 'arrayElement))
+                 (loop (cdr ks) (cons (first ks) acc))]
+                [(pair? (first ks))
+                 (loop (cdr ks)
+                       (append (reverse
+                                (filter-map
+                                 (λ (g) (and (cst-node? g) (find-kid g 'arrayElement)))
+                                 (first ks)))
+                               acc))]
+                [else (loop (cdr ks) acc)]))
+        '()))
+  (define open-token
+    (and grp
+         (for/or ([k (kids-of grp)]
+                  #:when (and (tok? k tk-type) (eq? (tk-type k) 'OpenBracket)))
+           k)))
+  (define close-token
+    (and grp
+         (for/or ([k (kids-of grp)]
+                  #:when (and (tok? k tk-type) (eq? (tk-type k) 'CloseBracket)))
+           k)))
+  (and open-token close-token (= (length elements) 1)
+       (let* ([ae (first elements)]
+              [ae-group (find-kid ae 'group)]
+              [expr-node (and ae-group (find-kid ae-group 'singleExpression))])
+         (and expr-node (list open-token expr-node close-token)))))
+
+(define (as-expression-sequence n)
+  (cond [(and (cst-node? n) (eq? (tag-of n) 'expressionSequence)) n]
+        [(cst-node? n) (node 'expressionSequence (list n))]
+        [else #f]))
+
+;; Rebuild the expression described by the folded suffix, or #f when a part of
+;; the suffix cannot be rebuilt. `ks` are the suffix children in source order.
+(define (rebuild-folded-ops base ks tk-type tk-value)
+  (cond
+    [(null? ks) base]
+    [else
+     (define k (first ks))
+     (define rest (cdr ks))
+     (cond
+       ;; Closing delimiters were already consumed by the operation before them.
+       [(and (tok? k tk-type)
+             (member (tk-type k) '(CloseBracket CloseParen CloseBrace)))
+        (rebuild-folded-ops base rest tk-type tk-value)]
+       ;; a[expr] — the parser represents the bracket suffix as an arrayLiteral
+       [(and (cst-node? k) (eq? (tag-of k) 'arrayLiteral))
+        (define parts (folded-index-parts k tk-type))
+        (and parts
+             (rebuild-folded-ops
+              (make-member-index-node base
+                                      (first parts)
+                                      (as-expression-sequence (second parts))
+                                      (third parts))
+              rest tk-type tk-value))]
+       ;; Nested folded chain: a[0].b carries its remaining ops in a child
+       [(and (cst-node? k) (eq? (tag-of k) 'singleExpression))
+        (define inner (rebuild-folded-ops base (folded-suffix-children k) tk-type tk-value))
+        (and inner (rebuild-folded-ops inner rest tk-type tk-value))]
+       ;; .prop
+       [(and (tok? k tk-type) (eq? (tk-type k) 'Dot))
+        (define name-node (and (pair? rest) (first rest)))
+        (and (identifier-name-node? name-node)
+             (rebuild-folded-ops (make-member-dot-node base k name-node)
+                                 (cdr rest) tk-type tk-value))]
+       ;; [expr] kept as a bracket token pair
+       [(and (tok? k tk-type) (eq? (tk-type k) 'OpenBracket))
+        (define seq (and (pair? rest) (first rest)))
+        (define close (and (pair? rest) (pair? (cdr rest)) (second rest)))
+        (and (tok? close tk-type) (eq? (tk-type close) 'CloseBracket)
+             (rebuild-folded-ops
+              (make-member-index-node base k (as-expression-sequence seq) close)
+              (cddr rest) tk-type tk-value))]
+       ;; (args) call, carried as an open/seq/close token triple
+       [(and (tok? k tk-type) (eq? (tk-type k) 'OpenParen))
+        (define seq (and (pair? rest) (first rest)))
+        (define close (and (pair? rest) (pair? (cdr rest)) (second rest)))
+        (and (cst-node? seq) (tok? close tk-type) (eq? (tk-type close) 'CloseParen)
+             (rebuild-folded-ops
+              (make-call-node base (node 'singleExpression (list k seq close)))
+              (cddr rest) tk-type tk-value))]
+       ;; (args) call, carried as an arguments node
+       [(and (cst-node? k) (eq? (tag-of k) 'arguments))
+        (rebuild-folded-ops (make-call-node base k) rest tk-type tk-value)]
+       ;; test ? conseq : alt
+       [(and (tok? k tk-type) (eq? (tk-type k) 'QuestionMark))
+        (define conseq (and (pair? rest) (first rest)))
+        (define colon (and (pair? rest) (pair? (cdr rest)) (second rest)))
+        (define alt (and (pair? rest) (pair? (cdr rest)) (pair? (cddr rest)) (third rest)))
+        (and (single-expression-node? conseq)
+             (tok? colon tk-type) (eq? (tk-type colon) 'Colon)
+             (single-expression-node? alt)
+             (rebuild-folded-ops
+              (make-ternary-node base k conseq colon alt)
+              (cdddr rest) tk-type tk-value))]
+       ;; postfix ++ / --
+       [(and (tok? k tk-type) (member (tk-type k) '(PlusPlus MinusMinus)))
+        (rebuild-folded-ops (make-postfix-node base k) rest tk-type tk-value)]
+       ;; binary / assignment operator followed by its right operand
+       [(and (folded-binary-op k tk-type tk-value)
+             (pair? rest) (single-expression-node? (first rest)))
+        (define op-token (folded-binary-op k tk-type tk-value))
+        (rebuild-folded-ops
+         (make-binary-node base op-token (first rest))
+         (cdr rest) tk-type tk-value)]
+       [else #f])]))
+
+(define (lower-folded-suffix base suffix tk-type tk-value)
+  (define rebuilt (rebuild-folded-ops base (folded-suffix-children suffix) tk-type tk-value))
+  (if rebuilt
+      (lower-single-expression rebuilt tk-type tk-value)
+      (uir-null)))
 
 (define (lower-expr-atom value tk-type tk-value)
   (cond [(cst-node? value)

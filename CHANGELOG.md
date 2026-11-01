@@ -303,6 +303,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalogue's multi-line triple-quoted string reproducers as a single STRING
   token through parse, lower and emit.
 
+### Fixed
+
+- TypeScript/TSX subscript expressions (`posts[0]`, `posts[0].title`,
+  `rows[i][j]`, mixed binary/ternary tails, postfix `++`/`--`) no longer lower
+  to a null expression. The parser folds the postfix chain after an identifier
+  into a trailing `singleExpression`; the TypeScript lowering rebuilds that
+  suffix as ordinary CST and routes it back through the normal expression
+  lowering. Before the fix, subscript declarations such as
+  `const heroPost = allPosts[0];` dropped the initializer and emitted
+  `const heroPost;` (rejected by a JavaScript parser), and subscript
+  assignments such as `x = rows[i];` emitted the wrong JavaScript `x = null;`.
+  Known remaining gaps, unchanged by this fix: multi-element brackets (the
+  comma operator, `a[0, 1]`) and optional chaining after a folded subscript
+  (`a[0]?.b`) still lower to `uir-null` because the reconstruction cannot
+  rebuild those parser shapes without fabricating tokens.
+
 ## [0.1.0rc1] - 2026-06-23
 
 ### Added
