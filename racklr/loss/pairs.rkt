@@ -116,7 +116,7 @@
                 (approximated 'literals "operator-chain regrouping can move literals between nodes")
                 (approximated 'control-flow "the TypeScript and JavaScript front ends regroup emitted control constructs differently")
                 (preserved 'effect-rows "racklr/emit-effects renders inferred rows as __withEffects(row, fn) plus a documented `/** @effects {...} */` annotation; the verifier re-absorbs the guard form")
-                (refused 'types "interfaces, type aliases, enums, and annotations have no JavaScript runtime form")
+                (refused 'types "interfaces and type aliases have no JavaScript runtime form; each erased declaration is documented as a comment")
                 (refused 'jsx "TypeScript source in this pipeline has no JSX syntax")
                 (approximated 'statement-shape "the two front ends lower emitted assignment and infix chains into different statement shapes")
                 (approximated 'runtime-guards "emit inserts the effect-guard runtime; the verifier strips it")
@@ -124,7 +124,8 @@
                 (approximated 'formatting "the emitter re-indents and re-flows statements")
                 (refused 'comments "UIR carries no comments, so the TypeScript front end drops them")))
    (loss-model 'tsx 'javascript 'projected
-               '(annotate-effects drop-generated drop-effect-guards drop-parens)
+               '(annotate-effects drop-generated drop-effect-guards drop-parens
+                 erase-js-types)
                '()
                (all-pairs
                 (preserved 'definitions "component and helper names survive lowering")
@@ -133,7 +134,7 @@
                 (approximated 'literals "prop text and attribute literals change shape with JSX lowering")
                 (approximated 'control-flow "JSX child expressions are re-shaped into call arguments")
                 (preserved 'effect-rows "inferred rows are rendered as __withEffects(row, fn); the verifier re-absorbs that native form")
-                (refused 'types "interfaces, type aliases, and annotations have no JavaScript runtime form")
+                (refused 'types "interfaces and type aliases have no JavaScript runtime form; each erased declaration is documented as a comment")
                 (approximated 'jsx "JSX elements lower to React.createElement calls before emit, so the re-absorbed UIR sees calls, not elements")
                 (approximated 'statement-shape "the two front ends lower emitted assignment and infix chains into different statement shapes")
                 (approximated 'runtime-guards "emit inserts the effect-guard runtime; the verifier strips it")

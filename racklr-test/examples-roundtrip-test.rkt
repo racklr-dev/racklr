@@ -94,8 +94,8 @@
 (define (assert-parsed cst)
   (if (not cst) (error "parse returned #f") cst))
 
-(define (assert-emitted out #:allow-empty? [allow? #f])
-  (if (or (not (string? out)) (and (not allow?) (equal? out "")))
+(define (assert-emitted out)
+  (if (or (not (string? out)) (equal? out ""))
       (error "emit returned non-string or empty")
       out))
 
@@ -130,8 +130,9 @@
 
 (define (pipeline-ts src)
   (define uir (lower-ts-src src))
-  ;; A type-only module erases to empty JS, which is valid.
-  (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
+  ;; Type-only declarations have no runtime form, but the emitter documents
+  ;; each erased one as a comment, so no TypeScript module may emit empty.
+  (define out (assert-emitted (emit-javascript uir)))
   ;; one-way: emitted JS must re-parse as JavaScript
   (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
@@ -148,7 +149,8 @@
 
 (define (pipeline-tsx src)
   (define uir (tsx->uir src))
-  (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
+  ;; As for TypeScript: erased type declarations are documented, never empty.
+  (define out (assert-emitted (emit-javascript uir)))
   (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
 ;; ── Dispatch by extension ───────────────────────────────────────────

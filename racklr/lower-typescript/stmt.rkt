@@ -97,10 +97,12 @@
 
   ;; Check for export { x, y } — inner statement is a block
   (cond
-    ;; Type-only declarations have no runtime representation: erase them
-    ;; instead of emitting `export null;`.
+    ;; Type-only declarations have no runtime representation, but erasing them
+    ;; outright would make a type-only module emit the empty string and vanish.
+    ;; Record the declaration (spelled with its `export`) so the emitter can
+    ;; document the erasure.
     [(memq (tag-of inner-stmt) '(typeAliasDeclaration interfaceDeclaration))
-     #f]
+     (lower-erased-type-decl node tk-type tk-value)]
     [(eq? (tag-of inner-stmt) 'block)
      (lower-export-named-block inner-stmt tk-type tk-value)]
 
@@ -208,8 +210,8 @@
     [(enumDeclaration) (lower-enum-decl node tk-type tk-value)]
     [(namespaceDeclaration) (lower-namespace-decl node tk-type tk-value)]
     [(abstractDeclaration) (lower-abstract-decl node tk-type tk-value)]
-    [(interfaceDeclaration) #f]
-    [(typeAliasDeclaration) #f]
+    [(interfaceDeclaration) (lower-erased-type-decl node tk-type tk-value)]
+    [(typeAliasDeclaration) (lower-erased-type-decl node tk-type tk-value)]
     [else (uir-null)]))
 
 (define (lower-expr-stmt node tk-type tk-value)
@@ -1513,6 +1515,17 @@
 ;; ============================================================================
 ;; TypeScript-specific lowering functions
 ;; ============================================================================
+
+;; TypeScript interfaces and type aliases have no JavaScript runtime form, so
+;; they carry no executable structure. Dropping them outright made a module
+;; whose body is type declarations emit the empty string — the whole file
+;; disappeared with no trace. Lower each one to an `erased-type-decl` record
+;; holding its source spelling, so the emitter can document the erasure as a
+;; comment: a faithful JavaScript representation of syntax that has no runtime
+;; counterpart, and never a silently empty file.
+(define (lower-erased-type-decl node tk-type tk-value)
+  (uir-call (uir-symbol "erased-type-decl")
+            (list (uir-string (cst-source-text node tk-type tk-value)))))
 
 (define (lower-enum-decl node tk-type tk-value)
   ;; enumDeclaration -> 'enum' (Identifier) '{' enumBody '}'
