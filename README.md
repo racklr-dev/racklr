@@ -238,6 +238,7 @@ racket scan-python-test.rkt          # full-tree scanner bucket classification
 racket self-seed-test.rkt            # seed compiler as a UIR program (emit + run)
 racket self-emit-test.rkt            # self-emit driver, CLI, native rows, P6.1 seam
 racket self-emit-integration-test.rkt # P6.2 end-to-end: emit compiler, run it, run its output
+racket self-emit-verify-test.rkt     # P6.3 self-emission checker (UIR+row differential)
 ```
 
 Other suites cover parser generation per language (`gen-*-test.rkt`), JSON/HTML emitters, the esbuild integration, and core tree/range operations.
