@@ -17,8 +17,11 @@
 ;;   prov-site — a GROUND: the classifying call site where an effect was
 ;;               actually detected (or an unresolved `unknown` leaf, or a
 ;;               declared/blessed capability asserted at a method definition).
-;;               Carries the source tokens and the receiver type, so every
-;;               effect edge can be pointed at evidence.
+;;               Carries the source tokens, the receiver type, and the
+;;               coverage label (universal / census-param / local-literal), so
+;;               every effect edge can be pointed at evidence and its scope.
+;;               The ground's `kind` gives the confidence label; see
+;;               racklr/effects/labels.
 ;;   prov-call — one caller→callee edge of the inferred call graph, carrying
 ;;               the callee expression the classification saw. This is the
 ;;               step a provenance path walks.
@@ -46,7 +49,7 @@
   function-fq
   ;; provenance records
   prov-site prov-site? prov-site-owner prov-site-effect prov-site-site
-  prov-site-tokens prov-site-receiver prov-site-kind
+  prov-site-tokens prov-site-receiver prov-site-kind prov-site-coverage
   prov-call prov-call? prov-call-from prov-call-to prov-call-site
   provenance provenance? provenance-grounds provenance-calls
   make-provenance
@@ -95,7 +98,13 @@
 ;;   kind     — 'inferred (call-site classification), 'unresolved (the
 ;;              tracked `unknown` obligation), or 'declared (a capability
 ;;              asserted at the method definition by the import/config data)
-(struct prov-site (owner effect site tokens receiver kind) #:transparent)
+;;   coverage — how far the claim generalizes: 'universal (for-all structural
+;;              evidence), 'census-param (worked instance through parameter
+;;              dataflow), or 'local-literal (worked instance through a tracked
+;;              local/attribute/literal value). The confidence label is the
+;;              `kind` mapped through racklr/effects/labels.
+(struct prov-site (owner effect site tokens receiver kind coverage)
+  #:transparent)
 
 ;; One call-graph edge: `from` calls `to` at classifying expression `site`.
 (struct prov-call (from to site) #:transparent)
@@ -153,20 +162,25 @@
 ;; A ground for a call-site classification. Receivers are only claimed when the
 ;; classifier's typed op names exactly one class. `effect` is an effect-name
 ;; symbol or a structured `effect-cap`, normalized here so the record keys on
-;; the domain either way.
-(define (make-callee-site owner effect callee #:kind [kind 'inferred])
+;; the domain either way. `coverage` is the evidence's scope
+;; (racklr/effects/labels: universal / census-param / local-literal).
+(define (make-callee-site owner effect callee
+                          #:kind [kind 'inferred]
+                          #:coverage [coverage 'universal])
   (prov-site owner
              (if (effect-cap? effect) (effect-cap-domain effect) effect)
              (callee-site-string callee)
              (callee-tokens callee)
              (and (effect-cap? effect) (effect-cap-receiver effect))
-             kind))
+             kind
+             coverage))
 
 ;; A ground for a declared capability: the evidence is the DATA rule at the
 ;; method definition, not a call site, so the site names the definition and the
 ;; tokens are the module path, class, and method the capability was derived from.
+;; A declared capability is a for-all contract, so its coverage is universal.
 (define (make-declared-site owner effect tokens receiver)
-  (prov-site owner effect "(declared)" tokens receiver 'declared))
+  (prov-site owner effect "(declared)" tokens receiver 'declared 'universal))
 
 ;; ── completeness: every effect edge has a ground ────────────────────
 

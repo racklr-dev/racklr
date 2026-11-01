@@ -22,6 +22,7 @@
          racklr/effects/type-relations
          racklr/effects/library-tokens
          racklr/effects/imports
+         racklr/effects/labels
          racklr/effects/provenance)
 
 (provide infer-effects-all classify-call-all)
@@ -213,9 +214,12 @@
         [else (void)])
       (if (uir-call? node)
             (let* ([callee (uir-call-callee node)]
+                   ;; The classifier's coverage side channel (only needed when
+                   ;; provenance is recorded): a reused box is reset per call.
+                   [cov-box (and prov (box 'structural))]
                    [cls (classify-call-all callee known methods
                                            class-defs fn-defs comp-supers self-attr comp owner
-                                           import-env rt return-types)]
+                                           import-env rt return-types cov-box)]
                    [site (callee-site-string callee)])
             (case (car cls)
               [(edge)
@@ -228,14 +232,29 @@
               [(effect)
                (set! effects (cons (cdr cls) effects))
                (when prov
-                 (provenance-add-ground! prov (make-callee-site (function-fq k) (cdr cls) callee)))]
+                 ;; The coverage label records what the classifier needed to
+                 ;; establish this ground: no receiver dataflow (a structural
+                 ;; rule or lexicon hit) is for-all 'universal; a receiver
+                 ;; resolved through a parameter is a 'census-param worked
+                 ;; instance; a receiver resolved from a tracked local /
+                 ;; attribute / call-result value is 'local-literal.
+                 (provenance-add-ground!
+                  prov
+                  (make-callee-site (function-fq k) (cdr cls) callee
+                                    #:coverage (ground-coverage
+                                                callee
+                                                (and cov-box (unbox cov-box))
+                                                param-names))))]
               [(pure) (void)]
               [(unknown)
                (set! effects (cons 'unknown effects))
                (when prov
                  (provenance-add-ground! prov
                                          (make-callee-site (function-fq k) 'unknown callee
-                                                           #:kind 'unresolved)))
+                                                           #:kind 'unresolved
+                                                           #:coverage
+                                                           (unresolved-coverage
+                                                            callee param-names))))
                (when unknown-tally
                  (define rx
                    (and (uir-get? callee)

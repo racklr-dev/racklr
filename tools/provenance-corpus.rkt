@@ -9,6 +9,7 @@
 ;;   racket tools/provenance-corpus.rkt                 # django/django/core
 ;;   racket tools/provenance-corpus.rkt django/django   # explicit probe
 ;;   racket tools/provenance-corpus.rkt --record-only   # skip graph projection
+;;   racket tools/provenance-corpus.rkt --profiles      # also report profiles
 ;;
 ;; `--record-only` is for probes too large to project (the full django tree
 ;; builds ~100k atoms); it still runs the record-level reachability check, which
@@ -41,8 +42,10 @@
          racklr/effects/contract
          racklr/effects/imports
          racklr/effects/infer
+         racklr/effects/labels
          racklr/effects/provenance
-         racklr/graph/provenance)
+         racklr/graph/provenance
+         racklr/graph/profile)
 
 (define default-probe-dirs '("django/django/core"))
 
@@ -193,12 +196,25 @@
   (sort (hash->list out) symbol<?
         #:key (λ (p) (car p))))
 
+;; Ground sites by coverage label (universal / census-param / local-literal),
+;; so the report shows how much of the evidence is for-all structural fact vs a
+;; worked instance.
+(define (ground-coverage-counts prov)
+  (define out (make-hash))
+  (for ([(fq by-effect) (in-hash (provenance-grounds prov))])
+    (for ([(effect sites) (in-hash by-effect)])
+      (for ([site (in-list sites)])
+        (hash-update! out (prov-site-coverage site) add1 0))))
+  (sort (hash->list out) symbol<?
+        #:key (λ (p) (car p))))
+
 (define (link-count graph type)
   (for/sum ([a (in-list graph)] #:when (and (link? a) (eq? (link-type a) type))) 1))
 
 (define (main)
   (define args (vector->list (current-command-line-arguments)))
   (define record-only? (pair? (member "--record-only" args)))
+  (define profiles? (pair? (member "--profiles" args)))
   (define dirs (filter (λ (a) (not (string-prefix? a "--"))) args))
   (define probe-dirs (if (null? dirs) default-probe-dirs dirs))
   (define root (repo-root))
@@ -209,6 +225,7 @@
     (printf "functions with an unknown entry: ~a\n" (unknown-function-count rows))
     (printf "function/effect edges: ~a\n" edges)
     (printf "ground sites by kind: ~a\n" (ground-kind-counts prov))
+    (printf "ground sites by coverage: ~a\n" (ground-coverage-counts prov))
 
     ;; 1. record-level reachability.
     (define missing (provenance-missing rows prov))
@@ -262,6 +279,34 @@
       (printf "  NO PATH ~a / ~a\n" (car f) (cadr f)))
     (when sample
       (printf "sample db path:\n  ~a\n" (walk-path->string sample)))
+
+    (when profiles?
+      (define ps (transitive-profiles idx))
+      (define complete
+        (for/sum ([p (in-list ps)] #:when (effect-profile-complete? p)) 1))
+      (define effect-counts (make-hash))
+      (define label-counts (make-hash))
+      (define obligation-count 0)
+      (for ([p (in-list ps)])
+        (set! obligation-count
+              (+ obligation-count (length (effect-profile-obligations p))))
+        (for ([e (in-list (effect-profile-entries p))])
+          (hash-update! effect-counts (profile-entry-effect e) add1 0)
+          (hash-update! label-counts
+                        (cons (profile-entry-confidence e) (profile-entry-coverage e))
+                        add1 0)))
+      (printf "transitive profiles: ~a function(s)\n" (length ps))
+      (printf "  complete (no open obligation): ~a\n  incomplete: ~a\n"
+              complete (- (length ps) complete))
+      (printf "  effect entries: ~a\n"
+              (for/sum ([(k v) (in-hash effect-counts)]) v))
+      (printf "  profile entries by effect: ~a\n"
+              (sort (hash->list effect-counts) symbol<? #:key car))
+      (printf "  profile entries by confidence/coverage: ~a\n"
+              (sort (hash->list label-counts)
+                    (λ (a b) (string<? (format "~a" (car a)) (format "~a" (car b)))))
+              )
+      (printf "  open obligations: ~a\n" obligation-count))
 
     (define ok? (and (null? missing) (null? failures)))
     (if ok?
