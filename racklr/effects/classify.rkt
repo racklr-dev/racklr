@@ -86,6 +86,7 @@
     [(synthetic-callee? callee) (cons 'pure #f)]
     [(pure-builtin-callee? callee) (cons 'pure #f)]
     [(pure-stdlib-bare-callee? callee) (cons 'pure #f)]
+    [(pure-racket-builtin-callee? callee) (cons 'pure #f)]
     [(pure-dunder-callee? callee) (cons 'pure #f)]
     [(gettext-callee? callee) (cons 'pure #f)]
     [(exception-constructor-callee? callee) (cons 'pure #f)]

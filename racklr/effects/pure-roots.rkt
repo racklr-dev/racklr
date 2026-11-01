@@ -17,6 +17,7 @@
   runtime-primitive-callee?
   pure-builtin-callee?
   pure-stdlib-bare-callee?
+  pure-racket-builtin-callee?
   pure-dunder-callee?
   exception-constructor-callee?
   gettext-callee?
@@ -81,6 +82,16 @@
   (define nm (callee-name c))
   (and nm (set-member? (effect-tokens-pure-stdlib-bare-names tokens)
                        (symbol->string nm))))
+
+;; Racket standard-library pure procedures, from the injected Racket lexicon
+;; field. This is a separate table from `pure-stdlib-bare-names` on purpose:
+;; receiver-type.rkt reads that table as a *language-level* value-constructor
+;; list for Python/JS receivers, and a Racket name such as `values` must not
+;; turn a Django `.values()` call into a pure constructor.
+(define (pure-racket-builtin-callee? c [tokens default-effect-tokens])
+  (define nm (callee-name c))
+  (and nm
+       (set-member? (effect-tokens-racket-builtins tokens) (symbol->string nm))))
 
 ;; Protocol ("dunder") methods on an arbitrary receiver: `x.__init__()`,
 ;; `x.__repr__()`, ... implement the object protocol with no domain effect. A
