@@ -1,6 +1,7 @@
 #lang racket
 
-(require racklr/uir)
+(require racklr/uir
+         racklr/emit-contract)
 
 (provide emit-json)
 
@@ -30,10 +31,15 @@
 
 ;; ── Pretty-printing ────────────────────────────────────────────────
 
-(define (emit-json v #:indent [indent #f])
-  (define out (open-output-string))
-  (emit-node v out (if indent 0 #f) indent)
-  (get-output-string out))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, JSON text out. JSON is a data target with no native
+;; effect-row vocabulary, so an explicit row is refused rather than dropped.
+(define (emit-json v [row #f] #:indent [indent #f])
+  (if row
+      (refuse-explicit-row 'emit-json "json" row)
+      (let ([out (open-output-string)])
+        (emit-node v out (if indent 0 #f) indent)
+        (get-output-string out))))
 
 ;; indent-level: #f = compact, 0,1,2,... = pretty-printed at that level
 (define (emit-node v out level width)

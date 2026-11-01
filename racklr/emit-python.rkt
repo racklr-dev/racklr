@@ -1,6 +1,7 @@
 #lang racket
 
 (require racklr/uir
+         racklr/emit-contract
          racklr/effects/infer
          racklr/effects/python-annot)
 
@@ -737,8 +738,14 @@
 
 ;; ── Top-level ──────────────────────────────────────────────────────
 
-(define (emit-python uir)
-  (define annotated (annotate-effects uir))
+;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
+;; explicit effect row in, Python 3 source out. An explicit row is authoritative
+;; for the unit's entry function and is rendered as an `@__withEffects({...})`
+;; guard. The other functions still get their row from the UIR or, when absent,
+;; from inference, exactly as before the contract existed.
+(define (emit-python uir [row #f])
+  (define source (if row (attach-root-row 'emit-python uir row) uir))
+  (define annotated (annotate-effects source))
   (define body
     (cond [(uir-block? annotated)
            (emit-body annotated 0)]
