@@ -198,6 +198,43 @@
   (check-true (string-contains? emitted "return { a: 1 }"))
   (check-false (string-contains? emitted "null(")))
 
+;; ── drg-4788: subscript expressions ─────────────────────────────────
+
+;; A subscript initializer must survive lowering. Dropping the rhs emits an
+;; initializer-less `const`, which is not valid JavaScript and loses the
+;; element access.
+(let-values ([(uir emitted) (check-ts "const first = posts[0];")])
+  (check-true (string-contains? emitted "posts[0]"))
+  (check-false (string-contains? emitted "const first;")))
+
+;; Subscript on a member chain.
+(let-values ([(uir emitted) (check-ts "const title = posts[0].title;")])
+  (check-true (string-contains? emitted "posts[0].title")))
+
+;; Chained subscripts.
+(let-values ([(uir emitted) (check-ts "const cell = grid[i][j];")])
+  (check-true (string-contains? emitted "grid[i][j]")))
+
+;; Subscript in an arithmetic expression.
+(let-values ([(uir emitted) (check-ts "const next = posts[0] + 1;")])
+  (check-true (string-contains? emitted "posts[0] + 1")))
+
+;; Subscript as a call target and as a call argument.
+(let-values ([(uir emitted) (check-ts "posts[0]();")])
+  (check-true (string-contains? emitted "posts[0]()")))
+(let-values ([(uir emitted) (check-ts "render(posts[0]);")])
+  (check-true (string-contains? emitted "render(posts[0])")))
+
+;; Subscript as a return value.
+(let-values ([(uir emitted) (check-ts "function first(rows) { return rows[0]; }")])
+  (check-true (string-contains? emitted "return rows[0]")))
+
+;; Subscript assignment and compound assignment.
+(let-values ([(uir emitted) (check-ts "posts[0] = 1;")])
+  (check-true (string-contains? emitted "posts[0] = 1")))
+(let-values ([(uir emitted) (check-ts "posts[0] += 1;")])
+  (check-true (string-contains? emitted "posts[0] += 1")))
+
 ;; ── Clean up temp files ─────────────────────────────────────────────
 
 (cleanup)

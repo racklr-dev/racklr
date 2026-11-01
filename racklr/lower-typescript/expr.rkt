@@ -37,7 +37,13 @@
   (cond [(= (length kids) 1)
          (lower-expr-atom (first kids) tk-type tk-value)]
          [(= (length kids) 2)
-          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
+          (cond [(folded-postfix-suffix? (first kids) (second kids))
+                 ;; The generated parser folds a postfix chain after a leading
+                 ;; identifier into the trailing singleExpression of the
+                 ;; IdentifierExpression alternative; reattach it to the base.
+                 (lower-folded-suffix (lower-single-expression (first kids) tk-type tk-value)
+                                      (second kids) tk-type tk-value)]
+                [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
                  ;; Await expression: await + expr
                  (uir-await (lower-single-expression (second kids) tk-type tk-value))]
                 [(unary-prefix? (first kids))
@@ -291,6 +297,147 @@
                                   [else (uir-null)])
                             (uir-null))])])]
         [else (uir-null)]))
+
+;; ── Folded postfix suffix ────────────────────────────────────────────
+;;
+;; The generated TypeScript parser folds the postfix part of an expression
+;; that follows a leading identifier into the trailing `singleExpression?` of
+;; the IdentifierExpression alternative (`identifierName singleExpression?`)
+;; instead of producing the MemberIndexExpression the grammar declares. So
+;; `a[0]` arrives as
+;;   singleExpression(identifierName(a), singleExpression(arrayLiteral))
+;; and `a[0].b` as
+;;   singleExpression(identifierName(a), singleExpression(chain ...)).
+;; Without reattaching that suffix the subscript is dropped, which both loses
+;; the expression and emits `const x` declarations that no JS parser accepts.
+;; These helpers rebuild the real expression from the folded suffix.
+
+(define (folded-postfix-suffix? base suffix)
+  (and (cst-node? base)
+       (cst-node? suffix)
+       (eq? (tag-of suffix) 'singleExpression)
+       (folded-suffix-start? suffix)))
+
+(define (folded-suffix-children n)
+  (filter (λ (k) (not (eq? k 'none))) (kids-of n)))
+
+(define (folded-suffix-start? n)
+  (and (cst-node? n)
+       (eq? (tag-of n) 'singleExpression)
+       (let ([ks (folded-suffix-children n)])
+         (and (pair? ks)
+              (let ([k (first ks)])
+                (and (cst-node? k)
+                     (or (eq? (tag-of k) 'arrayLiteral)
+                         (and (eq? (tag-of k) 'singleExpression)
+                              (folded-suffix-start? k)))))))))
+
+;; The expression inside a `[expr]` index, which the parser represents as an
+;; arrayLiteral. Only a single-element bracket is treated as a subscript.
+(define (lower-index-suffix array-lit tk-type tk-value)
+  (define grp (find-kid array-lit 'group))
+  (define elist (and grp (find-kid grp 'elementList)))
+  (define elements
+    (if elist
+        (let loop ([ks (kids-of elist)] [acc '()])
+          (cond [(null? ks) (reverse acc)]
+                [(and (cst-node? (first ks)) (eq? (tag-of (first ks)) 'arrayElement))
+                 (loop (cdr ks) (cons (first ks) acc))]
+                [(pair? (first ks))
+                 (loop (cdr ks)
+                       (append (reverse
+                                (for/list ([g (first ks)] #:when (cst-node? g))
+                                  (find-kid g 'arrayElement)))
+                               acc))]
+                [else (loop (cdr ks) acc)]))
+        '()))
+  (cond
+    [(and (= (length elements) 1)
+          (let* ([ae (first elements)]
+                 [ae-group (find-kid ae 'group)]
+                 [se (and ae-group (find-kid ae-group 'singleExpression))])
+            (and se (lower-single-expression se tk-type tk-value))))]
+    [else (uir-null)]))
+
+;; First token held inside an operator node (a group, or an assignmentOperator
+;; wrapper) such as `+` in `group(Plus)` or `+=` in `assignmentOperator`.
+(define (contained-op-token n tk-type)
+  (let loop ([n n])
+    (cond [(tok? n tk-type) n]
+          [(cst-node? n)
+           (and (pair? (kids-of n)) (loop (first (kids-of n))))]
+          [else #f])))
+
+(define (lower-folded-suffix base suffix tk-type tk-value)
+  (let loop ([cur base] [ks (folded-suffix-children suffix)])
+    (cond
+      [(null? ks) cur]
+      [else
+       (define k (first ks))
+       (define rest (cdr ks))
+       (cond
+         ;; Closing delimiter already consumed by the preceding operation
+         [(and (tok? k tk-type)
+               (member (tk-type k) '(CloseBracket CloseParen CloseBrace)))
+          (loop cur rest)]
+         ;; a[expr]: a bracket suffix is folded into an arrayLiteral
+         [(and (cst-node? k) (eq? (tag-of k) 'arrayLiteral))
+          (loop (uir-call (uir-symbol "index")
+                          (list cur (lower-index-suffix k tk-type tk-value)))
+                rest)]
+         ;; Nested folded chain: a[0].b keeps its own singleExpression
+         [(and (cst-node? k) (eq? (tag-of k) 'singleExpression))
+          (loop (lower-folded-suffix cur k tk-type tk-value) rest)]
+         ;; .prop / ?.prop
+         [(and (tok? k tk-type) (member (tk-type k) '(Dot QuestionMarkDot)))
+          (define name-node (and (pair? rest) (first rest)))
+          (loop (uir-call (uir-symbol "dot")
+                          (list cur
+                                (uir-symbol (lower-identifier-name name-node tk-type tk-value))))
+                (if (pair? rest) (cdr rest) '()))]
+         ;; [expr] suffix the parser did not fold into an arrayLiteral
+         [(and (tok? k tk-type) (eq? (tk-type k) 'OpenBracket))
+          (define seq (and (pair? rest) (first rest)))
+          (loop (uir-call (uir-symbol "index")
+                          (list cur (lower-expression-sequence seq tk-type tk-value)))
+                (if (pair? rest) (cdr rest) '()))]
+         ;; (args) call
+         [(and (cst-node? k) (eq? (tag-of k) 'arguments))
+          (loop (uir-call cur (lower-arguments k tk-type tk-value)) rest)]
+         ;; Binary infix, e.g. `a[0] + 1` (operator held in a group node)
+         [(and (cst-node? k) (eq? (tag-of k) 'group))
+          (define op-tok (contained-op-token k tk-type))
+          (if (and op-tok (pair? rest))
+              (uir-call (uir-symbol (tk-value op-tok))
+                        (list cur (lower-single-expression (first rest) tk-type tk-value)))
+              (uir-null))]
+         ;; Assignment, e.g. `a[0] = v`
+         [(and (tok? k tk-type) (eq? (tk-type k) 'Assign))
+          (if (pair? rest)
+              (uir-call (uir-symbol "=")
+                        (list cur (lower-single-expression (first rest) tk-type tk-value)))
+              (uir-null))]
+         ;; Compound assignment, e.g. `a[0] += 1`
+         [(and (cst-node? k) (eq? (tag-of k) 'assignmentOperator))
+          (define op-tok (contained-op-token k tk-type))
+          (if (and op-tok (pair? rest))
+              (uir-call (uir-symbol (tk-value op-tok))
+                        (list cur (lower-single-expression (first rest) tk-type tk-value)))
+              (uir-null))]
+         ;; Ternary, e.g. `a[0] ? x : y`
+         [(and (tok? k tk-type) (eq? (tk-type k) 'QuestionMark))
+          (define operands (filter cst-node? rest))
+          (if (>= (length operands) 2)
+              (uir-if cur
+                      (lower-single-expression (first operands) tk-type tk-value)
+                      (lower-single-expression (second operands) tk-type tk-value))
+              (uir-null))]
+         ;; Postfix increment/decrement, e.g. `a[0]++`
+         [(and (tok? k tk-type) (member (tk-type k) '(PlusPlus MinusMinus)))
+          (loop (uir-call (uir-symbol (string-append "postfix" (tk-value k)))
+                          (list cur))
+                rest)]
+         [else (uir-null)])])))
 
 (define (lower-expr-atom value tk-type tk-value)
   (cond [(cst-node? value)

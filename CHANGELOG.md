@@ -235,6 +235,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to round-trip through JSON. The tag set is now derived from the schema
   layouts, covering every declared kind.
 
+### Fixed
+
+- TypeScript/TSX subscript expressions (`posts[0]`, `posts[0].title`,
+  `rows[i][j]`) no longer lower to a null expression. The parser folds the
+  postfix chain after an identifier into a trailing `singleExpression`, which
+  the TypeScript lowering now reattaches to the base expression. Dropped
+  subscripts previously lost the element access and emitted initializer-less
+  `const` declarations that no JavaScript parser accepts.
+
 ## [0.1.0rc1] - 2026-06-23
 
 ### Added
