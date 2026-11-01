@@ -5,11 +5,19 @@
 ;; racklr/effects/contract, then shows it extends to typed function
 ;; subtyping, graph pattern queries, and Effervesce-style capability
 ;; composition.
+;;
+;; The P4.1 section at the end proves the substrate claim: ONE hypergraph
+;; instance holds the UIR, call, type, effect, capability, and module graphs
+;; together, with typed, queryable edges — the effect rows are real inference
+;; output and a function vertex is shared across the call, effect, and module
+;; graphs of that one instance.
 
 (require rackunit
+         rackunit/text-ui
          racklr/hypergraph
          racklr/uir
-         racklr/effects/contract)
+         racklr/effects/contract
+         racklr/effects/infer)
 
 ;; ── UIR fixture helpers (mirror effects-contract-test) ──────────────
 
@@ -208,11 +216,264 @@
             flat))
   (check-equal? (length receiver-nodes) 1))
 
-(module+ main
-  (test-effect-equivalence)
-  (test-typed-effect-subtyping)
-  (test-pattern-query)
-  (test-capability-composition)
-  (test-materialize)
-  (test-open-cog-atoms)
-  (displayln "All hypergraph tests passed."))
+;; ── one substrate for all six graphs (P4.1) ─────────────────────────
+;;
+;; The ROADMAP term for the merged substrate is "a single graph instance holds
+;; all six graphs with typed, queryable edges": UIR, call, type, effect,
+;; capability, module. The projections below take real data — the program's
+;; materialized UIR, the call edges its named functions make, the effect rows
+;; inference computes, type-relation triples, an Effervesce-style capability
+;; declaration set, and the module import graph — and build ONE instance.
+
+(define (merged-symbol text) (uir-symbol text))
+(define (merged-fn name body) (uir-fn (merged-symbol name) '() body #f #f))
+
+(define merged-program
+  (uir-block
+   (list
+    (merged-fn "main"
+               (uir-block (list (uir-call (merged-symbol "fetch")
+                                          (list (merged-symbol "url"))))))
+    (merged-fn "fetch"
+               (uir-block (list (uir-call (merged-symbol "open")
+                                          (list (merged-symbol "f")))
+                                (uir-call (merged-symbol "sleep")
+                                          (list (merged-symbol "1"))))))
+    (uir-import (merged-symbol "django.db") (list (merged-symbol "models")))
+    (uir-import (merged-symbol "util") '()))))
+
+(define (symbol-name? v)
+  (and (uir-symbol? v) (string->symbol (uir-symbol-name v))))
+
+;; Call-graph edges: track the enclosing named function and record every call
+;; whose callee is a plain symbol.
+(define (program-call-edges program)
+  (define edges '())
+  (define current #f)
+  (define (walk n)
+    (cond
+      [(uir-fn? n)
+       (define prev current)
+       (define nm (symbol-name? (uir-fn-name n)))
+       (when nm (set! current nm))
+       (walk (uir-fn-body n))
+       (set! current prev)]
+      [(uir-call? n)
+       (define callee-name (symbol-name? (uir-call-callee n)))
+       (when (and current callee-name)
+         (set! edges (cons (list current callee-name) edges)))
+       (for ([a (in-list (uir-call-args n))]) (walk a))]
+      [(struct? n) (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
+      [(pair? n) (walk (car n)) (walk (cdr n))]))
+  (walk program)
+  (remove-duplicates (reverse edges)))
+
+(define (program-import-sources program)
+  (define sources '())
+  (let walk ([n program])
+    (cond
+      [(uir-import? n)
+       (define src (symbol-name? (uir-import-source n)))
+       (when src (set! sources (cons src sources)))]
+      [(struct? n) (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
+      [(pair? n) (walk (car n)) (walk (cdr n))]))
+  (remove-duplicates (reverse sources)))
+
+;; Real inference output: name -> the row's effect-entry hyperedges.
+(define (program-effect-rows program)
+  (sort (for/list ([(fn-name r) (in-hash (infer-effects program))])
+          (list fn-name (map entry->link (uir-effect-row-entries r))))
+        (λ (a b) (symbol<? (first a) (first b)))))
+
+(define merged-call-edges (program-call-edges merged-program))
+(define merged-effect-rows (program-effect-rows merged-program))
+
+(define merged-type-relations
+  (list (list 'subtype 'Manager 'object)
+        (list 'assign 'fetch.result 'Model)
+        (list 'self-attr 'Model.objects 'Manager)
+        (list 'param 'main.url 'str)
+        (list 'return 'fetch 'Model)))
+
+;; An Effervesce-style capability declaration set: App needs Store, Database
+;; provides Store and needs Db, Db is given, Store via Db, plus a state/action.
+(define merged-capability-decls
+  (list (list 'component "Database" (list (cons "Db" '())) (list (cons "Store" '())))
+        (list 'component "App" (list (cons "Store" '())) '())
+        (list 'given (cons "Db" '()))
+        (list 'handler (cons "Store" '()) (list (cons "Db" '())))
+        (list 'state "cache")
+        (list 'action "Load" "cache")))
+
+(define merged-module-deps
+  (list (append (list 'app) (program-import-sources merged-program))))
+
+(define merged-graph
+  (build-hypergraph #:uir merged-program
+                    #:calls merged-call-edges
+                    #:types merged-type-relations
+                    #:effects merged-effect-rows
+                    #:capabilities merged-capability-decls
+                    #:modules merged-module-deps))
+
+;; The inferred effect names on one function's row in the merged instance.
+(define (merged-effect-names fn-name)
+  (define row-link
+    (first (hg-out merged-graph (hg-function-node fn-name) 'fn-effect-row)))
+  (sort (map effect-key (rest (link-out row-link))) symbol<?))
+
+(define (test-merged-substrate)
+  ;; one instance, all six graph kinds present
+  (check-true (hypergraph? merged-graph))
+  (check-equal? (hg-kinds merged-graph) '(call capability effect module type uir))
+  (for ([kind (in-list graph-kinds)])
+    (check-true (pair? (hg-links merged-graph kind))
+                (format "the merged instance holds no ~a edges" kind)))
+  ;; the instance is exactly the six projections composed, not a side bag
+  (check-equal? (hg-atoms merged-graph)
+                (remove-duplicates
+                 (flatten-atoms
+                  (append (uir-graph-atoms merged-program)
+                          (call-graph-atoms merged-call-edges)
+                          (type-graph-atoms merged-type-relations)
+                          (effect-graph-atoms merged-effect-rows)
+                          (capability-graph-atoms merged-capability-decls)
+                          (module-graph-atoms merged-module-deps)))))
+  ;; every edge is typed by the schema
+  (check-equal? (hg-ill-typed-edges merged-graph) '()))
+
+(define (test-merged-typed-queries)
+  ;; uir graph
+  (check-true (pair? (hg-nodes merged-graph 'uir-call)))
+  (check-true (pair? (hg-edges merged-graph 'slot)))
+  ;; call graph: main -> fetch, and the reverse direction from the same edge
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (hg-function-node 'main) 'calls))
+                '(fetch))
+  (check-equal? (map (λ (l) (node-name (first (link-out l))))
+                     (hg-in merged-graph (hg-function-node 'fetch) 'calls))
+                '(main))
+  ;; effect graph: the rows above are real inference output (io via open,
+  ;; time via sleep, propagated from fetch to main through the call edge)
+  (check-equal? (merged-effect-names 'fetch) '(io time))
+  (check-equal? (merged-effect-names 'main) '(io time))
+  ;; type graph
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (t-base 'Manager) 'subtype))
+                '(object))
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (hg-type-slot-node 'fetch.result) 'assign))
+                '(Model))
+  ;; capability graph
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (hg-component-node "App") 'component-needs))
+                (list (cons "Store" '())))
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (hg-capability-node (cons "Store" '()))
+                             'capability-interprets))
+                (list (cons "Db" '())))
+  (check-true (pair? (hg-edges merged-graph 'given)))
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out merged-graph (hg-action-node "Load") 'action-writes))
+                (list "cache"))
+  ;; module graph
+  (check-equal? (sort (map (λ (l) (node-name (second (link-out l))))
+                           (hg-out merged-graph (hg-module-node 'app) 'module-imports))
+                      symbol<?)
+                '(django.db util))
+  ;; cross-graph identity: one `function` atom is the vertex of three graphs
+  (check-equal? (hg-node merged-graph 'function 'fetch) (hg-function-node 'fetch))
+  (check-true (and (pair? (hg-incident merged-graph (hg-function-node 'fetch) 'calls))
+                   (pair? (hg-incident merged-graph (hg-function-node 'fetch)
+                                       'fn-effect-row))))
+  ;; and the module graph can name that same function vertex
+  (define with-defines
+    (hg-add merged-graph (hg-module-defines-link 'app 'fetch)))
+  (check-equal? (hg-out with-defines (hg-module-node 'app) 'module-defines)
+                (list (hg-module-defines-link 'app 'fetch)))
+  (check-equal? (hg-ill-typed-edges with-defines) '())
+  ;; graph-kind filtering and exact edge-type filtering are different questions
+  (check-equal? (hg-edges merged-graph 'effect)
+                (filter (λ (l) (eq? (link-type l) 'effect))
+                        (hg-links merged-graph 'effect)))
+  (check-true (> (length (hg-links merged-graph 'effect))
+                 (length (hg-edges merged-graph 'effect)))))
+
+(define (test-typed-edge-schema)
+  (check-equal? graph-kinds '(uir call type effect capability module))
+  (for ([kind (in-list graph-kinds)])
+    (check-true (pair? (edge-types-for-kind kind))))
+  (for ([pair (in-list '((slot . uir)
+                         (calls . call)
+                         (subtype . type)
+                         (fn-effect-row . effect)
+                         (component-needs . capability)
+                         (module-imports . module)))])
+    (check-eq? (edge-kind (car pair)) (cdr pair)))
+  ;; node vocabulary records which graph(s) an atom can belong to
+  (check-equal? (node-kinds 'function) '(call effect module))
+  (check-equal? (node-kinds 'uir-call) '(uir))
+  ;; unknown edge types and ill-shaped edges are rejected, not stored silently
+  (define unknown (hg-add (hg-empty) (link 'no-such-edge (list (node 'x 'y)))))
+  (check-equal? (length (hg-ill-typed-edges unknown)) 1)
+  (define wrong-arity
+    (hg-add (hg-empty) (link 'calls (list (hg-function-node 'only-one)))))
+  (check-equal? (length (hg-ill-typed-edges wrong-arity)) 1)
+  (define wrong-role
+    (hg-add (hg-empty) (link 'calls (list (hg-function-node 'a)
+                                          (hg-module-node 'b)))))
+  (check-equal? (length (hg-ill-typed-edges wrong-role)) 1)
+  ;; a different vocabulary is an injected schema, not a different instance type
+  (define injected
+    (hg-empty (hash 'calls (edge-spec 'call 2 (list 'function 'function)))))
+  (check-equal? (hg-kinds (hg-add injected (hg-calls-link 'a 'b))) '(call)))
+
+;; ── instance API: set semantics, closure, direction ─────────────────
+
+(define (test-graph-instance-api)
+  (check-equal? (hg-atoms (hg-empty)) '())
+  (check-equal? (hg-links (hg-empty)) '())
+  (check-equal? (hg-kinds (hg-empty)) '())
+  ;; adding is immutable and the instance is set-valued
+  (define one (hg-add (hg-empty) (hg-calls-link 'a 'b)))
+  (check-equal? (hg-atoms (hg-empty)) '())
+  (check-equal? (length (hg-atoms one)) 3) ; the link plus both function nodes
+  (check-equal? (length (hg-atoms (hg-add one (hg-calls-link 'a 'b)))) 3)
+  ;; the closure makes an embedded node queryable on its own
+  (check-equal? (hg-node one 'function 'a) (hg-function-node 'a))
+  (check-equal? (hg-query (node 'function (var 'n)) (hg-atoms one))
+                (list (hash 'n 'a) (hash 'n 'b)))
+  ;; slot 0 is the source, the rest are targets
+  (check-equal? (map (λ (l) (node-name (second (link-out l))))
+                     (hg-out one (hg-function-node 'a) 'calls))
+                '(b))
+  (check-equal? (map (λ (l) (node-name (first (link-out l))))
+                     (hg-in one (hg-function-node 'b) 'calls))
+                '(a))
+  (check-equal? (length (hg-incident one (hg-function-node 'b))) 1)
+  (check-equal? (hg-ill-typed-edges (hg-empty)) '()))
+
+;; ── suite + real exit code ──────────────────────────────────────────
+;;
+;; The checks are wrapped in test cases and the process exit code is the real
+;; failure count: outside a test case a Rackunit check prints FAILURE but the
+;; process still exits 0, which would make this suite a false green.
+
+(define hypergraph-tests
+  (test-suite
+   "racklr/hypergraph typed substrate"
+   (test-case "effect algebra equivalence with contract.rkt" (test-effect-equivalence))
+   (test-case "typed effect subtyping" (test-typed-effect-subtyping))
+   (test-case "graph pattern query" (test-pattern-query))
+   (test-case "capability composition" (test-capability-composition))
+   (test-case "generic materialization" (test-materialize))
+   (test-case "OpenCog-compatible atoms" (test-open-cog-atoms))
+   (test-case "instance API" (test-graph-instance-api))
+   (test-case "one instance, all six graphs" (test-merged-substrate))
+   (test-case "typed queries across the merged substrate" (test-merged-typed-queries))
+   (test-case "typed-edge schema" (test-typed-edge-schema))))
+
+(define failure-count (run-tests hypergraph-tests))
+(if (zero? failure-count)
+    (displayln "All hypergraph tests passed.")
+    (exit 1))
