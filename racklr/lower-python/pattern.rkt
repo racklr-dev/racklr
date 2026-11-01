@@ -77,15 +77,21 @@
               [(eq? tag 'complex_number)
                (uir-pat-literal (lower-expr inner tk-type tk-value))]
                [(eq? tag 'strings)
-                ;; Extract STRING token value from strings node (has STRING tokens in list child)
-                (define str-tok
-                  (for/or ([c (any-tree-children inner)]
-                           #:when (list? c))
-                    (for/or ([item c]
-                             #:when (with-handlers ([exn:fail? (λ _ #f)]) (tk-type item) #t))
-                      (and (eq? (tk-type item) 'STRING) (tk-value item)))))
-                (if str-tok
-                    (uir-pat-literal (uir-string (unquote-string str-tok)))
+                ;; Store the same normalized literal the expression path
+                ;; stores: plain/u literals decoded, raw/bytes verbatim,
+                ;; f-strings raw. An implicit concatenation (`"a" "b"`) is one
+                ;; literal.
+                (define str-toks
+                  (let walk ([n inner])
+                    (cond [(and (not (cst-node? n)) (not (null? n))
+                                (not (symbol? n))
+                                (with-handlers ([exn:fail? (λ (_) #f)]) (tk-type n) #t))
+                           (if (eq? (tk-type n) 'STRING) (list (tk-value n)) '())]
+                          [(cst-node? n) (append-map walk (any-tree-children n))]
+                          [(and (list? n) (pair? n)) (append-map walk n)]
+                          [else '()])))
+                (if (pair? str-toks)
+                    (uir-pat-literal (lower-string-tokens str-toks))
                     (uir-pat-literal (uir-symbol "?")))]
               [else (catch-literal-token cst tk-type tk-value)]))))
 

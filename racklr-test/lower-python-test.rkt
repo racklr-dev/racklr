@@ -12,8 +12,27 @@
 
 ;; ── Load the Python3 parser ──────────────────────────────────────────
 
-(define-values (py-parse py-tokenize py-tok-type py-tok-value)
+(define-values (py-parse-raw py-tokenize py-tok-type py-tok-value)
   (gen-and-load-py "../grammars/python3/Python3Parser.g4"))
+
+;; The tracked grammar's single_input entry rejects one-line compound statements
+;; ("for x in y: pass"): simple_stmts consumes the statement's NEWLINE, so the
+;; alternative's trailing NEWLINE can never match. That is LOOP_PLAN.md's
+;; documented "Known failures" parser gap (gen-python3-test / lower-python-test
+;; used to die here before running any assertion). Test-harness workaround only:
+;; fall back to the file_input entry (the entry the real lowering pipeline uses)
+;; and unwrap its single `stmt`, which lower-python then lowers exactly as it
+;; would have lowered the single_input CST. No lowering/emission assertion is
+;; weakened — compound-statement round-trips are still checked byte-for-byte.
+(define (parse-single-via-file sql)
+  (define fp (py-parse-file-input sql))
+  (for/or ([c (any-tree-children fp)] #:when (and (list? c) (pair? c)))
+    (for/or ([cc c] #:when (and (cst-node? cc) (eq? (any-tree-tag cc) 'group)))
+      (define gk (filter cst-node? (any-tree-children cc)))
+      (and (pair? gk) (eq? (any-tree-tag (first gk)) 'stmt) (first gk)))))
+(define (py-parse sql)
+  (define r (with-handlers ([exn:fail? (lambda (_) #f)]) (py-parse-raw sql)))
+  (if (any-tree? r) r (parse-single-via-file sql)))
 
 ;; Load raw parse-file_input from the SAME generated module as gen-and-load-py
 ;; (avoids cross-module token struct incompatibility)
@@ -46,7 +65,7 @@
 (check-py "return 42\n" "return 42")
 (check-py "x = 1\n" "x = 1")
 (check-py "import os\n" "import os")
-(check-py "from os import path\n" "import os.path")
+(check-py "from os import path\n" "from os import path")
 (check-py "y = x\n" "y = x")
 
 ;; ── UIR inspection tests ────────────────────────────────────────────
@@ -139,13 +158,34 @@
   (check-true (uir-call? call) "power lowers to uir-call")
   (check-equal? (uir-symbol-name (uir-call-callee call)) "**" "op symbol is **"))
 
-;; Chained comparison `a < b < c` lowers to nested `<` calls, not ?comp_op/?op.
+;; Chained comparison `a < b < c` lowers to the dedicated cmp-chain node
+;; (operand, operator, operand, operator, operand), not nested `<` calls:
+;; Python evaluates `b` once and means `a < b and b < c`, so the nested-call
+;; encoding was both semantically wrong and unprintable without changing shape.
 (let ([cst (py-parse-file-input "a < b < c\n")])
   (define uir (lower-python cst py-tok-type py-tok-value))
   (define call (first (uir-block-stmts uir)))
   (check-true (uir-call? call) "chained comparison lowers to uir-call")
-  (check-equal? (uir-symbol-name (uir-call-callee call)) "<" "op symbol is <")
-  (check-equal? (length (uir-call-args call)) 2 "chained comparison has two args"))
+  (check-equal? (uir-symbol-name (uir-call-callee call)) "cmp-chain"
+                "chained comparison uses the cmp-chain constructor")
+  (define args (uir-call-args call))
+  (check-equal? (length args) 5 "cmp-chain has operand/op/operand/op/operand")
+  (check-equal? (map (lambda (a) (and (uir-symbol? a) (uir-symbol-name a)))
+                     (list (list-ref args 1) (list-ref args 3)))
+                '("<" "<") "cmp-chain operator entries are < symbols")
+  (check-equal? (map (lambda (a) (and (uir-var? a)
+                                      (uir-symbol-name (uir-var-name a))))
+                     (list (first args) (list-ref args 2) (list-ref args 4)))
+                '("a" "b" "c") "cmp-chain operands are a, b, c"))
+
+;; Two-token comparison operators keep their names inside the chain.
+(let* ([cst (py-parse-file-input "a is not b is not c\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [call (first (uir-block-stmts uir))]
+       [args (uir-call-args call)])
+  (check-equal? (uir-symbol-name (uir-call-callee call)) "cmp-chain")
+  (check-equal? (map uir-symbol-name (list (list-ref args 1) (list-ref args 3)))
+                '("is not" "is not") "two-token operators survive in cmp-chain"))
 
 ;; Union annotation `int | None` lowers to a `|` call, not ?expr.
 (let ([cst (py-parse-file-input "x: int | None = 1\n")])
@@ -495,8 +535,8 @@
   (check-true (uir-number? (uir-get-field uir)) "field is number")
   (check-equal? (uir-number-value (uir-get-field uir)) "0" "field is 0"))
 
-;; round-trip: x[a, b]
-(check-py "x[a, b]\n" "x[[a, b]]")
+;; round-trip: x[a, b] (emitter keeps the source subscript shape)
+(check-py "x[a, b]\n" "x[a, b]")
 
 ;; UIR inspection: slices lower to (call "slice" (list start stop step)).
 ;; Uses py-parse-file-input so these run despite the single_input bug (#1).
@@ -521,12 +561,20 @@
 (check-slice "x = a[::2]\n" #t #t #f)     ;; start=null stop=null step=2
 (check-slice "x = a[::]\n" #t #t #t)      ;; full copy
 
-;; UIR inspection: star_expr target lowers to uir-spread
+;; UIR inspection: `*a, b = c` lowers its unpack target to a uir-list whose
+;; first element is a uir-spread (a single-element spread in the name slot
+;; could not represent the second bound name).
 (let ([cst (py-parse-file-input "*a, b = c\n")])
   (define uir (lower-python cst py-tok-type py-tok-value))
   (define stmt (first (uir-block-stmts uir)))
   (check-true (uir-set!? stmt) "*a, b = c lowers to uir-set!")
-  (check-true (uir-spread? (uir-set!-name stmt)) "LHS is a spread"))
+  (define target (uir-set!-name stmt))
+  (check-true (uir-list? target) "LHS is a target uir-list")
+  (check-equal? (length (uir-list-items target)) 2 "both target elements kept")
+  (check-true (uir-spread? (first (uir-list-items target))) "first element is a spread")
+  (check-equal? (uir-symbol-name (uir-var-name (uir-spread-expr (first (uir-list-items target)))))
+                "a" "spread binds a")
+  (check-true (uir-var? (second (uir-list-items target))) "second element is b"))
 
 ;; round-trip: f-string
 (check-py "f\"hello {name}\"\n" "f\"hello {name}\"")
@@ -662,7 +710,7 @@
 (let ([cst (py-parse "def f(a, b, /, c=1, *args, **kw):\n    pass\n\n")])
   (define uir (lower-python cst py-tok-type py-tok-value))
   (define params (uir-fn-params uir))
-  (check-equal? (map uir-symbol-name params)
+  (check-equal? (map (lambda (p) (uir-symbol-name (uir-typed-param-name p))) params)
                 '("a" "b" "c" "args" "kw")
                 "positional-only params lower in order, / dropped")
   (check-equal? (uir-number-value (uir-typed-param-default (caddr params)))
@@ -820,6 +868,248 @@
   (check-true (uir-pat-literal? (first elems)) "first element is a literal")
   (check-true (uir-pat-capture? (second elems)) "second element is a capture")
   (check-true (uir-pat-literal? (third elems)) "third element is a literal"))
+
+;; ── Regression: lowering representation fixes for emit round-trip ───
+;;
+;; Every construct here was previously collapsed by the Python front end (the
+;; emitter could not reconstruct it) and is now encoded so that
+;; parse → lower → emit → parse → lower reproduces the same UIR.
+
+;; Emit round-trip identity: re-lowering the emitted Python must reproduce the
+;; same UIR node-for-node (not merely text that parses).
+(define (check-identity src)
+  (define u1 (lower-python (py-parse-file-input src) py-tok-type py-tok-value))
+  (define emitted (emit-python u1))
+  (define reparsed? (and (string? emitted)
+                         (with-handlers ([exn:fail? (lambda (_) #f)])
+                           (any-tree? (py-parse-file-input (string-append emitted "\n"))))))
+  (check-true reparsed? (format "emitted Python re-parses: ~s -> ~s" src emitted))
+  (when reparsed?
+    (define u2 (lower-python (py-parse-file-input (string-append emitted "\n"))
+                             py-tok-type py-tok-value))
+    (check-equal? u2 u1 (format "UIR identity after emit: ~s -> ~s" src emitted))))
+
+;; 1. star / double-star call arguments (were both dropped, so `f(*xs)` and
+;;    `f(xs)` lowered identically).
+(let* ([cst (py-parse "f(*xs, **kw)\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [args (uir-call-args uir)])
+  (check-equal? (length args) 2 "one positional and one keyword unpack")
+  (check-true (uir-spread? (first args)) "* argument lowers to uir-spread")
+  (check-equal? (uir-symbol-name (uir-var-name (uir-spread-expr (first args))))
+                "xs" "spread binds xs")
+  (check-true (uir-call? (second args)) "** argument lowers to a call")
+  (check-equal? (uir-symbol-name (uir-call-callee (second args))) "kw-spread"
+                "** argument uses the kw-spread constructor"))
+(check-identity "f(*xs)\n")
+(check-identity "f(**kw)\n")
+(check-identity "f(1, *xs, **kw)\n")
+
+;; 2. Chained assignment (used to keep only the first target and treat the
+;;    next target as the value).
+(let* ([cst (py-parse "a = b = c = 1\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)])
+  (check-true (uir-set!? uir) "chained assignment lowers to uir-set!")
+  (define (set-name n) (uir-symbol-name (uir-var-name (uir-set!-name n))))
+  (check-equal? (set-name uir) "a" "outermost target is a")
+  (define inner1 (uir-set!-value uir))
+  (check-true (uir-set!? inner1) "chain nests in the value slot")
+  (check-equal? (set-name inner1) "b" "second target is b")
+  (define inner2 (uir-set!-value inner1))
+  (check-true (uir-set!? inner2) "chain nests a third level")
+  (check-equal? (set-name inner2) "c" "third target is c")
+  (check-true (uir-number? (uir-set!-value inner2)) "final value is the RHS"))
+(check-identity "a = b = c = 1\n")
+(check-identity "d = e = f(*xs)\n")
+
+;; 3. Tuple / list unpack targets (used to keep only the first element).
+(let* ([cst (py-parse "a, b = x\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [target (uir-set!-name uir)])
+  (check-true (uir-list? target) "unpack target lowers to a uir-list")
+  (check-equal? (map (lambda (e) (uir-symbol-name (uir-var-name e)))
+                     (uir-list-items target))
+                '("a" "b") "both unpack targets survive in order"))
+(let* ([cst (py-parse "a, *rest = x\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [target (uir-set!-name uir)])
+  (check-equal? (length (uir-list-items target)) 2 "star target keeps both elements")
+  (check-true (uir-spread? (second (uir-list-items target))) "second element is a spread"))
+(check-identity "a, b = x\n")
+(check-identity "a, *rest = x\n")
+(check-identity "*a, b = c\n")
+(check-identity "(a, b) = x\n")
+(check-identity "[a, b] = x\n")
+(check-identity "a, (b, c) = x\n")
+
+;; 4. Dotted / chained decorators (callee used to collapse to its first name,
+;;    so @pytest.mark.parametrize(...) lowered like @pytest(...)).
+(let* ([cst (py-parse "@pytest.mark.parametrize(\"data\", [1])\ndef f(): pass\n\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [deco (first (uir-decorated-decorators uir))]
+       [callee (uir-call-callee deco)])
+  (check-true (uir-get? callee) "decorator callee is an attribute chain")
+  (check-true (uir-get? (uir-get-base callee)) "chain has two levels")
+  (check-equal? (uir-string-value (uir-get-field callee)) "parametrize"
+                "outermost attribute is parametrize")
+  (check-equal? (uir-string-value (uir-get-field (uir-get-base callee))) "mark"
+                "inner attribute is mark"))
+(check-identity "@pytest.mark.parametrize(\"data\", [1])\ndef f(): pass\n\n")
+(check-identity "@app.route(\"/x\")\ndef f(): pass\n\n")
+(check-identity "@deco\ndef f(): pass\n\n")
+
+;; 5. String literal normalization: plain/u literals are stored decoded (the
+;;    emitter re-escapes), raw/bytes stay verbatim, f-strings store the raw
+;;    body.
+(let* ([cst (py-parse "x = \"a\\\"b\"\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [lit (uir-set!-value uir)])
+  (check-true (uir-string? lit) "plain literal lowers to uir-string")
+  (check-equal? (uir-string-value lit) "a\"b" "escaped quote is decoded"))
+(let* ([cst (py-parse "x = \"\"\"a\nb\"\"\"\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)])
+  (check-equal? (uir-string-value (uir-set!-value uir)) "a\nb"
+                "triple-quoted literal keeps its embedded newline"))
+(let* ([cst (py-parse "x = r\"^\\\\d+\"\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)])
+  (check-equal? (uir-string-value (uir-set!-value uir)) "r\"^\\\\d+\""
+                "raw literal keeps the full token text verbatim"))
+(let* ([cst (py-parse "x = f\"\"\"a\n{b}\"\"\"\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)])
+  (check-true (uir-fstring? (uir-set!-value uir)) "f-string lowers to uir-fstring")
+  (check-equal? (uir-fstring-value (uir-set!-value uir)) "a\n{b}"
+                "f-string body is raw and delimiter-free"))
+(let* ([cst (py-parse "x = \"a\" \"b\"\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)])
+  (check-equal? (uir-string-value (uir-set!-value uir)) "ab"
+                "implicit literal concatenation is one string"))
+(check-identity "x = \"a\\\"b\"\n")
+(check-identity "x = 'a\"b'\n")
+(check-identity "x = \"\"\"a\nb\"\"\"\n")
+(check-identity "x = r\"^\\\\d+\"\n")
+(check-identity "x = b\"abc\"\n")
+(check-identity "x = u\"hi\"\n")
+(check-identity "x = f\"hello {name}\"\n")
+(check-identity "x = f\"\"\"a\n{b}\"\"\"\n")
+(check-identity "x = \"a\" \"b\"\n")
+
+;; 6. Chained comparisons (nested `<` calls were semantically wrong).
+(check-identity "a < b < c\n")
+(check-identity "a is not b is not c\n")
+(check-identity "a not in b < c\n")
+
+;; 7. with ... as (a, b) target: a uir-list, so the emitter never calls
+;;    uir-var-name on a tuple expression.
+(let* ([cst (py-parse "with server as (host, port): pass\n\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [target (cadr (first (uir-with-items uir)))])
+  (check-true (uir-list? target) "with-as tuple target lowers to a uir-list")
+  (check-equal? (map (lambda (e) (uir-symbol-name (uir-var-name e)))
+                     (uir-list-items target))
+                '("host" "port") "both with-as targets survive"))
+(check-identity "with server as (host, port): pass\n")
+(check-identity "with x as (a, b), y as z: pass\n")
+
+;; Call arguments / collection displays with unpacking (same class of loss as
+;; item 1): `[*xs, 1]`, `(1, *xs)`, `{*a, *b}` used to drop the starred item.
+(let* ([cst (py-parse "x = [*xs, 1]\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [items (uir-list-items (uir-set!-value uir))])
+  (check-equal? (length items) 2 "list display keeps the starred item")
+  (check-true (uir-spread? (first items)) "starred list item is a spread"))
+(check-identity "x = [*xs, 1]\n")
+(check-identity "x = (1, *xs)\n")
+(check-identity "x = {*a, *b}\n")
+
+;; ── Regression: import lowering keeps source and imported names ──────
+;; `from X import a` used to become `import X.a` (every name glued into the
+;; module path), `from .pkg import a` emitted `import pkg.a` (dots dropped) and
+;; `import a, b` emitted one bogus dotted module.
+(let* ([cst (py-parse-file-input "from .globals import current_app\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [imp (first (uir-block-stmts uir))])
+  (check-true (uir-import? imp) "from-import lowers to uir-import")
+  (check-equal? (uir-symbol-name (uir-import-source imp)) ".globals"
+                "relative module prefix is kept")
+  (check-equal? (map uir-symbol-name (uir-import-names imp)) '("current_app")
+                "imported name is kept"))
+(let* ([cst (py-parse-file-input "from typing import (Any, Dict)\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [imp (first (uir-block-stmts uir))])
+  (check-equal? (uir-symbol-name (uir-import-source imp)) "typing" "module is typing")
+  (check-equal? (map uir-symbol-name (uir-import-names imp)) '("Any" "Dict")
+                "parenthesised name list survives"))
+(let* ([cst (py-parse-file-input "import os, sys\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       ;; The file_input entry wraps the statement in a block; a multi-module
+       ;; import is itself a statement list, so flatten one level here.
+       [imports (append-map (lambda (s) (if (uir-block? s) (uir-block-stmts s) (list s)))
+                            (uir-block-stmts uir))])
+  (check-equal? (length imports) 2 "one import node per module")
+  (check-equal? (map (lambda (i) (uir-symbol-name (uir-import-source i)))
+                     imports)
+                '("os" "sys") "both modules kept"))
+(check-identity "from .globals import current_app\n")
+(check-identity "from ..pkg import y\n")
+(check-identity "from . import x\n")
+(check-identity "from typing import (Any, Dict)\n")
+(check-identity "from a.b import c as d\n")
+(check-identity "from x import *\n")
+(check-identity "import os.path\n")
+(check-py "from .globals import current_app\n" "from .globals import current_app")
+(check-py "from typing import (Any, Dict)\n" "from typing import Any, Dict")
+(check-py "import os, sys\n" "import os\nimport sys")
+
+;; 8. String-key subscript vs attribute disambiguation: both used to lower to
+;;    (uir-get d (uir-string "a")), so `d["a"] = 1` emitted as `d.a = 1`.
+(let* ([cst (py-parse "d[\"a\"] = 1\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [target (uir-set!-name uir)]
+       [field (uir-get-field target)])
+  (check-true (uir-get? target) "subscript assignment target is uir-get")
+  (check-true (uir-list? field) "string subscript index is a one-element list")
+  (check-equal? (length (uir-list-items field)) 1)
+  (check-equal? (uir-string-value (first (uir-list-items field))) "a" "index is a"))
+(let* ([cst (py-parse "d.a = 1\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [field (uir-get-field (uir-set!-name uir))])
+  (check-true (uir-string? field) "attribute access keeps a bare string field")
+  (check-equal? (uir-string-value field) "a" "attribute is a"))
+(let* ([cst (py-parse "x = d[\"a\", b]\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [field (uir-get-field (uir-set!-value uir))])
+  (check-true (uir-list? field) "mixed subscript keeps its index list")
+  (check-equal? (length (uir-list-items field)) 2 "both indices kept"))
+(check-py "d[\"a\"] = 1\n" "d[\"a\"] = 1")
+(check-py "d.a = 1\n" "d.a = 1")
+(check-identity "d[\"a\"] = 1\n")
+(check-identity "d.a = 1\n")
+(check-identity "x = d[\"a\"]\n")
+(check-identity "x = d[\"a\", b]\n")
+(check-identity "x = d[\"a\"][\"b\"]\n")
+(check-identity "x = d[\"a\"].b\n")
+
+;; 9. Dict-display `**` unpack (corpus: `out = {**self.environ_base, **other}`)
+;;    used to be dropped, emitting `{}` (valid Python, wrong data). Entries are
+;;    `((call "kw-spread" (list expr)) . null)` in source order; other entries
+;;    keep their lowered key expression (numbers stay numbers).
+(let* ([cst (py-parse "out = {**a, \"b\": 1}\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [entries (uir-record-entries (uir-set!-value uir))])
+  (check-equal? (length entries) 2 "both dict entries kept")
+  (check-true (uir-call? (car (first entries))) "first entry key is a call")
+  (check-equal? (uir-symbol-name (uir-call-callee (car (first entries)))) "kw-spread"
+                "first entry is a ** unpack")
+  (check-equal? (uir-string-value (car (second entries))) "b" "second key is b"))
+(let* ([cst (py-parse "x = {1: \"a\"}\n")]
+       [uir (lower-python cst py-tok-type py-tok-value)]
+       [entries (uir-record-entries (uir-set!-value uir))])
+  (check-true (uir-number? (car (first entries))) "numeric dict key stays a number"))
+(check-identity "out = {**a, \"b\": 1}\n")
+(check-identity "out = {\"a\": 1, **b}\n")
+(check-identity "out = {**a}\n")
+(check-identity "out = {**a, **b}\n")
+(check-identity "x = {1: \"a\", 2: \"b\"}\n")
 
 ;; ── Cleanup ─────────────────────────────────────────────────────────
 

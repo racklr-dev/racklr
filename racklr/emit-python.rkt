@@ -16,19 +16,53 @@
          (string-join (map (λ (s) (emit-stmt s indent)) (uir-block-stmts uir)) "\n")]
         [else (emit-stmt uir indent)]))
 
+;; ── Assignment targets ─────────────────────────────────────────────
+;;
+;; The Python front end encodes a destructuring target as `uir-list` whose
+;; elements are uir-var / uir-get / nested uir-list / uir-spread; a chained
+;; assignment is a nested `uir-set!` in the value position. A top-level target
+;; list is rendered without parentheses (`a, b = ...`); a nested one keeps them
+;; (`(a, b), c = ...`) because it is a tuple target, not an unpack list. A
+;; one-element target list is a one-element tuple target and keeps its trailing
+;; comma (`a, = ...`, `(a,), b = ...`), which distinguishes it from a plain
+;; binding.
+(define (target-str t [nested? #f])
+  (cond
+    [(uir-list? t)
+     (define items (uir-list-items t))
+     (define inner
+       (string-append (string-join (map (λ (e) (target-str e #t)) items) ", ")
+                      (if (= (length items) 1) "," "")))
+     (if nested? (string-append "(" inner ")") inner)]
+    [(uir-spread? t) (string-append "*" (target-str (uir-spread-expr t)))]
+    [else (emit-expr t prec-primary)]))
+
+(define (with-target-str t)
+  (if (uir-list? t)
+      (string-append "(" (target-str t) ")")
+      (target-str t)))
+
+;; Render an assignment statement, including any chain: `a = b = value`.
+(define (emit-assign s)
+  (define name-str (target-str (uir-set!-name s)))
+  (define value (uir-set!-value s))
+  (if (uir-set!? value)
+      (string-append name-str " = " (emit-assign value))
+      (string-append name-str " = " (emit-expr value 0))))
+
 (define (emit-stmt uir indent)
   (define spc (make-string (* indent 4) #\space))
   (cond [(uir-null? uir) (string-append spc "pass")]
         [(uir-return? uir)
          (string-append spc "return " (emit-expr (uir-return-value uir)))]
         [(uir-set!? uir)
-          (string-append spc (emit-expr (uir-set!-name uir)) " = " (emit-expr (uir-set!-value uir)))]
+         (string-append spc (emit-assign uir))]
         [(uir-ann-set!? uir)
-          (let ([lhs-str (emit-expr (uir-ann-set!-lhs uir))]
+          (let ([lhs-str (target-str (uir-ann-set!-lhs uir))]
                 [type-str (emit-expr (uir-ann-set!-type uir))])
             (string-append spc lhs-str ": " type-str
                            (if (uir-ann-set!-value uir)
-                               (string-append " = " (emit-expr (uir-ann-set!-value uir)))
+                               (string-append " = " (emit-expr (uir-ann-set!-value uir) 0))
                                "")))]
         [(uir-type-alias? uir)
          (string-append spc (emit-type-alias uir))]
@@ -69,7 +103,7 @@
             (if (uir-symbol? callee)
                 (let ([name (uir-symbol-name callee)])
                   (cond [(equal? name "del")
-                         (string-append spc "del " (string-join (map emit-expr (uir-call-args uir)) ", "))]
+                         (string-append spc "del " (string-join (map (λ (a) (emit-expr a)) (uir-call-args uir)) ", "))]
                         [(equal? name "global")
                          (string-append spc "global " (string-join (map uir-symbol-name (uir-call-args uir)) ", "))]
                         [(equal? name "nonlocal")
@@ -125,7 +159,7 @@
 
 (define (emit-for-each uir indent)
   (define spc (make-string (* indent 4) #\space))
-  (define var-str (uir-symbol-name (uir-for-each-var uir)))
+  (define var-str (target-str (uir-for-each-var uir)))
   (define iter-str (emit-expr (uir-for-each-iterable uir)))
   (define body-str (emit-body (uir-for-each-body uir) (+ indent 1)))
   (define else-str
@@ -185,7 +219,7 @@
      (for/list ([item (uir-with-items uir)])
        (define ctx-str (emit-expr (car item)))
        (if (cadr item)
-           (string-append ctx-str " as " (uir-symbol-name (uir-var-name (cadr item))))
+           (string-append ctx-str " as " (with-target-str (cadr item)))
            ctx-str))
      ", "))
   (string-append spc "with " items-str ":\n"
@@ -200,13 +234,15 @@
 ;; Wrap a directly-performed effect call in the runtime guard: the ambient
 ;; effect context (established by the __withEffects decorator) enforces
 ;; must-not / ops / budget against the specific operation, then runs the
-;; original call.
-(define (emit-perform name op args-str call-str)
-  (format "__perform(~s, ~s, [~a], lambda: ~a)"
+;; original call. Keyword arguments are passed as a dict so the positional
+;; argument list stays a Python list.
+(define (emit-perform name op args call-str)
+  (format "__perform(~s, ~s, [~a], lambda: ~a~a)"
           (symbol->string name)
           (if op (symbol->string op) "")
-          args-str
-          call-str))
+          (emit-call-positional-args args)
+          call-str
+          (emit-call-kwargs-dict args)))
 
 (define (emit-effects-guard fn indent)
   (define spc (make-string (* indent 4) #\space))
@@ -261,7 +297,7 @@
    "        performed[name][\"any\"] += 1\n"
    "        performed[name][op] = performed[name].get(op, 0) + 1\n"
    "    return thunk()\n"
-   "def __perform(name, op, args, thunk):\n"
+   "def __perform(name, op, args, thunk, kwargs=None):\n"
    "    handler = __current_handler(name)\n"
    "    if handler is not None:\n"
    "        def resume():\n"
@@ -346,12 +382,14 @@
 
 ;; The JS/TS async-fn wrapper: (call "async-fn" (list fn)). Python async defs
 ;; lower to the same shape so inference and the emitters share one convention.
+;; Inside a class the wrapped node is a uir-method, at top level a uir-fn.
 (define (async-fn-call? n)
   (and (uir-call? n)
        (uir-symbol? (uir-call-callee n))
        (string=? (uir-symbol-name (uir-call-callee n)) "async-fn")
        (= (length (uir-call-args n)) 1)
-       (uir-fn? (first (uir-call-args n)))))
+       (or (uir-fn? (first (uir-call-args n)))
+           (uir-method? (first (uir-call-args n))))))
 
 ;; Render one parameter of a Python `def` signature. The `*` / `**` prefix
 ;; comes from the parameter kind: `var-positional` is `*args`,
@@ -414,7 +452,7 @@
   (define name (uir-symbol-name (uir-class-name uir)))
   (define supers (uir-class-super uir))
   (define super-str
-    (if (null? supers) "" (string-append "(" (string-join (map emit-expr supers) ", ") ")")))
+    (if (null? supers) "" (string-append "(" (string-join (map (λ (a) (emit-expr a)) supers) ", ") ")")))
   (define fields (uir-class-fields uir))
   (define methods (uir-class-methods uir))
   (define indent1 (+ indent 1))
@@ -429,22 +467,51 @@
              (string-append spc1 fn type-part init-part)))
          fields))
   (define method-lines
-    (map (λ (m) (emit-method-node m name indent1)) methods))
+    (filter values (map (λ (m) (emit-method-node m name indent1)) methods)))
   (define body-lines (append field-lines method-lines))
   (string-append
    spc "class " name super-str ":\n"
    (if (null? body-lines) (string-append spc1 "pass") (string-join body-lines "\n"))))
 
-(define (emit-method uir class-name indent [async? #f])
+;; ── Methods ────────────────────────────────────────────────────────
+
+;; Name of a parameter node (symbol or typed-param), or #f.
+(define (param-name p)
+  (cond [(uir-symbol? p) (uir-symbol-name p)]
+        [(uir-typed-param? p) (uir-symbol-name (uir-typed-param-name p))]
+        [else #f]))
+
+;; The bound name of a decorator expression (@staticmethod, @x.setter, ...).
+(define (decorator-name d)
+  (define c (and (uir-call? d) (uir-call-callee d)))
+  (cond [(uir-symbol? c) (uir-symbol-name c)]
+        [(uir-var? c) (uir-symbol-name (uir-var-name c))]
+        [else #f]))
+
+;; How a method's first parameter is bound: a normal instance method gets an
+;; implicit `self` receiver; `@staticmethod` has no receiver at all;
+;; `@classmethod` keeps its written first parameter (`cls`).
+(define (method-binding decos)
+  (cond [(for/or ([d decos]) (equal? (decorator-name d) "staticmethod")) 'static]
+        [(for/or ([d decos]) (equal? (decorator-name d) "classmethod")) 'class]
+        [else 'instance]))
+
+(define (emit-method uir class-name indent [async? #f] [decos '()])
   (define spc (make-string (* indent 4) #\space))
   (define name (uir-symbol-name (uir-method-name uir)))
-  (define self-param (car (uir-method-params uir)))
-  (define rest-params (cdr (uir-method-params uir)))
-  ;; Don't emit self as a separate param — it's always implicit
-  (define params-str (emit-param-list rest-params))
+  (define params (uir-method-params uir))
+  (define params-str
+    (case (method-binding decos)
+      [(static class) (emit-param-list params)]
+      [else
+       ;; The first parameter is the receiver; keep its name when the source
+       ;; named it, and synthesize `self` only for a receiver-less method node.
+       (define self-name (or (and (pair? params) (param-name (car params))) "self"))
+       (define rest (if (pair? params) (cdr params) '()))
+       (string-append self-name
+                      (if (null? rest) "" (string-append ", " (emit-param-list rest))))]))
   (string-append
-   spc (if async? "async def " "def ") name "(self"
-   (if (string=? params-str "") "" (string-append ", " params-str)) "):\n"
+   spc (if async? "async def " "def ") name "(" params-str "):\n"
    (emit-body (uir-method-body uir) (+ indent 1))))
 
 ;; Render one class method-list node: a plain uir-method, a decorated method
@@ -456,7 +523,9 @@
     [(uir-decorated? m) (emit-decorated-method m class-name indent)]
     [(async-fn-call? m)
      (define inner (first (uir-call-args m)))
-     (and (uir-method? inner) (emit-method inner class-name indent #t))]
+     (cond [(uir-method? inner) (emit-method inner class-name indent #t)]
+           [(uir-decorated? inner) (emit-decorated-method inner class-name indent #t)]
+           [else (emit-stmt inner indent)])]
     [else (emit-stmt m indent)]))
 
 (define (emit-import uir spc)
@@ -514,6 +583,13 @@
 
 ;; ── Decorated emitter ──────────────────────────────────────────────
 
+;; Render one decorator line (`@name` for a bare decorator, `@expr(...)`
+;; otherwise). A decorator expression is a uir-call by construction.
+(define (emit-decorator d spc)
+  (if (and (uir-call? d) (null? (uir-call-args d)))
+      (string-append spc "@" (emit-expr (uir-call-callee d)))
+      (string-append spc "@" (emit-expr d))))
+
 (define (emit-decorated uir indent)
   (define spc (make-string (* indent 4) #\space))
   ;; The `@effects({...})` decorator is a static annotation, not a runtime
@@ -522,15 +598,7 @@
   ;; `effects` name at import time.
   (define decos (filter (λ (d) (not (effects-decorator? d)))
                         (uir-decorated-decorators uir)))
-  (define deco-lines
-    (string-join
-     (map (lambda (d)
-            ;; d is a uir-call: emit as @name or @name(args)
-            (if (null? (uir-call-args d))
-                (string-append spc "@" (emit-expr (uir-call-callee d)))
-                (string-append spc "@" (emit-expr d))))
-          decos)
-     "\n"))
+  (define deco-lines (string-join (map (λ (d) (emit-decorator d spc)) decos) "\n"))
   (define inner-str
     (let ([inner (uir-decorated-inner uir)])
       (cond [(uir-fn? inner) (emit-funcdef inner indent)]
@@ -542,121 +610,373 @@
 
 ;; A decorated method inside a class ((uir-decorated decos method)): render the
 ;; decorator lines and then the inner uir-method (async when wrapped).
-(define (emit-decorated-method uir class-name indent)
+;; `@staticmethod` / `@classmethod` change how the receiver parameter is bound;
+;; `emit-method` reads that from the decorator list.
+(define (emit-decorated-method uir class-name indent [async? #f])
   (define spc (make-string (* indent 4) #\space))
   (define decos (filter (λ (d) (not (effects-decorator? d)))
                         (uir-decorated-decorators uir)))
-  (define deco-lines
-    (string-join
-     (map (lambda (d)
-            (if (null? (uir-call-args d))
-                (string-append spc "@" (emit-expr (uir-call-callee d)))
-                (string-append spc "@" (emit-expr d))))
-          decos)
-     "\n"))
+  (define deco-lines (string-join (map (λ (d) (emit-decorator d spc)) decos) "\n"))
   (define inner (uir-decorated-inner uir))
+  (define-values (inner-node async-node?)
+    (if (async-fn-call? inner)
+        (values (first (uir-call-args inner)) #t)
+        (values inner async?)))
   (define inner-str
     (cond
-      [(uir-method? inner) (emit-method inner class-name indent)]
-      [(async-fn-call? inner)
-       (define m (first (uir-call-args inner)))
-       (and (uir-method? m) (emit-method m class-name indent #t))]
-      [else (emit-stmt inner indent)]))
+      [(uir-method? inner-node) (emit-method inner-node class-name indent async-node? decos)]
+      [(uir-fn? inner-node) (emit-funcdef inner-node indent async-node?)]
+      [else (emit-stmt inner-node indent)]))
   (string-append deco-lines "\n" inner-str))
 
 ;; ── Expression emitter ─────────────────────────────────────────────
+;;
+;; Expression emission is precedence-aware: a sub-expression is rendered at the
+;; precedence level its parent context requires and parenthesized only when the
+;; source tree would otherwise re-parse as a different tree. The levels are the
+;; Python 3 operator precedence table, lowest first:
+;;
+;;   lambda (0) < conditional (1) < or (2) < and (3) < not (4) <
+;;   comparisons (5) < | (6) < ^ (7) < & (8) < shifts (9) < + - (10) <
+;;   * @ / // % (11) < unary + - ~ (12) < ** (13) < primary (14)
 
-;; Render one call argument, special-casing the (call "kwarg" (list name value))
-;; keyword-argument encoding produced by lower-argument.
+(define prec-lambda 0)
+(define prec-conditional 1)
+(define prec-primary 14)
+
+(define comparison-ops '("<" ">" "==" "!=" "<=" ">=" "is" "is not" "in" "not in"))
+
+;; `(list precedence associativity)` for an infix operator name, or #f. A list
+;; rather than multiple values keeps it usable in a plain `and` guard.
+(define (binary-op-info name)
+  (cond
+    [(equal? name "or") (list 2 'left)]
+    [(equal? name "and") (list 3 'left)]
+    [(member name comparison-ops) (list 5 'nonassoc)]
+    [(equal? name "|") (list 6 'left)]
+    [(equal? name "^") (list 7 'left)]
+    [(equal? name "&") (list 8 'left)]
+    [(or (equal? name "<<") (equal? name ">>")) (list 9 'left)]
+    [(or (equal? name "+") (equal? name "-")) (list 10 'left)]
+    [(member name '("*" "@" "/" "//" "%")) (list 11 'left)]
+    [(equal? name "**") (list 13 'right)]
+    [else #f]))
+
+(define (binary-op? name)
+  (and (binary-op-info name) #t))
+
+(define (call-name n)
+  (and (uir-call? n)
+       (uir-symbol? (uir-call-callee n))
+       (uir-symbol-name (uir-call-callee n))))
+
+;; The precedence of a node as an expression. Nodes that need their own
+;; parentheses (paren, walrus) count as primary: they always render wrapped.
+(define (expr-prec n)
+  (cond
+    [(uir-if? n) prec-conditional]
+    [(or (uir-fn? n) (uir-let? n) (uir-yield? n)) prec-lambda]
+    [(uir-call? n)
+     (define name (call-name n))
+     (cond
+       [(and name (regexp-match? #px"(?:-comp|-exp)$" name)) prec-primary]
+       [(and name (equal? name "cmp-chain")) 5]
+       [(and name (equal? name "not") (= (length (uir-call-args n)) 1)) 4]
+       [(and name (member name '("+" "-" "~")) (= (length (uir-call-args n)) 1)) 12]
+       [(and name (binary-op-info name))
+        (car (binary-op-info name))]
+       [else prec-primary])]
+    [(uir-spread? n) 12]
+    [(uir-await? n) prec-primary]
+    [else prec-primary]))
+
+;; Render `n` at context level `ctx`: wrap in parentheses only when the node's
+;; precedence is below what the context requires. A primary node never needs
+;; wrapping (paren/walrus already carry their own).
+(define (emit-expr n [ctx prec-lambda])
+  (define raw (emit-expr-raw n))
+  (if (< (expr-prec n) ctx)
+      (string-append "(" raw ")")
+      raw))
+
+;; ── Literal strings and f-strings ─────────────────────────────────
+;;
+;; Plain string literals are stored decoded (lowering processes the escapes);
+;; the emitter re-encodes them as a double-quoted literal. A prefixed literal
+;; (r/b/u prefix, or an r/b combination) is stored verbatim by the front end
+;; because its escaping rules are prefix-dependent; it is emitted verbatim.
+;;
+;;   uir-string "a\"b"        → "a\"b"
+;;   uir-string "r\"^\\d+\""  → r"^\d+"        (verbatim)
+(define prefixed-string-rx #px"^[rRbBuU]{1,2}(\"\"\"|'''|\"|')")
+
+;; True for a source literal stored verbatim: prefixed, with a matching
+;; closing delimiter. A single-quoted literal may not carry a raw newline; a
+;; triple-quoted one may (raw and bytes triple literals keep their embedded
+;; newlines in the token text).
+(define (verbatim-string-value? v)
+  (and (regexp-match? prefixed-string-rx v)
+       (let ([delim (match (regexp-match prefixed-string-rx v)
+                      [(list _ d) d]
+                      [_ "\"\"\""])])
+         (and (>= (string-length v) (* 2 (string-length delim)))
+              (string-suffix? v delim)
+              (> (string-length v) (string-length delim))
+              (or (= (string-length delim) 3)
+                  (not (regexp-match? #rx"\n" v)))))))
+
+;; Escape a decoded content string for a double-quoted Python literal. Control
+;; characters use \xNN with exactly two hex digits, as Python requires.
+(define (escape-python-string s)
+  (apply string-append
+         (for/list ([c (in-string s)])
+           (case c
+             [(#\\) "\\\\"]
+             [(#\") "\\\""]
+             [(#\newline) "\\n"]
+             [(#\return) "\\r"]
+             [(#\tab) "\\t"]
+             [else
+              (define code (char->integer c))
+              (if (< code 32)
+                  (let ([hex (string-upcase (number->string code 16))])
+                    (format "\\x~a" (if (< (string-length hex) 2)
+                                        (string-append "0" hex)
+                                        hex)))
+                  (string c))]))))
+
+(define (emit-string-literal uir)
+  (define v (uir-string-value uir))
+  (if (verbatim-string-value? v)
+      v
+      (string-append "\"" (escape-python-string v) "\"")))
+
+;; Pick the shortest delimiter that survives the f-string body: single-line
+;; bodies use a single quote unless they contain it, multi-line bodies use a
+;; triple quote that does not occur inside the body.
+(define (emit-fstring-literal uir)
+  (define body (uir-fstring-value uir))
+  (define delim
+    (cond
+      [(and (not (regexp-match? #rx"\n" body))
+            (not (string-contains? body "\""))
+            (not (string-suffix? body "\\")))
+       "\""]
+      [(and (not (regexp-match? #rx"\n" body))
+            (not (string-contains? body "'"))
+            (not (string-suffix? body "\\")))
+       "'"]
+      [(and (not (string-contains? body "\"\"\""))
+            (not (string-suffix? body "\"")))
+       "\"\"\""]
+      [(and (not (string-contains? body "'''"))
+            (not (string-suffix? body "'")))
+       "'''"]
+      [else "\""]))
+  (string-append "f" delim body delim))
+
+;; ── Call arguments ─────────────────────────────────────────────────
+
+(define (kwarg-name a)
+  (and (uir-call? a)
+       (call-name a)
+       (equal? (call-name a) "kwarg")
+       (= (length (uir-call-args a)) 2)
+       (uir-call-args a)))
+
+;; Render one call argument: keyword arguments use `name=value`, `*`/`**`
+;; unpacking use the spread encodings the Python front end produces.
 (define (emit-arg a)
-  (if (and (uir-call? a)
-           (uir-symbol? (uir-call-callee a))
-           (equal? (uir-symbol-name (uir-call-callee a)) "kwarg")
-           (= (length (uir-call-args a)) 2))
-      (string-append (emit-expr (first (uir-call-args a)))
-                     "=" (emit-expr (second (uir-call-args a))))
-      (emit-expr a)))
+  (cond
+    [(kwarg-name a)
+     (define args (kwarg-name a))
+     (string-append (emit-expr (first args) 0) "=" (emit-expr (second args) 0))]
+    [(and (call-name a) (equal? (call-name a) "kw-spread"))
+     (string-append "**" (emit-expr (first (uir-call-args a)) 1))]
+    [(uir-spread? a)
+     (string-append "*" (emit-expr (uir-spread-expr a) 6))]
+    [else (emit-expr a 0)]))
 
-(define (emit-expr uir)
-  (cond [(uir-null? uir) "None"]
-        [(uir-bool? uir) (if (uir-bool-value uir) "True" "False")]
-        [(uir-number? uir) (uir-number-value uir)]
-        [(uir-string? uir) (string-append "\"" (uir-string-value uir) "\"")]
-        [(uir-fstring? uir) (string-append "f\"" (uir-fstring-value uir) "\"")]
-        [(uir-list? uir)
-         (string-append "[" (string-join (map emit-expr (uir-list-items uir)) ", ") "]")]
-        [(uir-record? uir)
-         (string-append "{" (string-join
-                             (map (lambda (e)
-                                    (string-append (emit-expr (car e)) ": " (emit-expr (cdr e))))
-                                  (uir-record-entries uir))
-                             ", ") "}")]
-        [(uir-symbol? uir) (uir-symbol-name uir)]
-        [(uir-var? uir) (uir-symbol-name (uir-var-name uir))]
-        [(uir-call? uir)
-          (let ([callee (uir-call-callee uir)])
-            (if (and (uir-symbol? callee)
-                     (regexp-match #rx"(?:-comp|-exp)$" (uir-symbol-name callee)))
-                (emit-comp uir)
-                (let ([args (uir-call-args uir)]
-                      [name (and (uir-symbol? callee) (uir-symbol-name callee))])
-                  (cond [(and name (equal? name "set"))
-                         (string-append "{" (string-join (map emit-expr args) ", ") "}")]
-                        [(and name (equal? name "tuple"))
-                         (match (length args)
-                           [0 "()"]
-                           [1 (string-append "(" (emit-expr (first args)) ",)")]
-                           [_ (string-append "(" (string-join (map emit-expr args) ", ") ")")])]
-                         [(and name (= (length args) 2)
-                               (member name '("is" "in" "<" ">" "==" "!=" ">=" "<="
-                                              "+" "-" "*" "/" "//" "%" "**" "@"
-                                              "and" "or" "|" "^" "&" "<<" ">>")))
-                         (string-append (emit-expr (first args)) " " name " " (emit-expr (second args)))]
-                        [(and name (= (length args) 1) (equal? name "not"))
-                         (string-append "not " (emit-expr (first args)))]
-                        [else
-                         (let* ([args-str (string-join (map emit-arg args) ", ")]
-                                [call-str (string-append (emit-expr callee)
-                                                         "(" args-str ")")]
-                                [eff (direct-effect-of-callee callee)])
-                           (if eff
-                               (emit-perform eff (effect-op-of-callee callee) args-str call-str)
-                               call-str))]))))]
-        [(uir-let? uir)
-         (string-append "(" (uir-symbol-name (uir-let-name uir))
-                        " := " (emit-expr (uir-let-value uir))
-                        "; " (emit-expr (uir-let-body uir)) ")")]
-        [(uir-block? uir)
-         (string-join (map emit-expr (uir-block-stmts uir)) "\n")]
-        [(uir-return? uir) (string-append "return " (emit-expr (uir-return-value uir)))]
-        [(uir-if? uir)
-          (string-append (emit-expr (uir-if-then uir))
-                         " if " (emit-expr (uir-if-test uir))
-                         " else " (emit-expr (uir-if-else uir)))]
-        [(uir-fn? uir)
-          (emit-lambda uir)]
-        [(uir-await? uir) (emit-await uir)]
-        [(uir-yield? uir) (emit-yield uir)]
-        [(uir-get? uir)
-          (let ([base-str (emit-expr (uir-get-base uir))]
-                [field (uir-get-field uir)])
-            (if (uir-string? field)
-                (string-append base-str "." (uir-string-value field))
-                (string-append base-str "[" (emit-expr field) "]")))]
-        [(uir-paren? uir)
-          ;; A walrus always renders parenthesized, so a source `(x := 1)`
-          ;; must not gain a second pair of parentheses.
-          (if (uir-walrus? (uir-paren-inner uir))
-              (emit-expr (uir-paren-inner uir))
-              (string-append "(" (emit-expr (uir-paren-inner uir)) ")"))]
-        [(uir-walrus? uir)
-          (string-append "(" (emit-expr (uir-walrus-name uir))
-                         " := " (emit-expr (uir-walrus-value uir)) ")")]
-        [(uir-type-alias? uir)
-          (emit-type-alias uir)]
-        [(uir-spread? uir)
-          (string-append "*(" (emit-expr (uir-spread-expr uir)) ")")]
-        [else (format "<?~a>" (uir-tag uir))]))
+(define (emit-call-args args)
+  (string-join (map emit-arg args) ", "))
+
+;; The positional arguments of a call, as the runtime effect guard wants them:
+;; keyword arguments and `**` expansion are passed separately so the list stays
+;; a Python list. A `*` expansion is legal inside a list display.
+(define (emit-call-positional-args args)
+  (string-join (for/list ([a args]
+                          #:unless (or (kwarg-name a)
+                                       (kw-spread-call? a)))
+                 (emit-arg a))
+               ", "))
+
+(define (kw-spread-call? a)
+  (and (call-name a) (equal? (call-name a) "kw-spread")))
+
+;; A dict display carrying the call's keyword arguments: `{"k": v, **rest}`.
+(define (emit-call-kwargs-dict args)
+  (define entries
+    (for/list ([a args]
+               #:when (or (kwarg-name a) (kw-spread-call? a)))
+      (if (kwarg-name a)
+          (kwarg-pair a)
+          (string-append "**" (emit-expr (first (uir-call-args a)) 1)))))
+  (if (null? entries)
+      ""
+      (string-append ", {" (string-join entries ", ") "}")))
+
+(define (kwarg-pair a)
+  (define args (kwarg-name a))
+  (string-append (emit-expr (first args) 0) ": " (emit-expr (second args) 0)))
+
+;; One dict-display entry. A `**` unpack entry is carried as a kw-spread call in
+;; the key position with a null value (the same encoding call arguments use), so
+;; it renders as `**expr` instead of `key: value`.
+(define (emit-record-entry e)
+  (if (kw-spread-call? (car e))
+      (string-append "**" (emit-expr (first (uir-call-args (car e))) 1))
+      (string-append (emit-expr (car e) 2) ": " (emit-expr (cdr e) 0))))
+
+;; ── Operator expressions ───────────────────────────────────────────
+
+(define (emit-binary-op name args)
+  (define info (binary-op-info name))
+  (define p (car info))
+  (define assoc (cadr info))
+  (cond
+    [(= (length args) 2)
+     (define lctx (if (eq? assoc 'right) (+ p 1) p))
+     (define rctx (if (eq? assoc 'right) p (+ p 1)))
+     (string-append (emit-expr (first args) lctx) " " name " " (emit-expr (second args) rctx))]
+    [else
+     ;; Not a shape the grammar produces, but keep it parseable rather than
+     ;; emitting an invalid infix form.
+     (string-append name "(" (emit-call-args args) ")")]))
+
+;; Chained comparison: (cmp-chain operand op operand op operand ...).
+(define (emit-cmp-chain args)
+  (string-join
+   (for/list ([a args] [i (in-naturals)])
+     (if (even? i) (emit-expr a 6) (uir-symbol-name a)))
+   " "))
+
+;; Python keywords: a dotted attribute name must not be one of them (`x.class`
+;; is invalid; `x["class"]` is the only spelling).
+(define python-keywords
+  '("False" "None" "True" "and" "as" "assert" "async" "await" "break" "class"
+    "continue" "def" "del" "elif" "else" "except" "finally" "for" "from"
+    "global" "if" "import" "in" "is" "lambda" "nonlocal" "not" "or" "pass"
+    "raise" "return" "try" "while" "with" "yield"))
+
+(define (python-identifier? s)
+  (and (regexp-match? #rx"^[A-Za-z_][A-Za-z0-9_]*$" s)
+       (not (member s python-keywords))
+       #t))
+
+;; A subscript field is a value expression, a tuple-index list (`a[i, j]`), or
+;; a `slice` call (`a[i:j:k]`); rendering the last two with their source shape
+;; keeps the emitted subscript semantically correct and re-absorbs identically.
+(define (emit-subscript field)
+  (cond
+    [(uir-list? field)
+     (string-join (map (λ (i) (emit-expr i 0)) (uir-list-items field)) ", ")]
+    [(and (call-name field)
+          (equal? (call-name field) "slice")
+          (= (length (uir-call-args field)) 3))
+     (define args (uir-call-args field))
+     (define (part v) (if (uir-null? v) "" (emit-expr v 0)))
+     (define step (list-ref args 2))
+     (string-append (part (list-ref args 0)) ":"
+                    (part (list-ref args 1))
+                    (if (uir-null? step) "" (string-append ":" (part step))))]
+    [else (emit-expr field 0)]))
+
+;; Attribute access renders with a dotted name when the field is an identifier;
+;; otherwise the subscript form is the only valid spelling.
+(define (emit-get uir)
+  (define base-str (emit-expr (uir-get-base uir) prec-primary))
+  (define field (uir-get-field uir))
+  (cond
+    [(and (uir-string? field) (python-identifier? (uir-string-value field)))
+     (string-append base-str "." (uir-string-value field))]
+    [(uir-string? field)
+     (string-append base-str "[" (emit-string-literal field) "]")]
+    [else (string-append base-str "[" (emit-subscript field) "]")]))
+
+;; ── Raw expression rendering ──────────────────────────────────────
+
+(define (emit-expr-raw uir)
+  (cond
+    [(uir-null? uir) "None"]
+    [(uir-bool? uir) (if (uir-bool-value uir) "True" "False")]
+    [(uir-number? uir) (uir-number-value uir)]
+    [(uir-string? uir) (emit-string-literal uir)]
+    [(uir-fstring? uir) (emit-fstring-literal uir)]
+    [(uir-list? uir)
+     (string-append "[" (string-join (map (λ (i) (emit-expr i 0)) (uir-list-items uir)) ", ") "]")]
+    [(uir-record? uir)
+     (string-append "{" (string-join
+                         (for/list ([e (in-list (uir-record-entries uir))])
+                           (emit-record-entry e))
+                         ", ") "}")]
+    [(uir-symbol? uir) (uir-symbol-name uir)]
+    [(uir-var? uir) (uir-symbol-name (uir-var-name uir))]
+    [(uir-call? uir)
+     (define callee (uir-call-callee uir))
+     (define name (call-name uir))
+     (define args (uir-call-args uir))
+     (cond
+       [(and name (regexp-match? #px"(?:-comp|-exp)$" name)) (emit-comp uir)]
+       [(and name (equal? name "cmp-chain")) (emit-cmp-chain args)]
+       [(and name (equal? name "not") (= (length args) 1))
+        (string-append "not " (emit-expr (first args) 4))]
+       [(and name (member name '("+" "-" "~")) (= (length args) 1))
+        (string-append name (emit-expr (first args) 13))]
+       [(and name (binary-op? name)) (emit-binary-op name args)]
+       [(and name (equal? name "set") (pair? args))
+        (string-append "{" (string-join (map (λ (a) (emit-expr a 0)) args) ", ") "}")]
+       [(and name (equal? name "tuple"))
+        (match (length args)
+          [0 "()"]
+          [1 (string-append "(" (emit-expr (first args) 0) ",)")]
+          [_ (string-append "(" (string-join (map (λ (a) (emit-expr a 0)) args) ", ") ")")])]
+       [(and name (equal? name "kw-spread"))
+        (string-append "**" (emit-expr (first args) 1))]
+       [else
+        (define args-str (emit-call-args args))
+        (define call-str (string-append (emit-expr callee prec-primary) "(" args-str ")"))
+        (define eff (direct-effect-of-callee callee))
+        (if eff
+            (emit-perform eff (effect-op-of-callee callee) args call-str)
+            call-str)])]
+    [(uir-let? uir)
+     (string-append "(" (uir-symbol-name (uir-let-name uir))
+                    " := " (emit-expr (uir-let-value uir) 1)
+                    "; " (emit-expr (uir-let-body uir) 0) ")")]
+    [(uir-block? uir)
+     (string-join (map (λ (s) (emit-expr s 0)) (uir-block-stmts uir)) "\n")]
+    [(uir-return? uir) (string-append "return " (emit-expr (uir-return-value uir) 0))]
+    [(uir-if? uir)
+     (string-append (emit-expr (uir-if-then uir) 2)
+                    " if " (emit-expr (uir-if-test uir) 2)
+                    " else " (emit-expr (uir-if-else uir) 1))]
+    [(uir-fn? uir) (emit-lambda uir)]
+    [(uir-await? uir) (string-append "await " (emit-expr (uir-await-expr uir) prec-primary))]
+    [(uir-yield? uir) (emit-yield uir)]
+    [(uir-get? uir) (emit-get uir)]
+    [(uir-paren? uir)
+     ;; A walrus always renders parenthesized, so a source `(x := 1)` must not
+     ;; gain a second pair of parentheses.
+     (if (uir-walrus? (uir-paren-inner uir))
+         (emit-expr (uir-paren-inner uir) 0)
+         (string-append "(" (emit-expr (uir-paren-inner uir) 0) ")"))]
+    [(uir-walrus? uir)
+     (string-append "(" (emit-expr (uir-walrus-name uir) 0)
+                    " := " (emit-expr (uir-walrus-value uir) 1) ")")]
+    [(uir-type-alias? uir) (emit-type-alias uir)]
+    [(uir-spread? uir)
+     (string-append "*" (emit-expr (uir-spread-expr uir) 6))]
+    [else (format "<?~a>" (uir-tag uir))]))
 
 ;; ── PEP 695 type alias emission ─────────────────────────────────────
 
@@ -666,7 +986,7 @@
   (define tp-str
     (if (null? tps)
         ""
-        (string-append "[" (string-join (map emit-expr tps) ", ") "]")))
+        (string-append "[" (string-join (map (λ (a) (emit-expr a)) tps) ", ") "]")))
   (string-append "type " name tp-str " = " (emit-expr (uir-type-alias-value uir))))
 
 ;; ── Match/case emission ─────────────────────────────────────────────
@@ -743,6 +1063,33 @@
 
 ;; ── Top-level ──────────────────────────────────────────────────────
 
+;; `from __future__ import ...` must be the first statement after a module
+;; docstring; the runtime guard preamble is therefore emitted after the leading
+;; docstring / future-import prologue rather than before it.
+(define (future-import? uir)
+  (and (uir-import? uir)
+       (equal? (uir-symbol-name (uir-import-source uir)) "__future__")))
+
+(define (module-prologue-length stmts)
+  ;; Optional leading docstring, then the run of future imports.
+  (define after-doc
+    (if (and (pair? stmts) (uir-string? (first stmts))) 1 0))
+  (let loop ([i after-doc])
+    (cond [(and (< i (length stmts)) (future-import? (list-ref stmts i)))
+           (loop (add1 i))]
+          [else i])))
+
+;; A comment-only line can lower to a module-level uir-null. Such a no-op must
+;; not be emitted (as `pass`) before the module docstring / future imports: it
+;; would demote the docstring and push `from __future__` past a statement.
+(define (trim-module-nulls stmts)
+  (define (drop-leading lst)
+    (cond [(and (pair? lst) (uir-null? (first lst))) (drop-leading (rest lst))]
+          [else lst]))
+  (define (drop-trailing lst)
+    (reverse (drop-leading (reverse lst))))
+  (drop-trailing (drop-leading stmts)))
+
 ;; Implements the emit contract (racklr/emit-contract): UIR plus an optional
 ;; explicit effect row in, Python 3 source out. An explicit row is authoritative
 ;; for the unit's entry function and is rendered as an `@__withEffects({...})`
@@ -750,14 +1097,29 @@
 ;; from inference, exactly as before the contract existed.
 (define (emit-python uir [row #f])
   (define source (attach-root-row 'emit-python uir row))
-  (define annotated (annotate-effects source))
-  (define body
-    (cond [(uir-block? annotated)
-           (emit-body annotated 0)]
-          [else (emit-stmt annotated 0)]))
-  (if (program-has-effects? annotated)
-      (string-append (effects-guard-preamble) "\n\n" body)
-      body))
+  (define annotated
+    (let ([a (annotate-effects source)])
+      (if (uir-block? a)
+          (uir-block (trim-module-nulls (uir-block-stmts a)))
+          a)))
+  (define guard? (program-has-effects? annotated))
+  (cond
+    [(and guard? (uir-block? annotated))
+     (define stmts (uir-block-stmts annotated))
+     (define n (module-prologue-length stmts))
+     (define prologue (take stmts n))
+     (define rest (drop stmts n))
+     (string-append
+      (if (null? prologue) "" (string-append (emit-body (uir-block prologue) 0) "\n\n"))
+      (effects-guard-preamble)
+      (if (null? rest) "" (string-append "\n\n" (emit-body (uir-block rest) 0))))]
+    [guard?
+     (string-append (effects-guard-preamble) "\n\n" (emit-stmt annotated 0))]
+    [else
+     ;; An empty module (empty file, only comments, or only `pass`) must still
+     ;; emit a parseable statement.
+     (define body (emit-body annotated 0))
+     (if (string=? body "") "pass" body)]))
 
 (module+ main
   (displayln "racklr/emit-python — UIR → Python3 text emitter loaded."))
