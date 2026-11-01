@@ -26,6 +26,33 @@
   (check-true (string-contains? module-src "X-match"))
   (check-true (string-contains? module-src "parse-r")))
 
+;; ── Section 1b: Skipped multi-line tokens advance the position ─────
+;; A skip/channel(HIDDEN) lexer rule can match text with embedded newlines — a
+;; block comment, for example. The tokenizer must advance line/column across a
+;; skipped token; otherwise the next token is reported on the comment's
+;; opening line. Synthetic grammar, so this section needs no vendored tree.
+
+(let* ([grammar-cst
+        (parse-g4 (string-append "grammar T; "
+                                 "COMMENT : '/*' .*? '*/' -> skip; "
+                                 "WS : [ \\t\\r\\n]+ -> skip; "
+                                 "ID : [a-z]+ ; "
+                                 "r : ID+ ;"))]
+       [module-src (generate-parser-module grammar-cst)]
+       [tmp-path (build-path (current-directory) "gen-tmp-skip-pos.rkt")])
+  (display-to-file module-src tmp-path #:exists 'replace)
+  (define tk (dynamic-require tmp-path 'tokenize))
+  (define tok-type (dynamic-require tmp-path 'token-type))
+  (define tok-start (dynamic-require tmp-path 'token-start))
+  (define ids (filter (λ (t) (eq? (tok-type t) 'ID))
+                      (tk "aa /* multi\nline */ bb")))
+  (check-equal? (map (λ (t) (source-pos-line (tok-start t))) ids) '(1 2)
+                "the token after a skipped multi-line comment is on line 2")
+  (check-equal? (list (source-pos-col (tok-start (second ids)))
+                      (source-pos-offset (tok-start (second ids))))
+                '(9 20))
+  (delete-file tmp-path))
+
 ;; ── Section 2: Generated tokenizer works ──────────────────────────
 
 (let-values ([(parse tok tok-type tok-val)
