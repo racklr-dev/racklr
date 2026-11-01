@@ -1,17 +1,25 @@
 #lang racket
 
-;; End-to-end round-trip over docs/examples/*.
+;; End-to-end round-trip over docs/examples/*, verified within the declared
+;; loss model (racklr/loss-model.rkt).
 ;;
-;; For each source file the pipeline is: parse → lower → emit → re-parse
-;; the emitted text → re-lower. Every step must succeed without crashing,
-;; with a non-empty emit. Round-trip languages (JSON, Python, JavaScript,
-;; Clojure) are re-parsed in the same language; TS/TSX are one-way to
-;; JavaScript, so their emitted output is re-parsed with the JS parser.
+;; For each source file the pipeline is: parse → lower → emit → re-parse the
+;; emitted text → re-lower. Absorb-then-emit must then be identity within the
+;; loss model the pair declares for that direction; a difference the model does
+;; not declare is a violation. Every result, including the violations and their
+;; canonical evidence, is written to loss-artifacts/round-trip.json so drift is
+;; a first-class artifact instead of a silent pass.
 ;;
-;; Run from inside racklr-test/ (grammar and example paths are relative
-;; to the working directory).
+;; Same-language pairs (JSON, Python, JavaScript, Clojure, Koka) are verified
+;; in `exact` mode (the normalized UIRs must be equal). TypeScript and TSX emit
+;; JavaScript, so they are verified in `projected` mode: only the features their
+;; model declares preserved must match.
+;;
+;; Run from inside racklr-test/ (grammar and example paths are relative to the
+;; working directory).
 
 (require rackunit
+         json
          racket/file
          racket/path
          racket/string
@@ -37,7 +45,15 @@
          racklr/lower-jsx
          ;; Clojure
          racklr/lower-clojure
-         racklr/emit-clojure)
+         racklr/emit-clojure
+         ;; Koka
+         racklr/lower-koka
+         racklr/emit-koka
+         ;; Loss model + verification
+         racklr/loss-model
+         racklr/loss/verify
+         racklr/loss/report
+         "../tools/loss-artifact.rkt")
 
 ;; ── Parsers ─────────────────────────────────────────────────────────
 
@@ -57,6 +73,9 @@
 (define-values (clj-parse clj-tokenize clj-tok-type clj-tok-value)
   (gen-and-load "../grammars-v4/clojure/Clojure.g4"))
 
+(define-values (koka-parse koka-tokenize koka-tok-type koka-tok-value)
+  (gen-and-load-layout "../grammars/koka/Koka.g4"))
+
 ;; Full-file Python entry (parse-file_input, INDENT/DEDENT aware).
 ;; file_input requires a trailing NEWLINE to terminate a simple statement;
 ;; the emitter does not append one, so normalize before re-parsing.
@@ -68,51 +87,53 @@
   (match-define (list _fp res) ((dynamic-require py-mod-path 'parse-file_input) tks 0))
   res)
 
-;; ── Pipelines (return #t on success, raise otherwise) ───────────────
+;; ── Pipelines ───────────────────────────────────────────────────────
+;; Each returns (list absorbed emitted re-absorbed) so the verifier can compare
+;; the two UIRs and the artifact keeps the emitted target text reachable.
 
 (define (assert-parsed cst)
-  (when (not cst) (error "parse returned #f"))
-  cst)
+  (if (not cst) (error "parse returned #f") cst))
 
 (define (assert-emitted out #:allow-empty? [allow? #f])
-  (when (or (not (string? out)) (and (not allow?) (equal? out "")))
-    (error "emit returned non-string or empty"))
-  out)
+  (if (or (not (string? out)) (and (not allow?) (equal? out "")))
+      (error "emit returned non-string or empty")
+      out))
 
 (define (pipeline-json src)
   (define u1 (lower-json (json:parse src)))
   (define out (assert-emitted (emit-json u1)))
-  (lower-json (json:parse out))
-  #t)
+  (list u1 out (lower-json (json:parse out))))
 
 (define (pipeline-py src)
   (define u1 (lower-python (assert-parsed (py-parse-file src)) py-tok-type py-tok-value))
   (define out (assert-emitted (emit-python u1)))
-  (lower-python (assert-parsed (py-parse-file out)) py-tok-type py-tok-value)
-  #t)
+  (list u1 out (lower-python (assert-parsed (py-parse-file out)) py-tok-type py-tok-value)))
 
 (define (pipeline-js src)
   (define u1 (lower-program (assert-parsed (js-parse src)) js-tok-type js-tok-value))
   (define out (assert-emitted (emit-javascript u1)))
-  (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)
-  #t)
+  (list u1 out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
 (define (pipeline-clj src)
   (define u1 (lower-clojure (assert-parsed (clj-parse src)) clj-tok-type clj-tok-value))
   (define out (assert-emitted (emit-clojure u1)))
-  (lower-clojure (assert-parsed (clj-parse out)) clj-tok-type clj-tok-value)
-  #t)
+  (list u1 out (lower-clojure (assert-parsed (clj-parse out)) clj-tok-type clj-tok-value)))
+
+(define (pipeline-koka src)
+  (define u1 (lower-koka (assert-parsed (koka-parse src)) koka-tok-type koka-tok-value))
+  (define out (assert-emitted (emit-koka u1)))
+  (list u1 out (lower-koka (assert-parsed (koka-parse out)) koka-tok-type koka-tok-value)))
 
 (define (lower-ts-src src)
-  (ts-lower:lower-program (assert-parsed (ts-parse (preprocess-imports src))) ts-tok-type ts-tok-value))
+  (ts-lower:lower-program (assert-parsed (ts-parse (preprocess-imports src)))
+                          ts-tok-type ts-tok-value))
 
 (define (pipeline-ts src)
   (define uir (lower-ts-src src))
   ;; A type-only module erases to empty JS, which is valid.
   (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
   ;; one-way: emitted JS must re-parse as JavaScript
-  (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)
-  #t)
+  (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
 (define (tsx->uir src)
   (define cleaned (preprocess-imports src))
@@ -121,13 +142,14 @@
                     #:jsx-parse jsx-parse
                     #:jsx-lower-tk-type jsx-tok-type
                     #:jsx-lower-tk-value jsx-tok-value))
-  (define ts-uir (ts-lower:lower-program (assert-parsed (ts-parse processed)) ts-tok-type ts-tok-value))
-  (lower-hooks (restore-jsx ts-uir jsx-uir)))
+  (lower-hooks (restore-jsx (ts-lower:lower-program (assert-parsed (ts-parse processed))
+                                                     ts-tok-type ts-tok-value)
+                            jsx-uir)))
 
 (define (pipeline-tsx src)
-  (define out (assert-emitted (emit-javascript (tsx->uir src)) #:allow-empty? #t))
-  (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)
-  #t)
+  (define uir (tsx->uir src))
+  (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
+  (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
 ;; ── Dispatch by extension ───────────────────────────────────────────
 
@@ -139,6 +161,7 @@
         [(regexp-match? #rx"[.]m?js$" p) 'javascript]
         [(regexp-match? #rx"[.]tsx$" p) 'tsx]
         [(regexp-match? #rx"[.]ts$" p) 'typescript]
+        [(regexp-match? #rx"[.]kk$" p) 'koka]
         [else #f]))
 
 (define (pipeline-of lang)
@@ -149,9 +172,21 @@
     [(javascript) pipeline-js]
     [(tsx) pipeline-tsx]
     [(typescript) pipeline-ts]
+    [(koka) pipeline-koka]
     [else (error "no pipeline")]))
 
+;; Every supported source language resolves to its declared target pair.
+(define (model-of lang)
+  (loss-model-for-language lang))
+
 ;; ── Walk examples ───────────────────────────────────────────────────
+
+(define repo-root
+  (let ([run-file (find-system-path 'run-file)])
+    (simplify-path
+     (if (path? run-file)
+         (build-path run-file 'up 'up)  ; racklr-test/<this file>
+         (build-path (current-directory) 'up)))))
 
 (define examples-root
   (simplify-path (build-path (current-directory) ".." "docs" "examples")))
@@ -183,7 +218,7 @@
 
 ;; Optional command-line args select which languages to run:
 ;;   racket examples-roundtrip-test.rkt python clojure
-;; With no args every language runs, including the TS/TSX backlog.
+;; With no args every language runs.
 (define (selected-langs)
   (define args (vector->list (current-command-line-arguments)))
   (and (pair? args) (map string->symbol args)))
@@ -203,6 +238,15 @@
   (with-handlers ([exn:fail? (λ (e) (cons #f (exn-message e)))])
     (cons #t (thunk))))
 
+;; A model that cannot verify every pipeline it claims would make the artifact
+;; lie about coverage, so fail loudly instead of skipping.
+(loss-model-coverage-check)
+(for ([lang (in-list (supported-source-languages))])
+  (unless (model-of lang)
+    (error 'examples-roundtrip-test "declared source language has no model: ~a" lang))
+  (unless (with-handlers ([exn:fail? (λ (e) #f)]) (pipeline-of lang))
+    (error 'examples-roundtrip-test "declared pair has no pipeline: ~a" lang)))
+
 (define allowed (selected-langs))
 (define examples (collect-examples allowed))
 (printf "~a example file(s) found under ~a~a\n"
@@ -210,25 +254,87 @@
         (if allowed (format " (languages: ~a)" allowed) ""))
 
 (define failures 0)
+(define violations-total 0)
 (define counts (make-hasheq))
+(define results '())
+
+(define (print-violation rel lang v)
+  (printf "    ~a declared=~a observed=~a: ~a\n"
+          (loss-violation-feature v) (loss-violation-declared v)
+          (loss-violation-observed v) (loss-violation-detail v))
+  (for ([e (in-list (take (loss-violation-evidence v)
+                          (min 3 (length (loss-violation-evidence v)))))])
+    (printf "      evidence: ~a\n" e)))
+
 (for ([p (in-list examples)])
   (define lang (lang-of p))
   (define rel (path->string (find-relative-path examples-root p)))
-  (define r (guard (λ () ((pipeline-of lang) (file->string p)))))
+  (define model (model-of lang))
+  (define r (guard (λ ()
+                     (define vals ((pipeline-of lang) (file->string p)))
+                     (verify-round-trip model (first vals) (third vals)))))
   (hash-update! counts lang (λ (n) (add1 n)) 0)
   (cond
-    [(and (car r) (cdr r))
-     (printf "PASS  ~a (~a)\n" rel lang)]
+    [(not model)
+     (printf "FAIL  ~a (~a): no declared loss model\n" rel lang)
+     (set! failures (add1 failures))
+     (set! results (cons (hasheq 'file rel 'language lang
+                                 'status "no-model") results))]
     [(car r)
-     (printf "FAIL  ~a (~a): pipeline returned #f\n" rel lang)
-     (set! failures (add1 failures))]
+     (define report (cdr r))
+     (define vs (loss-report-violations report))
+     (set! results
+           (cons (hasheq 'file rel
+                         'language lang
+                         'status (if (null? vs) "within-model" "violation")
+                         'report (report->jsexpr report))
+                 results))
+     (if (null? vs)
+         (printf "PASS  ~a (~a, ~a)\n" rel lang (loss-model-mode model))
+         (begin
+           (set! failures (add1 failures))
+           (set! violations-total (+ violations-total (length vs)))
+           (printf "VIOLATION  ~a (~a): ~a undeclared loss(es)\n" rel lang (length vs))
+           (for ([v (in-list vs)]) (print-violation rel lang v))))]
     [else
      (printf "FAIL  ~a (~a): ~a\n" rel lang (cdr r))
-     (set! failures (add1 failures))]))
+     (set! failures (add1 failures))
+     (set! results (cons (hasheq 'file rel 'language lang
+                                 'status "pipeline-error"
+                                 'detail (cdr r))
+                         results))]))
+
+;; ── First-class artifact ────────────────────────────────────────────
+
+(define pair-coverage
+  (for/list ([m (in-list supported-loss-models)])
+    (define lang (loss-model-source m))
+    (hasheq 'pair (format "~a->~a" (loss-model-source m) (loss-model-target m))
+            'mode (loss-model-mode m)
+            'files (hash-ref counts lang 0)
+            'declared
+            (for/list ([rule (in-list (loss-model-rules m))])
+              (hasheq 'feature (loss-rule-feature rule)
+                      'disposition (loss-rule-disposition rule)
+                      'detail (loss-rule-detail rule))))))
+
+(define artifact-file (artifact-path repo-root))
+(void
+ (write-loss-artifact!
+  artifact-file
+ (hasheq 'tool "racklr-test/examples-roundtrip-test.rkt"
+         'model_digest (loss-model-digest)
+         'summary (hasheq 'examples (length examples)
+                          'passed (- (length examples) failures)
+                          'failed failures
+                          'violations violations-total)
+         'pairs pair-coverage
+          'files (reverse results))))
 
 (printf "examples per language: ~a\n"
         (for/list ([(k v) (in-hash counts)]) (format "~a=~a" k v)))
-(printf "~a passed, ~a failed of ~a\n"
-        (- (length examples) failures) failures (length examples))
+(printf "loss artifact: ~a\n" artifact-file)
+(printf "~a passed, ~a failed of ~a (~a undeclared loss(es))\n"
+        (- (length examples) failures) failures (length examples) violations-total)
 
 (exit (if (zero? failures) 0 1))

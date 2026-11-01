@@ -1,9 +1,12 @@
 #lang racket
 
 (require rackunit
+         rackunit/text-ui
+         racket/list
          racklr/tree
          racklr/g4-parse
          racklr/gend-parser
+         racklr/gend-parser/lexer
          racklr/gen-test)
 
 ;; ── Section 1: Generator produces valid Racket syntax ─────────────
@@ -42,7 +45,17 @@
   (let ([tks (tok "{}")])
     (check-equal? (length tks) 3)
     (check-equal? (tok-type (first tks)) (string->symbol "{"))
-    (check-equal? (tok-type (second tks)) (string->symbol "}"))))
+    (check-equal? (tok-type (second tks)) (string->symbol "}")))
+
+  ;; Escaped codepoint classes in the grammar: a safe JSON string must accept
+  ;; every codepoint except '"', '\\', and U+0000..U+001F. These were the
+  ;; characters a stale generated parser rejected.
+  (for ([s (in-list '("\"roundtrip\"" "\"1\"" "\"ABC\"" "\"u\"" "\"a\\nb\"" "\"\\u0041\""))])
+    (define tks (tok s))
+    (check-equal? (tok-type (first tks)) 'STRING (format "tokenizes JSON string ~s" s)))
+  (check-exn exn:fail?
+             (λ () (tok (string-append "\"a" (string (integer->char 0)) "b\"")))
+             "raw control characters are not valid JSON string content"))
 
 ;; ── Section 3: Generated parser parses correctly ──────────────────
 
@@ -257,6 +270,35 @@
   (check-true (any-tree? (p "1 + 2")))
   (check-true (any-tree? (p "3 - 1")))
   (check-true (any-tree? (p "1 + 2 - 3")))
+  (delete-file tmp-path))
+
+;; ── Escaped codepoint handling in the generator ───────────────────
+;; The checked-in JSON parser is a stale generated file (tracked follow-up);
+;; these tests pin the *generator* behavior so a future regeneration is correct.
+
+(test-case
+ "unescape-g4-literal decodes \\uXXXX but not an escaped backslash before u"
+ (check-equal? (unescape-g4-literal "A\\u0041B") "AAB")
+ (check-equal? (unescape-g4-literal "A\\\\u0041B") "A\\u0041B")
+ (check-equal? (unescape-g4-literal "x\\ny") "x\ny"))
+
+(let* ([grammar "grammar T; r : S ; S : [\\u0041-\\u005A]+ ;"]
+       [module-src (generate-parser-module (parse-g4 grammar))]
+       [tmp-path (build-path (current-directory) "gen-tmp-escaped-class.rkt")])
+  (display-to-file module-src tmp-path #:exists 'replace)
+  (define p (dynamic-require tmp-path 'parse))
+  (check-true (any-tree? (p "ABC")) "\\u0041-\\u005A range matches uppercase")
+  (check-reject p "abc")
+  (check-reject p "1")
+  (delete-file tmp-path))
+
+(let* ([grammar "grammar T; r : A ; A : '\\u0041' ;"]
+       [module-src (generate-parser-module (parse-g4 grammar))]
+       [tmp-path (build-path (current-directory) "gen-tmp-escaped-literal.rkt")])
+  (display-to-file module-src tmp-path #:exists 'replace)
+  (define p (dynamic-require tmp-path 'parse))
+  (check-true (any-tree? (p "A")) "\\u0041 literal unescapes to A")
+  (check-reject p "\\u0041")
   (delete-file tmp-path))
 
 ;; ── Cleanup ───────────────────────────────────────────────────────

@@ -39,6 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot; the v1 -> v2 migration is the identity, so version-1 payloads stay
   readable. This is the UIR-layer part of the parameter-marker work landing
   separately; constructors are exact-arity, so call sites pass `#f` explicitly.
+- Declared per-pair loss model (`racklr/loss-model.rkt`): every supported
+  source→target pair states what absorb→emit preserves, approximates, and
+  refuses, plus the normalizations the verifier applies before comparing.
+- Round-trip verifier (`racklr/loss/`): `exact` mode (normalized UIRs must be
+  equal) and `projected` mode (lossy one-way translations), effect-row
+  re-absorption from each target's native form, and `loss-observation` /
+  `loss-violation` records with canonical diff evidence.
+- `racklr-test/examples-roundtrip-test.rkt` now verifies absorb→emit→re-absorb
+  within the declared model and writes `loss-artifacts/round-trip.json`
+  (model digest, pair coverage, per-file observations, violations with
+  evidence); undeclared loss fails the harness.
+- `racklr-test/loss-model-test.rkt` covering model integrity, normalizations,
+  feature projections, native effect-row extraction, and violation
+  classification.
+- `docs/loss-model.md` documenting the declared model and the artifact.
+- Round-trip examples for JSON, JavaScript, and Koka; the Python effects
+  example exercises effect-row carrying.
 - Tracked modern Python 3 grammar in `grammars/python3/` (`Python3Lexer.g4`,
   `Python3Parser.g4`). Adds assignment expressions (`:=`, PEP 572),
   positional-only parameters (`/`, PEP 570) in `def` and `lambda`, and PEP 695
@@ -100,6 +117,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strings (method visibility, effect-entry modality, effect-policy kind,
   node-kind kind, schema-field name/type, and parameter-kind slots). JSON round
   trips now hold for every schema-declared kind.
+- `examples-roundtrip-test.rkt` pipelines now return the absorbed, emitted, and
+  re-absorbed forms, and the harness resolves each source language to its
+  declared loss-model pair. Adds a Koka round-trip pipeline.
+- JavaScript front end: `export default function`, `export default async
+  function`, and `export default class` re-absorb into UIR instead of lowering
+  to `null`; multi-parameter arrow functions keep every parameter.
+- JSON front end: corrected the checked-in generated parser's safe-codepoint
+  character class (a stopgap; regeneration tracked in #96), which rejected `u`,
+  `A`–`Z`, and `0`–`9` inside JSON strings.
+- `gend-parser` now decodes `\uXXXX` escapes in string literals (character
+  classes already did), so generated parsers match the grammar's characters
+  instead of the escape text. `gend-parser-test.rkt` pins escaped class and
+  literal behavior.
+- The loss-model coverage gate now requires every model to declare every loss
+  feature exactly once (explicitly `refused` when it does not apply), and
+  `verify-round-trip` rejects an incomplete model instead of silently verifying
+  only the declared dimensions.
+- Loss-model normalizations rebuild serialized `fn`/`typed-param`/`ann-set!`
+  nodes through shape helpers that preserve appended schema fields, so a
+  parallel schema addition (such as the `typed-param` kind) cannot be silently
+  dropped.
+- Loss verification follows the emit contract (`racklr/emit-effects.rkt`):
+  Python/JavaScript rows are checked through their runtime guards, Clojure
+  through the `:__effects__` metadata map, and Koka through the typed row, with
+  the model's `effect-rows` details naming the documented annotations as well.
+- The loss verifier drops emitter-injected guard declarations even when an
+  emitter wraps them in `const`/`let`/`var` statement calls, so the new guard
+  runtime is not mistaken for source definitions.
+- TypeScript lowering stores numeric literals in `uir-number` as strings (seven
+  sites in `lower-typescript/{stmt,expr}.rkt`), as the schema requires; emitted
+  TSX for rest/array extraction and `void` previously failed schema-driven
+  serialization with `uir->sexp: string field: 0`.
 - Python front-end test suites load the tracked `grammars/python3/` grammar
   instead of the vendored `grammars-v4/python/python3/` copy, so the parser the
   tests exercise is the one the repository owns.

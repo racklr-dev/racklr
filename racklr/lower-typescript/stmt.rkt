@@ -503,7 +503,7 @@
                  (when ident
                    (set! extractions
                          (cons (uir-set! (uir-symbol ident)
-                                         (uir-get synthetic (uir-number (length extractions))))
+                                         (uir-get synthetic (uir-number (number->string (length extractions)))))
                                extractions)))
                  (loop (cdr ks))]
                 [(pair? (car ks))
@@ -523,7 +523,7 @@
                  (when ae-name
                    (set! extractions
                          (cons (uir-set! ae-name
-                                         (uir-get synthetic (uir-number (length extractions))))
+                                         (uir-get synthetic (uir-number (number->string (length extractions)))))
                                extractions)))
                  (loop (cdr ks))]
                 [else (loop (cdr ks))])))))
@@ -956,7 +956,7 @@
                (when ename
                  (set! extractions
                        (cons (uir-set! (uir-symbol ename)
-                                       (uir-get synthetic-name (uir-number (length extractions))))
+                                       (uir-get synthetic-name (uir-number (number->string (length extractions)))))
                              extractions)))
                (loop (cdr ks))]
               [(pair? (car ks))
@@ -978,7 +978,7 @@
                (when ae-name
                  (set! extractions
                        (cons (uir-set! ae-name
-                                       (uir-get synthetic-name (uir-number (length extractions))))
+                                       (uir-get synthetic-name (uir-number (number->string (length extractions)))))
                              extractions)))
                (loop (cdr ks))]
               [else (loop (cdr ks))]))))
@@ -1128,7 +1128,7 @@
                (when ename
                  (set! extractions
                        (cons (uir-set! (uir-symbol ename)
-                                       (uir-get synthetic-name (uir-number (length extractions))))
+                                       (uir-get synthetic-name (uir-number (number->string (length extractions)))))
                              extractions)))
                (loop (cdr ks))]
               [(pair? (car ks))
@@ -1150,7 +1150,7 @@
                (when ae-name
                  (set! extractions
                        (cons (uir-set! ae-name
-                                       (uir-get synthetic-name (uir-number (length extractions))))
+                                       (uir-get synthetic-name (uir-number (number->string (length extractions)))))
                              extractions)))
                (loop (cdr ks))]
               [else (loop (cdr ks))]))))

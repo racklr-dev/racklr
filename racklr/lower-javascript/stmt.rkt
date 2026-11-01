@@ -469,13 +469,20 @@
                            (tok? (second kids) tk-type)
                            (eq? (tk-type (second kids)) (quote Default))))
   (cond
-    ;; export default expr
+    ;; export default expr | export default function f() {} | ... class C {}
     [has-default
      (define se (find-kid node (quote singleExpression)))
-     (if se
-         (uir-call (uir-symbol "export")
-                   (list (uir-symbol "default") (lower-single-expression se tk-type tk-value)))
-         (uir-null))]
+     (define decl (find-kid node (quote declaration)))
+     (cond
+       [se (uir-call (uir-symbol "export")
+                     (list (uir-symbol "default") (lower-single-expression se tk-type tk-value)))]
+       [decl
+        (define first-decl (first (cst-kids decl)))
+        (if first-decl
+            (uir-call (uir-symbol "export")
+                      (list (uir-symbol "default") (lower-statement first-decl tk-type tk-value)))
+            (uir-null))]
+       [else (uir-null)])]
     [else
      (define efb (find-kid node (quote exportFromBlock)))
      (define decl (find-kid node (quote declaration)))

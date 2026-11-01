@@ -246,7 +246,7 @@
                                left]
                               [(and op-tok (tok? op-tok tk-type) (eq? (tk-type op-tok) (quote QuestionMarkDot)))
                                (uir-if (uir-call (uir-symbol "==") (list left (uir-null)))
-                                       (uir-call (uir-symbol "void") (list (uir-number 0)))
+                                       (uir-call (uir-symbol "void") (list (uir-number "0")))
                                        (uir-call (uir-symbol "dot") (list left right)))]
                               [(and op-tok (tok? op-tok tk-type))
                                (uir-call (uir-symbol (tk-value op-tok)) (list left right))]

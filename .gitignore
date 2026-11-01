@@ -34,3 +34,6 @@ atomspace/
 link-grammar/
 chaining/
 effervesce-out/
+
+# Round-trip loss verification artifact (build output)
+loss-artifacts/
