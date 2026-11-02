@@ -1,6 +1,7 @@
 #lang racket
 
-(require racklr/uir
+(require racket/string
+         racklr/uir
          racklr/emit-contract
          racklr/emit-effects
          racklr/effects/guard-vocabulary
@@ -50,9 +51,32 @@
           args-str
           call-str))
 
+;; ── Erased type-level declarations ───────────────────────────────────
+;;
+;; The TypeScript front end records interfaces and type aliases it erased (they
+;; have no JavaScript runtime form) as `erased-type-decl` calls carrying their
+;; source spelling. Rendering that record as a comment keeps a type-only
+;; module from emitting the empty string and documents exactly what was
+;; erased.
+
+(define (erased-type-decl? node)
+  (and (uir-call? node)
+       (uir-symbol? (uir-call-callee node))
+       (equal? (uir-symbol-name (uir-call-callee node)) "erased-type-decl")
+       (pair? (uir-call-args node))
+       (uir-string? (first (uir-call-args node)))))
+
+(define (emit-erased-type-decl node)
+  (define text (uir-string-value (first (uir-call-args node))))
+  ;; Whitespace is collapsed and any `*/` defused because the spelling is a
+  ;; string-literal type's raw text inside a block comment.
+  (format "/* erased TypeScript type declaration (no JavaScript runtime form): ~a */"
+          (string-replace (string-join (string-split text) " ") "*/" "* /")))
+
 (define (emit-js uir)
   (match uir
     [(uir-null) "null"]
+    [(? erased-type-decl? erased) (emit-erased-type-decl erased)]
     [(uir-bool v) (if v "true" "false")]
     [(uir-number v) v]
     [(uir-string v) (format "~s" v)]
@@ -435,6 +459,7 @@
 (define (emit-statement node)
   (define body
     (cond [(uir-null? node) "null;"]
+        [(erased-type-decl? node) (emit-erased-type-decl node)]
         [(uir-block? node)
          (string-join (map emit-statement (uir-block-stmts node)) " ")]
         [(and (uir-set!? node)

@@ -79,19 +79,47 @@
   (check-true (string-contains? emitted "function"))
   (check-true (string-contains? emitted "identity")))
 
-;; ── Interface — should be elided (no runtime equivalent) ────────────
+;; ── Interface — erased, documented as a comment ─────────────────────
+;; A type-only file used to lower to an empty block and emit the empty
+;; string, silently dropping the whole module.
 
 (let-values ([(uir emitted) (check-ts "interface Point { x: number; y: number; }")])
   (check-equal? (uir-tag uir) 'block)
-  (check-false (string-contains? emitted "interface"))
-  (check-false (string-contains? emitted "Point")))
+  (check-true (string-contains? emitted "erased TypeScript type declaration"))
+  (check-true (string-contains? emitted "interface Point"))
+  (check-true (string-contains? emitted "x: number"))
+  ;; The declaration is documentation, not executable JavaScript.
+  (check-true (regexp-match? #rx"^/[*]" emitted))
+  (check-false (regexp-match? #rx";\\s*$" emitted)))
 
-;; ── Type Alias — should be elided ───────────────────────────────────
+;; ── Type Alias — erased, documented as a comment ────────────────────
 
 (let-values ([(uir emitted) (check-ts "type ID = string | number;")])
   (check-equal? (uir-tag uir) 'block)
-  (check-false (string-contains? emitted "type"))
-  (check-false (string-contains? emitted "ID")))
+  (check-true (string-contains? emitted "erased TypeScript type declaration"))
+  (check-true (string-contains? emitted "type ID = string | number"))
+  (check-true (regexp-match? #rx"^/[*]" emitted)))
+
+;; ── Exported type alias — the #113 repro shape ──────────────────────
+;; `docs/examples/test-apps/with-typescript/interfaces/index.ts` is exactly
+;; this: a module whose body is one exported type declaration.
+
+(let-values ([(uir emitted) (check-ts "export type User = { id: number; name: string; };")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-false (string=? emitted ""))
+  (check-true (string-contains? emitted "export type User"))
+  (check-true (string-contains? emitted "erased TypeScript type declaration")))
+
+;; ── Erased type declarations beside runtime code ────────────────────
+;; The runtime statements still emit and the erased declaration is recorded in
+;; source order.
+
+(let-values ([(uir emitted)
+              (check-ts "interface P { x: number; } const answer = 42; type ID = string;")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-true (string-contains? emitted "const answer = 42;"))
+  (check-true (string-contains? emitted "interface P"))
+  (check-true (string-contains? emitted "type ID = string")))
 
 ;; ── Enum — lowered to a call ────────────────────────────────────────
 
