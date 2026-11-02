@@ -645,15 +645,7 @@
             [(RegularExpressionLiteral)
              (uir-call (uir-symbol "regex") (list (uir-string (tk-value kid))))]
             [(StringLiteral)
-            (define raw (tk-value kid))
-            (define len (string-length raw))
-            (if (and (> len 1)
-                     (or (char=? (string-ref raw 0) (string-ref raw (sub1 len)))
-                         (eqv? (string-ref raw 0) #\"))
-                     (or (char=? (string-ref raw 0) #\")
-                         (char=? (string-ref raw 0) #\')))
-                (uir-string (substring raw 1 (sub1 len)))
-                (uir-string raw))]
+             (uir-string (string-literal-text (tk-value kid)))]
            [else (uir-null)])]
         [else (uir-null)]))
 
@@ -704,15 +696,51 @@
       (tk-value (first (kids-of ident)))
       "?"))
 
+;; A StringLiteral token's value keeps its quotes; a lowered string (and a
+;; string-literal property name) keeps the unquoted text.
+(define (string-literal-text raw)
+  (define len (string-length raw))
+  (if (and (>= len 2)
+           (let ([first (string-ref raw 0)]
+                 [last (string-ref raw (sub1 len))])
+             (and (char=? first last)
+                  (or (char=? first #\") (char=? first #\')))))
+      (substring raw 1 (sub1 len))
+      raw))
 
+;; The first token under node: identifier, keyword, string, numeric, etc.
+(define (first-token-leaf node tk-type)
+  (cond
+    [(tok? node tk-type) node]
+    [(cst-node? node)
+     (for/first ([k (in-list (kids-of node))]
+                 #:when (or (tok? k tk-type) (cst-node? k)))
+       (first-token-leaf k tk-type))]
+    [(pair? node)
+     (for/first ([k (in-list node)]
+                 #:when (or (tok? k tk-type) (cst-node? k)))
+       (first-token-leaf k tk-type))]
+    [else #f]))
 
+;; Text of a non-computed propertyName — identifierName, StringLiteral, or
+;; numericLiteral. The UIR keeps the key text; emit-javascript quotes it when
+;; the text is not a valid JS identifier (e.g. 'accent-1', 28, '5xl').
+(define (lower-property-name node tk-type tk-value)
+  (define t (first-token-leaf node tk-type))
+  (define raw (and t (tk-value t)))
+  (cond
+    [(not raw) "?"]
+    [(eq? (tk-type t) 'StringLiteral) (string-literal-text raw)]
+    [else raw]))
 
 (define (lower-getter-setter-name node tk-type tk-value)
   (define cen (find-kid node (quote classElementName)))
-  (if cen
-      (lower-identifier-name (find-kid cen (quote propertyName)) tk-type tk-value)
-      (let ([ident (find-kid node (quote identifier))])
-        (if ident (tk-value (first (kids-of ident))) "?"))))
+  (define pname (and cen (find-kid cen (quote propertyName))))
+  (cond
+    [pname (lower-property-name pname tk-type tk-value)]
+    [else
+     (let ([ident (find-kid node (quote identifier))])
+       (if ident (tk-value (first (kids-of ident))) "?"))]))
 
 (define (lower-object-literal node tk-type tk-value)
   (define grp (find-kid node (quote group)))
@@ -779,11 +807,11 @@
                                  (uir-fn #f params body #f #f))
                            entries))]
       [(and pname fb (not se))
-       (define key (uir-string (lower-identifier-name pname tk-type tk-value)))
+       (define key (uir-string (lower-property-name pname tk-type tk-value)))
        (define body ((fn-body-lowerer) fb tk-type tk-value))
        (set! entries (cons (cons key (uir-fn #f (quote ()) body #f #f)) entries))]
       [(and pname se)
-       (let ([key (uir-string (lower-identifier-name pname tk-type tk-value))]
+       (let ([key (uir-string (lower-property-name pname tk-type tk-value))]
              [val (lower-single-expression se tk-type tk-value)])
          (set! entries (cons (cons key val) entries)))]))
   (when grp

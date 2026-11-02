@@ -1,11 +1,13 @@
 #lang racket
 
 (require rackunit
+         racket/file
          racklr/tree
          racklr/uir
          racklr/gen-test
          racklr/lower-typescript
-         racklr/emit-javascript)
+         racklr/emit-javascript
+         racklr/tsx-preprocess)
 
 ;; ── Load the TypeScript parser ──────────────────────────────────────
 
@@ -261,6 +263,35 @@
 (let-values ([(uir emitted) (check-ts "a[0]--;")])
   (check-true (string-contains? emitted "a[0]--"))
   (check-false (string-contains? emitted "postfix")))
+
+;; ── B112: non-identifier object keys keep their key text ────────────
+;; The TS object-literal lowering mirrors the JavaScript one; keys such as
+;; 'accent-1', '5xl', and 28 must survive into the UIR and be quoted on emit.
+(let-values ([(uir emitted)
+              (check-ts "const x = { 'accent-1': 1, 28: '7rem', '5xl': '2.5rem', plain: true };")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-true (string-contains? emitted "\"accent-1\": 1"))
+  (check-true (string-contains? emitted "\"28\": \"7rem\""))
+  (check-true (string-contains? emitted "\"5xl\": \"2.5rem\""))
+  (check-true (string-contains? emitted "plain: true"))
+  (check-false (string-contains? emitted "?")))
+
+;; ── B112: ambient `declare module` (.d.ts) lowers without error ─────
+;; The reported failure: the vendored TS grammar cannot parse an ambient module
+;; declaration, so preprocess-imports erases it (ambient declarations have no
+;; runtime form) and the file lowers like an empty type-only module.
+(define remark-html-dts
+  (build-path (current-directory) ".." "docs" "examples" "test-apps"
+              "blog-starter" "@types" "remark-html.d.ts"))
+(let* ([src (file->string remark-html-dts)]
+       [cleaned (preprocess-imports src)]
+       [cst (ts-parse cleaned)]
+       [uir (and cst (lower-program cst tok-type tok-value))])
+  (check-false (string-contains? cleaned "declare")
+               "B112: ambient module declaration stripped")
+  (check-true (and cst #t) "B112: remark-html.d.ts parses after preprocessing")
+  (check-true (and uir #t) "B112: remark-html.d.ts lowers")
+  (check-true (string? (emit-javascript uir)) "B112: remark-html.d.ts emits"))
 
 ;; ── Clean up temp files ─────────────────────────────────────────────
 
