@@ -24,10 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver types the relations propagate (a relation-derived `open` result must
   seed like an annotation). The projection fails closed on a mixed return and a
   method call projects only its most-derived dispatch key, so an unprojected
-  override is never shadowed by a superclass projection. Django-core unknown
-  call sites 210 → 199, unknown functions 231 → 216, unknown files 64 → 60; the
-  type-graph baseline is re-pinned to the reduced graph. Full-package numbers
-  and the remaining levers are recorded in `docs/unknown-census.md`.
+  override is never shadowed by a superclass projection. The relation join
+  keeps #118's widening driver: the return round still reads a previous-round
+  snapshot, and termination comes from the widening, not a round cap. On
+  current `main` this reduces Django-core unknown call sites 316 -> 305,
+  unknown functions 304 -> 292, unknown files 75 -> 73, and the full package
+  4969 -> 4947 call sites / 4018 -> 4000 functions (22 removed rows, none
+  added); the type-graph baseline is re-pinned to the reduced graph
+  (`sha256:78cc470a...` -> `sha256:995a25ab...`). Full-package numbers and the
+  remaining levers are recorded in `docs/unknown-census.md`.
 - Non-Django Python effect generalization: the Python lexicon now carries the
   non-Django web-framework surface as DATA, and the import graph canonicalizes
   modules by their package chain rather than by the scan root.

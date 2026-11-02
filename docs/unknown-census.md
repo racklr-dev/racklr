@@ -99,27 +99,27 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-01, racklr `0a26a01` + this change)
+## Baseline (observed 2026-11-02, racklr `6fb6ba6` + this change)
 
 `django/django/core` (the pinned baseline probe):
 
 ```
 files scanned: 112   parsed: 112   failed: 0
 functions: 979 (in 101 files with inferred functions)
-unknown call sites: 199   unknown functions: 216   unknown files: 60
-(this lever: 210 -> 199 call sites, 231 -> 216 functions, 64 -> 60 files)
+unknown call sites: 305   unknown functions: 292   unknown files: 73
+(this lever: 316 -> 305 call sites, 304 -> 292 functions, 75 -> 73 files)
 
-receiver shapes: local 61, bare-call 53, param 32, self-attr 23,
+receiver shapes: bare-call 159, local 61, param 32, self-attr 23,
                  chained 13, call-result 11, self-method 6
 local binding kinds (of 61): call-result 30, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
-  return-type-projection   53   parameter-dataflow       32
-  self-attr-typing         23   element-type-dataflow    22
-  attribute-alias-typing   15   higher-order-row-hole    15
-  multi-level-chain        13   literal-constructor-typing 10
-  bare-call-lexicon         9   mro-edge-resolution       6
+  bare-call-lexicon        116   return-type-projection    53
+  parameter-dataflow        32   self-attr-typing         23
+  element-type-dataflow     22   higher-order-row-hole    15
+  attribute-alias-typing    14   multi-level-chain        13
+  literal-constructor-typing 10  mro-edge-resolution       6
   unbound-binding-resolution 1
 ```
 
@@ -128,74 +128,69 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3738   unknown functions: 3531   unknown files: 447
-(this lever: 3764 -> 3738 call sites, 3551 -> 3531 functions,
- 447 -> 447 files)
+unknown call sites: 4947   unknown functions: 4000   unknown files: 478
+(this lever: 4969 -> 4947 call sites, 4018 -> 4000 functions,
+ 478 -> 478 files)
 
-receiver shapes: local 1098, param 724, self-attr 637, bare-call 498,
-                 chained 327, call-result 310, self-method 140, other 4
-local binding kinds (of 1098): call-result 428, unbound 231, loop-var 192,
-                 attr 155, comp-var 59, literal 20, exception 9, alias 4
+receiver shapes: bare-call 1687, local 1099, param 726, self-attr 647,
+                 chained 330, call-result 313, self-method 141, other 4
+local binding kinds (of 1099): call-result 429, unbound 232, loop-var 192,
+                 attr 153, comp-var 59, literal 25, exception 9
 
 levers:
-  return-type-projection    796    parameter-dataflow        724
-  self-attr-typing          637    multi-level-chain         327
-  bare-call-lexicon         298    element-type-dataflow     272
-  unbound-binding-resolution 231   attribute-alias-typing    226
-  mro-edge-resolution       140    higher-order-row-hole      41
-  literal-constructor-typing 33    exception-type-dataflow     9
+  bare-call-lexicon        1484   return-type-projection   806
+  parameter-dataflow        726   self-attr-typing         647
+  multi-level-chain         330   element-type-dataflow    272
+  unbound-binding-resolution 232  attribute-alias-typing   216
+  mro-edge-resolution       141   higher-order-row-hole     41
+  literal-constructor-typing 39   exception-type-dataflow     9
   unclassified                4
 ```
 
-The full-package TSV diff for this lever is 26 removed rows and **no added
-rows**: 15 `return-type-projection`, 9 `parameter-dataflow`, 1 `self-attr-typing`
-and 1 `literal-constructor-typing` sites resolved, with no site gaining
-`unknown`. The effect alphabet moves at the margin (network-touching functions
-93 -> 95, db 4514 -> 4513) as previously unresolved receivers name their
-domain, and `entries with typed ops` stays 70 / 10699 because this lever does
-not change the operation vocabulary.
+The full-package TSV diff for this lever is 22 removed rows and **no added
+rows**: 12 `return-type-projection`, 9 `parameter-dataflow` and 1
+`self-attr-typing` sites resolved, with no site gaining `unknown`. The effect
+alphabet moves at the margin (network-touching functions 93 -> 95, db 4516 ->
+4515), and `entries with typed ops` stays 72 (72 / 11,175 entries after the row
+changes) because this lever does not change the operation vocabulary.
 
 One full-corpus run takes on the order of 8-15 min wall including parser
-generation (452-908 s observed on this machine) and peaks at ~275 MB RSS, so
-the census fits a small harness memory budget. The full-corpus relation join is
-capped at 100 rounds and reports `type-relations: join did not converge in 100
-rounds` both before and after this lever: its counters are a deterministic
-tracked state, not a proven fixed point. The 112-file pinned probe converges,
-so the core numbers are a fixed point.
+generation and peaks at ~275 MB RSS. The relation join terminates on any input:
+`type-relations-widen.rkt` detects a repeated state and widens exactly the
+entries that moved in the cycle to unresolved, then freezes them. The 112-file
+pinned probe converges without widening; the full corpus prints one 4-entry
+widening event identically before and after this lever, so the full-package
+counters are a deterministic tracked state.
 
 The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the same
-199 sites / 216 functions / 60 files and the same shape histogram on
+305 sites / 292 functions / 73 files and the same shape histogram on
 `django/django/core`, so the census agrees with the diagnostic already used by
 the loop.
 
 The effect-graph gate is unchanged by this diagnostic. On `django/django/core`,
 `racket tools/baseline-check.rkt` reports
-`baseline COVERAGE-FAILED sha256:2429041cecdcc631fe4ddc636d436194f1afccb3a858c1d515218c30ac6e3913`:
-the graph **matches the re-pinned snapshot** (the pass/fail half is green — no
-drift; -19/+16 atom lines, 2633 atoms) while the Phase-0.3 unknown-elimination
-obligation is still open (216 unknown functions / 60 unknown files, `<= 0`
-required). The census in this document is the aiming instrument for that open
-obligation, not a claim that it is discharged. The same probe reports 112
-parsed / 0 failed, 979 named functions and 979 `fn-effect-row` links.
+`baseline COVERAGE-FAILED sha256:995a25ab332c6e504bae4d0311016f9dfecd5cb2a59c9a221aadda5a10c17022`:
+the graph **matches the re-pinned snapshot** (the pass/fail half is green;
+2708 -> 2720 atom lines) while the Phase-0.3 unknown-elimination obligation is
+still open (292 unknown functions / 73 unknown files, `<= 0` required). The
+census in this document is the aiming instrument for that open obligation, not
+a claim that it is discharged.
 
 ### Remaining surface after this lever
 
-The call-result projection reaches the receiver-method-return and
-returned-call sites of the `return-type-projection` family (a corpus method's
-returned class, a returned call, and one level of `x.m()` /
-`self.attr.m()` receiver dataflow). The largest remaining groups in the
-before-census TSV were:
-
-- `return-type-projection` (811 before): 213 `super().m()` results, which need
-  out-of-corpus parent-method classification rather than return projection;
-  228 receiver-method returns, still limited by an unprojected receiver or an
-  unprojected override; 165 `self.m()` / corpus-call chains; 77 imported or
-  module result-type DATA entries; 66 unassigned/unknown-bare sites; 62
-  function values.
-- `parameter-dataflow` (733 before): 621-640 have no statically visible
-  in-corpus call site (framework/dispatch-invoked callbacks and protocol
-  methods), so call-chain parameter typing cannot reach them; the visible
-  residual call sites pass locals/attributes, i.e. upstream dataflow.
+The call-result projection reaches the receiver-method-return and returned-call
+sites of the `return-type-projection` family. The largest families in the
+before-census are `bare-call-lexicon` (1484, dominated by the `kw-spread`
+lowering), `return-type-projection` (818), `parameter-dataflow` (735),
+`self-attr-typing` (648) and `multi-level-chain` (330). Within
+`return-type-projection` the largest unresolved groups are `super().m()`
+results (out-of-corpus parent-method classification, not return projection),
+receiver-method returns limited by an unprojected receiver, imported/module
+result-type DATA entries, and function values. `parameter-dataflow` is largely
+outside call-chain reach: most of its sites have no statically visible
+in-corpus call site (framework/dispatch-invoked callbacks and protocol
+methods); the visible residual call sites pass locals/attributes, i.e.
+upstream dataflow.
 
 Two deliberate conservatisms of this lever: a method call projects only its
 most-derived dispatch key, so an unprojected override fails closed instead of
@@ -208,48 +203,6 @@ The `class-self-attrs` seed path keeps the older skip-missing corpus lookup
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change
 that moves the number.
-
-## Non-Django Python (Flask + Requests)
-
-The same instrument/contract is measured against real non-Django frameworks:
-shallow checkouts of `pallets/flask` and `psf/requests` scanned as
-`racket effervesce/tools/type-graph.rkt flask requests` (the invocation used in
-issue #109; 120 files including the frameworks' own tests, examples and docs).
-The corpus is external and not vendored, so these numbers are a spot-check of
-the generalization, not a pinned gate; the pinned Django baseline remains the
-regression gate.
-
-Before the non-Django Python lexicon data and the package-chain module paths
-(racklr `0a26a01`): 120 parsed / 0 failed, 1890 named functions, 1183 effectful,
-998 unknown functions in 83 files, `entries with typed ops: 0 / 1936`.
-
-After:
-
-- 120 parsed / 0 failed, 1890 named functions, 1119 effectful,
-  781 unknown functions in 76 files,
-  `entries with typed ops: 52 / 1832` — e.g.
-  `network<Session>.read` (`Session.get`), `network<Session>.request`,
-  `network<Flask>.run`, `network<FlaskClient>.test_client`.
-- The real-context census over the frameworks' own source only
-  (`flask/src/flask` + `requests/src/requests`, 43 files) moves the same way:
-  unknown call sites 385 → 215, unknown functions 284 → 197, and the
-  `bare-call-lexicon` lever 121 → 45 sites, `unbound-binding-resolution`
-  91 → 42.
-- The residual unknowns are still the receiver-dataflow levers above
-  (`return-type-projection` 40 sites, `multi-level-chain` 30,
-  `attribute-alias-typing` 17, `parameter-dataflow` 13, …); the framework
-  lexicon removes the `bare-call-lexicon` / `import-handle-lexicon` share of
-  them, it does not eliminate the dataflow work.
-
-The shared Django baseline is unaffected by the framework data: `racket
-tools/baseline-check.rkt` printed
-`baseline COVERAGE-FAILED sha256:be9db70ab78cbbb6810ce8559735d9d6e6e0d2b36d7b9925f7e387414babeac2`
-— graph matches the pin, 231 unknown functions / 64 unknown files — on both the
-base commit and this branch, and `effects-non-django-python-test.rkt` pins the
-112-file Django module-name projection digest plus the historical derivation as
-an oracle. A later, independent re-pin on `main`
-(`sha256:78cc470af372edd7d04664cc05b4419c7be01fbba9788e99a02453d3175ba79e`,
-merged into the branch by the operator) keeps the same 231 / 64 counters.
 
 ## Determinism
 
