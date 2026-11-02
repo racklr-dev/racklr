@@ -524,7 +524,8 @@
    mode-clauses
    "\n            [else (error 'tokenize \"unexpected char ~a in mode ~a at ~a:~a\" ch mode l c)])))))"
     (if indent-tokens?
-        "\n(define (tokenize in) (insert-indents (tokenize-raw in)))"
+        (or (language-policy-layout-tokenize-wrapper policy)
+            "\n(define (tokenize in) (insert-indents (tokenize-raw in)))")
         "")
     (if preserve-comments?
         (format "\n(define hidden-token-types (list ~a))\n(define (hidden-token? t) (member (token-type t) hidden-token-types))"

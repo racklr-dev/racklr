@@ -3,7 +3,11 @@
 (require rackunit
          racklr/tree
          racklr/g4-parse
-         racklr/gend-parser)
+         racklr/gend-parser
+         (only-in racklr/gend-parser/lexer extract-option)
+         (only-in racklr/gend-parser/language-policy
+                  language-policy-by-name
+                  default-language-policy))
 
 (provide check-parse check-parse-sexp check-reject gen-and-load gen-and-load-py gen-and-load-layout gen-and-load-comments cleanup *last-module-path*)
 
@@ -23,6 +27,22 @@
 ;; ── Generator → Module Loading ──────────────────────────────────────
 
 (define gen-counter 0)
+
+;; A layout grammar may name its generated-code policy with
+;; `options { layout = <name>; }`; the name is resolved from the policy data
+;; module, so the loader stays host-neutral and callers need no extra argument.
+(define (grammar-layout-policy grammar-cst)
+  (define rules (any-tree-children (second (any-tree-children grammar-cst))))
+  (define options
+    (for/first ([r (in-list rules)] #:when (eq? (any-tree-tag r) 'options)) r))
+  (define layout-name (and options (extract-option options "layout")))
+  (cond
+    [(not layout-name) default-language-policy]
+    [else
+     (or (language-policy-by-name (string->symbol layout-name))
+         (error 'grammar-layout-policy
+                "grammar requests unknown layout policy ~a (options { layout = ~a; })"
+                layout-name layout-name))]))
 
 (define (gen-and-load grammar-path)
   "Parse grammar file, generate parser module, write to temp file in pwd, load it.
@@ -59,12 +79,15 @@ Returns (values parse tokenize token-type token-value)."
           (dynamic-require tmp-path 'token-value)))
 
 (define (gen-and-load-layout grammar-path)
-  "Like gen-and-load but enables NEWLINE/INDENT/DEDENT layout token insertion
-  (used by Koka and other indentation-sensitive languages)."
+  "Like gen-and-load but enables a layout token post-pass (used by Koka and
+  other indentation-sensitive languages). The grammar's
+  `options { layout = <name>; }` selects the policy; without it the default
+  Python NEWLINE/INDENT/DEDENT layout is used."
   (define grammar-cst (parse-g4-file grammar-path))
   (define module-src (generate-parser-module grammar-cst
                                              #:source-path grammar-path
-                                             #:indent-tokens? #t))
+                                             #:indent-tokens? #t
+                                             #:policy (grammar-layout-policy grammar-cst)))
   (set! gen-counter (+ gen-counter 1))
   (define tmp-path
     (build-path (current-directory)
