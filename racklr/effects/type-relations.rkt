@@ -13,18 +13,13 @@
 ;;   return    : (comp . fn)         -> class
 ;;
 ;; `materialize-type-relations` seeds the syntax-visible self-attr relation
-;; (class fields + `self.attr = ...` in method bodies). `close-type-relations!`
-;; closes assign / self-attr / param / return deterministically: sorted key
-;; iteration and strict single-class folds make the round map independent of
-;; hash order.
+;; (class fields + `self.attr = ...` in method bodies); `close-type-relations!`
+;; closes the four relations deterministically (sorted keys, single-class folds).
 ;;
-;; The single-class projection is not monotone, so a feedback loop through the
-;; four relations can oscillate. `type-relations-widen.rkt` detects a repeated
-;; full state (impossible for a converging input) and widens exactly the entries
-;; that moved in the cycle to unresolved, then freezes them. Converging inputs
-;; never widen, so their relation values are unchanged, and the loop terminates
-;; on any input. Each widening prints one explicit diagnostic line; there is no
-;; silent truncation.
+;; The single-class projection is not monotone, so the relations can oscillate.
+;; `type-relations-widen.rkt` detects a repeated full state and widens exactly
+;; the entries that moved in the cycle to unresolved, then freezes them; a
+;; converging input never widens. Each widening prints a diagnostic line.
 
 (require racklr/uir
          racklr/effects/class-resolve
@@ -32,9 +27,9 @@
          racklr/effects/walk
          racklr/effects/shape
          racklr/effects/receiver-type
+         racklr/effects/return-type
          racklr/effects/library-tokens
-         racklr/effects/lexicon
-         "type-relations-widen.rkt")
+         racklr/effects/lexicon "type-relations-widen.rkt")
 
 (provide type-relations? type-relations
          type-relations-assign type-relations-self-attr
@@ -51,9 +46,8 @@
 (define (key<? a b)
   (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
 
-;; Class name of a class-body field initializer (`attr = KnownClass` /
-;; `attr = KnownClass(...)`); #f when the initializer does not name a known
-;; class. (was field-init-class in whole-program.rkt)
+;; Class name of a class-body field initializer (`attr = KnownClass`), #f when
+;; the initializer does not name a known class. (was field-init-class.)
 (define (field-class init class-defs import-env comp [tokens default-effect-tokens])
   (cond
     [(bare-class-value init class-defs tokens import-env comp)]
@@ -88,8 +82,7 @@
         [(pair? n) (walk (car n)) (walk (cdr n))])))
   h)
 
-;; Wrap a propagated param type as a typed-param so the annotation-seeding path
-;; in infer-receiver-types picks it up.
+;; Wrap a propagated param type so the annotation-seeding path picks it up.
 (define (seed-params params k param-types)
   (for/list ([i (in-naturals)] [p (in-list params)])
     (define cls (hash-ref param-types (cons k i) #f))
@@ -103,12 +96,10 @@
                         (uir-typed-param-kind p))]
       [else p])))
 
-;; Self-attribute assignments collected across every class: class-level field
-;; initializers first, then `self.attr = KnownClass(...)` from every method
-;; (which overlay the class-level defaults, mirroring instance attributes
-;; shadowing class attributes). Keyed by (comp . class). Iteration is over
-;; sorted method names, so a conflicting attr (two methods assign different
-;; classes) resolves deterministically instead of by hash order.
+;; Self-attribute assignments across every class: class fields first, then
+;; `self.attr = KnownClass(...)` from each method (overlaying the defaults).
+;; Keyed by (comp . class), iterated over sorted method names so a conflicting
+;; attr resolves deterministically instead of by hash order.
 (define (class-self-attrs comp-programs class-defs import-env
                           [param-types (hash)]
                           [return-types #f]
@@ -140,9 +131,8 @@
         [else (for ([(attr kls) (in-hash sa)]) (hash-set! cur attr kls))])))
   h)
 
-;; Inherited self-attribute environment for a class, following the MRO across
-;; files with the most-derived class first. Returns a receiver-types with no
-;; locals (locals are per-function).
+;; Inherited self-attribute environment, MRO across files (most-derived first);
+;; returns receiver-types with no locals (locals are per-function).
 (define (class-attr-env comp class-name self-attr class-defs comp-supers)
   (define seen (make-hash))
   (define acc (make-hash))
@@ -167,9 +157,8 @@
                   (make-hash)
                   (make-hash)))
 
-;; Deterministic join: close assign / self-attr / param / return to a fixed
-;; point (see type-relations-widen.rkt for the widening that guarantees
-;; termination).
+;; Deterministic join of assign/self-attr/param/return; see
+;; type-relations-widen.rkt for the widening that guarantees termination.
 (define (close-type-relations! tr
                                #:comp-programs comp-programs
                                #:class-defs class-defs
@@ -232,12 +221,14 @@
       (define base-attrs (or (and class-env (receiver-types-self-attrs class-env)) (hash)))
       (define rt (infer-receiver-types (body-of k) class-defs base-attrs import-env comp
                                        (seed-params (params-of k) k param) owner
-                                       #:tokens tokens
-                                       #:return-types return
-                                       #:methods methods
-                                       #:fn-defs fn-defs
+                                       #:tokens tokens #:return-types return
+                                       #:methods methods #:fn-defs fn-defs
                                        #:known known
-                                       #:comp-supers comp-supers))
+                                       #:comp-supers comp-supers
+                                       #:call-result-class
+                                       (λ (c env) (call-result-return-class c comp class-defs
+                                                 owner env methods fn-defs known comp-supers
+                                                 return tokens import-env))))
       (hash-set! assign k (receiver-types-locals rt)))
     (set-type-relations-assign! tr assign))
 
@@ -253,11 +244,16 @@
       (define comp (car k))
       (define owner (owner-of k))
       (define rt (rt-of k))
-      (define (arg-class a) (value-class-of a rt class-defs tokens import-env comp owner))
+      ;; A call argument projects through the shared call-result rule.
+      (define (arg-class a)
+        (or (and (uir-call? a) return
+                 (call-result-return-class (uir-call-callee a) comp class-defs
+                                           owner rt methods fn-defs known
+                                           comp-supers return tokens import-env))
+            (value-class-of a rt class-defs tokens import-env comp owner)))
       ;; Split a call's argument list into positional values and keyword
-      ;; bindings (name-symbol . value). A keyword argument is lowered as
-      ;; (call "kwarg" (list (var name) value)); anything else is positional
-      ;; (`*`/`**` spread included, matching the previous index-based walk).
+      ;; bindings (name-symbol . value); anything else is positional (`*`/`**`
+      ;; spread included, matching the previous index-based walk).
       (define (split-args args)
         (define positional '())
         (define kwargs '())
@@ -314,8 +310,9 @@
              (note-positional! fk 0 positional)
              (note-kwargs! fk kwargs)]
             [else
-             (define mks (method-callee-keys callee comp owner methods class-defs
-                                             comp-supers tokens))
+             ;; Syntactic keys plus the receiver-type-dataflow half.
+             (define mks (call-target-keys callee comp owner rt methods class-defs
+                                           comp-supers tokens))
              (cond
                [(pair? mks)
                 (define offset (tokens-method-receiver-offset tokens))
@@ -367,12 +364,17 @@
     out)
 
   (define (collect-returns!)
+    ;; Snapshot the previous round so every key reads one relation (simultaneous update).
+    (define prev-return (hash-copy return))
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
       (hash-set! return k
                  (return-class-of (body-of k) (rt-of k) class-defs
-                                  tokens import-env comp owner)))
+                                  tokens import-env comp owner
+                                  #:return-types prev-return
+                                  #:methods methods #:fn-defs fn-defs
+                                  #:known known #:comp-supers comp-supers)))
     (set-type-relations-return! tr return))
 
   (define-values (assign* self-attr* param* return*)

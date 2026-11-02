@@ -30,7 +30,6 @@
   constructor-class
   call-result-type
   value-class-of
-  return-class-of
   bare-class-value)
 
 (struct receiver-types (locals self-attrs) #:transparent)
@@ -56,6 +55,16 @@
 (define (module-receiver? nm [tokens default-effect-tokens])
   (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
                          (symbol->string nm))))
+
+;; A receiver TYPE name that is not a corpus class definition but still a
+;; tracked receiver: a stdlib type with a method table (`open`, `Path`), an
+;; external module (pylibmc), or a module-path marker (`django.db`).
+(define (tracked-receiver-type? nm [tokens default-effect-tokens])
+  (define s (and nm (symbol->string nm)))
+  (and s (or (hash-has-key? (effect-tokens-stdlib-type-methods tokens) s)
+             (hash-has-key? (effect-tokens-receiver-modules tokens) s)
+             (regexp-match? #rx"[.]" s))
+       nm))
 
 ;; Class name (symbol) tracked for a receiver expression `base`, or #f. `base`
 ;; is either a local variable (`qs`), a `self`/`cls` attribute (`self.cursor`),
@@ -300,31 +309,10 @@
           [else #f])])]
     [else #f]))
 
-;; Return type of a function/method body, projected through its receiver-type
-;; environment: the single class every non-#f `return` expression resolves to.
-;; A body with no return, a mixed set of return types, or a return that does
-;; not project to a tracked class yields #f (sound: no projection is better
-;; than a wrong one). `rt` is the precomputed receiver env (see
-;; infer-receiver-types), so callers share one env instead of rebuilding it.
-(define (return-class-of body rt class-defs [tokens default-effect-tokens]
-                         [import-env #f] [comp #f] [owner #f])
-  (define classes '())
-  (walk-body body (λ (n)
-                    (when (uir-return? n)
-                      (define c (value-class-of (uir-return-value n) rt class-defs
-                                                tokens import-env comp owner))
-                      (when c (set! classes (cons c classes))))))
-  (define uniq (remove-duplicates classes))
-  (and (pair? uniq) (= (length uniq) 1) (car uniq)))
-
-;; Build the receiver-type environment for one function body. Assignments are
-;; processed in source (pre-order) order; `class-defs` is the set of known class
-;; names (a hash keyed by class-name symbol), which gates which constructor
-;; callees / bare class references count as a known receiver type. `base-attrs`
-;; (optional) seeds the self-attribute environment with the enclosing class's
-;; field/`self.attr` defaults, so a method can resolve `self.build_file_class`
-;; even when that attribute is declared at class level rather than in the
-;; method body.
+;; Build the receiver-type environment for one function body (return projection
+;; lives in return-type.rkt); `class-defs` gates which constructor callees / bare
+;; class references count as a known receiver type, and `base-attrs` seeds
+;; self-attributes.
 (define (infer-receiver-types body class-defs [base-attrs (hash)]
                               [import-env #f] [comp #f] [params '()] [owner #f]
                               #:tokens [tokens default-effect-tokens]
@@ -332,22 +320,30 @@
                               #:methods [methods #f]
                               #:fn-defs [fn-defs #f]
                               #:known [known #f]
-                              #:comp-supers [comp-supers #f])
+                              #:comp-supers [comp-supers #f]
+                              ;; Injected call-result projection (callee env ->
+                              ;; class) so an assignment from a method on a
+                              ;; tracked receiver projects too.
+                              #:call-result-class [call-result-class #f])
   (define locals (make-hash))
   (define self-attrs (hash-copy base-attrs))
+  (define (env) (receiver-types locals self-attrs))
   (define (value-class value)
-    (or (and (uir-call? value) return-types methods fn-defs known comp-supers
-             (corpus-call-return-type (uir-call-callee value) comp class-defs owner
-                                      methods fn-defs known comp-supers return-types
-                                      tokens))
-        (value-class-of value (receiver-types locals self-attrs)
-                        class-defs tokens import-env comp owner)))
+    (if (not (uir-call? value))
+        (value-class-of value (env) class-defs tokens import-env comp owner)
+        (or (and call-result-class
+                 (call-result-class (uir-call-callee value) (env)))
+            ;; Only without an injected projection may the older lax corpus
+            ;; lookup run; after a fail-closed #f it could over-claim.
+            (and (not call-result-class) return-types methods fn-defs known
+                 comp-supers
+                 (corpus-call-return-type (uir-call-callee value) comp class-defs
+                                          owner methods fn-defs known comp-supers
+                                          return-types tokens))
+            (value-class-of value (env) class-defs tokens import-env comp owner))))
   ;; Seed parameter types: from the annotation (`def f(x: QuerySet)`) when there
-  ;; is one, else from the parameter's DEFAULT VALUE (`def run(server_cls =
-  ;; WSGIServer)`). Both name a known corpus / stdlib / imported class, so a
-  ;; later `x.m(...)` resolves through receiver-type dataflow rather than
-  ;; falling to `unknown`. Subscripted annotations (`List[Item]`) are not
-  ;; tracked yet.
+  ;; is one, else from the parameter's DEFAULT VALUE. (Subscripted annotations
+  ;; like `List[Item]` are not tracked yet.)
   (for ([p (in-list params)])
     (when (uir-typed-param? p)
       (define pname (and (uir-symbol? (uir-typed-param-name p))
@@ -355,8 +351,12 @@
       (when pname
         (define ann (uir-typed-param-type p))
         (define def (uir-typed-param-default p))
-        (define pcls (or (and ann (bare-class-value ann class-defs
-                                                    tokens import-env comp))
+        (define pcls (or (and ann (or (bare-class-value ann class-defs
+                                                        tokens import-env comp)
+                                      ;; Seed a propagated stdlib/module-marker
+                                      ;; receiver type like an annotation.
+                                      (tracked-receiver-type?
+                                       (bare-name-symbol ann) tokens)))
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
