@@ -17,9 +17,18 @@
 
 (define (lower-simple-stmts cst tk-type tk-value)
   (define kids (node-children cst))
-  (if (= (length kids) 1)
-      (lower-simple-stmt (first kids) tk-type tk-value)
-      (uir-block (map (λ (k) (lower-simple-stmt k tk-type tk-value)) kids))))
+  (define lowered
+    (map (λ (k) (lower-simple-stmt k tk-type tk-value)) kids))
+  ;; A single source statement can lower to several statements (e.g.
+  ;; `import a, b` lowers to one uir-import per module): splice those into the
+  ;; surrounding statement list so re-lowering the emitted (one-per-line) text
+  ;; produces the same flat block shape.
+  (define flat
+    (append-map (λ (u) (if (uir-block? u) (uir-block-stmts u) (list u))) lowered))
+  (cond
+    [(null? flat) (uir-null)]
+    [(null? (cdr flat)) (first flat)]
+    [else (uir-block flat)]))
 
 (define (lower-simple-stmt cst tk-type tk-value)
   (define kids (node-children cst))
@@ -107,6 +116,23 @@
              (find-rhs-in-children x)]
             [else #f]))))
 
+;; Collect the value node of every '=' in an expr_stmt tail, in source order.
+;; The generated parser encodes `a = b = c = 1` as the assignment-target
+;; testlist_star_expr followed by ONE group child whose children are
+;; group(ASSIGN value-group) nodes, so every '=' value must be walked out of
+;; that repetition (find-rhs-in-children only returns the first).
+(define (collect-assign-values nodes)
+  (define out '())
+  (define (walk x)
+    (cond [(cst-node? x)
+           (cond [(eq? (any-tree-tag x) 'testlist_star_expr)
+                  (set! out (cons x out))]
+                 [else (for-each walk (any-tree-children x))])]
+          [(and (list? x) (pair? x)) (for-each walk x)]
+          [else (void)]))
+  (for-each walk nodes)
+  (reverse out))
+
 (define (lower-expr-stmt cst tk-type tk-value)
   (define kids (node-children cst))
   (cond [(null? kids) (uir-null)]
@@ -157,23 +183,123 @@
                                     (list lhs-expr
                                           (if rhs-node (lower-expr rhs-node tk-type tk-value) (uir-null))))))
               (let* ([lhs (first kids)]
-                     [rhs (find-rhs-in-children (cdr kids))])
-                (if rhs
-                    (uir-set! (lower-expr lhs tk-type tk-value)
-                              (lower-expr rhs tk-type tk-value))
+                     [values (collect-assign-values (cdr kids))])
+                (if (pair? values)
+                    (let* ([value-node (last values)]
+                           ;; Every '=' before the last one binds a target:
+                           ;; `a = b = c = 1` lowers to
+                           ;; (uir-set! a (uir-set! b (uir-set! c 1))).
+                           [target-nodes (cons lhs (drop-right values 1))]
+                           [targets (map (λ (n) (lower-assignment-target n tk-type tk-value))
+                                         target-nodes)]
+                           [value (lower-expr value-node tk-type tk-value)])
+                      ;; Fold right so the first source target becomes the
+                      ;; outermost set! (the emitter renders it leftmost).
+                      (for/fold ([acc value]) ([t (reverse targets)])
+                        (uir-set! t acc)))
                     (lower-expr lhs tk-type tk-value)))))))]))
 
+;; ── Imports ────────────────────────────────────────────────────────
+;;
+;; The UIR import node is (uir-import source names): `import a.b` is
+;; source "a.b" with no names, `from .globals import x` is source ".globals"
+;; with names (x). `import a, b` lowers to one import node per module (the
+;; emitter writes one statement each); binding aliases (`import a as b`) are a
+;; documented loss — the module source is kept so the emitted import stays
+;; valid and re-lowers identically.
+
+;; Collect CST nodes with TAG in the generated parser's comma-sequence
+;; encoding: the first item is a direct CST child, the rest are list-wrapped
+;; group(COMMA, item) nodes.
+(define (collect-tagged-sequence cst tag)
+  (define out '())
+  (define (walk x)
+    (cond [(cst-node? x)
+           (cond [(eq? (any-tree-tag x) tag) (set! out (cons x out))]
+                 [else (for-each walk (any-tree-children x))])]
+          [(and (list? x) (pair? x)) (for-each walk x)]
+          [else (void)]))
+  (walk cst)
+  (reverse out))
+
+;; All NAME token values in a CST subtree, in source order.
+(define (name-token-values cst tk-type tk-value)
+  (for/list ([t (cst-tokens-deep cst tk-type tk-value)]
+             #:when (eq? (first t) 'NAME))
+    (second t)))
+
+;; Lexical relative-import prefix ("." / ".." / "..." * n) of a from-import's
+;; module part, read from the DOT/ELLIPSIS tokens that precede the dotted name.
+(define (relative-dots src-group tk-type tk-value)
+  (define n 0)
+  (define (walk x)
+    (cond [(cst-node? x)
+           (if (eq? (any-tree-tag x) 'dotted_name)
+               (void)
+               (for-each walk (any-tree-children x)))]
+          [(and (list? x) (pair? x)) (for-each walk x)]
+          [(token-like? x tk-type)
+           (define tt (tk-type x))
+           (cond [(eq? tt 'DOT) (set! n (+ n 1))]
+                 [(eq? tt 'ELLIPSIS) (set! n (+ n 3))]
+                 [else (void)])]
+          [else (void)]))
+  (walk src-group)
+  (make-string n #\.))
+
 (define (lower-import-name cst tk-type tk-value)
-  (define toks (cst-tokens-deep cst tk-type tk-value))
-  (define names (for/list ([t toks] #:when (eq? (first t) 'NAME)) (second t)))
-  (uir-import (uir-symbol (string-join names "."))
-              '()))
+  ;; import_name: 'import' dotted_as_names
+  (define dotted-as-names
+    (or (find-node (node-children cst) 'dotted_as_names)
+        (for/or ([c (any-tree-children cst)] #:when (cst-node? c)) c)))
+  (define imported-modules
+    (if dotted-as-names
+        (collect-tagged-sequence dotted-as-names 'dotted_as_name)
+        '()))
+  (define imports
+    (for/list ([item imported-modules])
+      (define dn (find-node (node-children item) 'dotted_name))
+      (define module-name
+        (if dn (string-join (name-token-values dn tk-type tk-value) ".")
+            "?module"))
+      (uir-import (uir-symbol module-name) '())))
+  (cond
+    [(null? imports) (uir-import (uir-symbol "?import") '())]
+    [(null? (cdr imports)) (first imports)]
+    [else (uir-block imports)]))
 
 (define (lower-import-from cst tk-type tk-value)
-  (define toks (cst-tokens-deep cst tk-type tk-value))
-  (define names (for/list ([t toks] #:when (eq? (first t) 'NAME)) (second t)))
-  (uir-import (uir-symbol (string-join names "."))
-              '()))
+  ;; import_from: 'from' (('.'|'...')* dotted_name | ('.'|'...')+)
+  ;;              'import' ('*' | '(' import_as_names ')' | import_as_names)
+  (define outer (first (node-children cst)))
+  (define nkids (if outer (node-children outer) '()))
+  (define src-group (and (pair? nkids) (first nkids)))
+  (define names-group (and (>= (length nkids) 2) (second nkids)))
+  (define dots (if src-group (relative-dots src-group tk-type tk-value) ""))
+  (define dotted (and src-group (find-node (node-children src-group) 'dotted_name)))
+  (define base (if dotted (string-join (name-token-values dotted tk-type tk-value) ".") ""))
+  (define source (string-append dots base))
+  (define as-names (if names-group
+                       (collect-tagged-sequence names-group 'import_as_name)
+                       '()))
+  (define wildcard?
+    (and names-group
+         (for/or ([t (cst-tokens-deep names-group tk-type tk-value)])
+           (eq? (first t) 'STAR))))
+  (define names
+    (cond
+      [wildcard? (list (uir-symbol "*"))]
+      [(pair? as-names)
+       (for/list ([item as-names])
+         ;; import_as_name: NAME ('as' NAME)? — keep the bound name, and for
+         ;; an alias encode the source spelling the emitter can print back.
+         (define vals (name-token-values item tk-type tk-value))
+         (uir-symbol (cond [(= (length vals) 1) (car vals)]
+                           [(>= (length vals) 2)
+                            (string-append (car vals) " as " (cadr vals))]
+                           [else "?"])))]
+      [else '()]))
+  (uir-import (uir-symbol source) names))
 
 (define (lower-assert cst tk-type tk-value)
   ;; assert_stmt: 'assert' test (',' test)?
@@ -661,7 +787,11 @@
           (let* ([as-group (second ikids)]
                  [akids (node-children as-group)]
                  [as-expr (if (>= (length akids) 1) (first akids) #f)])
-            (if as-expr (lower-expr as-expr tk-type tk-value) #f))
+            ;; The with-item target follows the assignment-target encoding:
+            ;; `with x as (a, b)` is a uir-list (the emitter wraps it in
+            ;; parens), so the target never reaches uir-var-name as a tuple
+            ;; call.
+            (if as-expr (lower-assignment-target as-expr tk-type tk-value) #f))
           #f))
     (list ctx-expr as-name))
   (define items '())
@@ -964,15 +1094,42 @@
                                             [init (if init-node (lower-expr init-node tk-type tk-value) (uir-null))])
                                         (set! fields (cons (uir-field (uir-symbol fname) type-expr init) fields)))]
                                      [else
-                                      ;; Plain field: x = 1
-                                      (define rhs-value (find-rhs-in-children (list rhs)))
-                                      (set! fields
-                                            (cons (uir-field (uir-symbol fname)
-                                                             (uir-null)
-                                                             (if rhs-value
-                                                                 (lower-expr rhs-value tk-type tk-value)
-                                                                 (uir-null)))
-                                                  fields))])))]
+                                      ;; Plain field: x = 1. A chained class-body
+                                      ;; assignment (`a = b = c = value`) binds every
+                                      ;; target; a class has no statement body in the
+                                      ;; UIR, so each target becomes its own field and
+                                      ;; the later targets are initialised from the
+                                      ;; first one (value evaluated once, source order).
+                                      (define value-nodes (collect-assign-values (cdr xk)))
+                                      (define target-nodes (cons lhs (drop-right value-nodes 1)))
+                                      (define target-names
+                                        (for/list ([n target-nodes])
+                                          (for/or ([t (cst-tokens-deep n tk-type tk-value)]
+                                                   #:when (eq? (first t) 'NAME))
+                                            (second t))))
+                                      (cond
+                                        [(and (> (length target-nodes) 1)
+                                              (pair? value-nodes)
+                                              (for/and ([nm target-names]) (string? nm)))
+                                         (define root-name (first target-names))
+                                         (define init (lower-expr (last value-nodes) tk-type tk-value))
+                                         (for ([nm (in-list target-names)])
+                                           (set! fields
+                                                 (cons (uir-field (uir-symbol nm)
+                                                                  (uir-null)
+                                                                  (if (equal? nm root-name)
+                                                                      init
+                                                                      (uir-var (uir-symbol root-name))))
+                                                       fields)))]
+                                        [else
+                                         (define rhs-value (find-rhs-in-children (list rhs)))
+                                         (set! fields
+                                               (cons (uir-field (uir-symbol fname)
+                                                                (uir-null)
+                                                                (if rhs-value
+                                                                    (lower-expr rhs-value tk-type tk-value)
+                                                                    (uir-null)))
+                                                     fields))])])))]
                          ['pass_stmt (void)]
                          [_ (void)])))))))]
           [(eq? tag 'compound_stmt)

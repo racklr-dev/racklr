@@ -5,10 +5,13 @@
 (provide lower-expr lower-dotted-name lower-not-test lower-comparison lower-binop
          lower-atom-expr lower-trailer find-node lower-subscriptlist find-subscripts
          lower-arglist lower-argument lower-group-expr lower-atom lower-name
-         unquote-string lower-string-token walk-collection lower-collection-items
-         lower-dictorsetmaker lower-tuple-items has-comp-for? lower-comp-for
+         unquote-string lower-string-token decode-python-escapes literal-prefix-and-body
+         lower-string-tokens plain-string-token?
+         walk-collection lower-collection-items
+         lower-dictorsetmaker lower-tuple-items lower-display-items has-comp-for? lower-comp-for
          lower-comprehension lower-exprlist lower-lambdef lower-varargslist
-         lower-get-path)
+         lower-get-path lower-assignment-target normalize-target
+         sequence-item-nodes target-sequence?)
 
 ;; Lower a sequence expression into UIR
 (define (lower-expr cst tk-type tk-value)
@@ -61,13 +64,20 @@
     [(eq? tag 'dotted_name) (lower-dotted-name u tk-type tk-value)]
     [else (uir-symbol (format "?~a" tag))]))
 
-;; Lower a dotted_name (a.b.c) into a symbol or attribute chain
+;; Lower a dotted_name (a.b.c) into a full attribute chain. The generated
+;; parser wraps every dotted name (including a single name) in a dotted_name
+;; node: the first NAME is a `name` child, the rest are list-wrapped
+;; group(DOT, name) nodes, so the token walk below is the reliable source of
+;; the name sequence.
 (define (lower-dotted-name cst tk-type tk-value)
   (define toks (cst-tokens-deep cst tk-type tk-value))
   (define names (for/list ([t toks] #:when (eq? (first t) 'NAME)) (second t)))
-  (if (null? names)
-      (uir-symbol "?dotted")
-      (uir-var (uir-symbol (car names)))))
+  (cond
+    [(null? names) (uir-symbol "?dotted")]
+    [else
+     (foldl (lambda (nm acc) (uir-get acc (uir-string nm)))
+            (uir-var (uir-symbol (car names)))
+            (cdr names))]))
 
 ;; Handle 'not' operator: not_test → 'not' not_test | comparison
 (define (lower-not-test cst tk-type tk-value)
@@ -129,21 +139,39 @@
          [else (collect-op-pairs (cdr remaining) tk-type)]))]))
 
 ;; Handle comparison: expr (comp_op expr)*
+;;
+;; Python's chained comparison (`a < b < c`) means `a < b and b < c` and
+;; evaluates `b` once; lowering it as nested `<` calls is semantically wrong
+;; (and re-emits `a < b < c` only by accident when the nesting is uniform).
+;; A single comparison keeps the binary `<` call encoding; a chain lowers to
+;; the dedicated operand/operator node the emitter renders back exactly:
+;;   (uir-call (uir-symbol "cmp-chain")
+;;            (list a (uir-symbol "<") b (uir-symbol "<") c))
+;; Operator entries use the same names lower-comparison already produces for
+;; single comparisons, including the two-token "is not" / "not in".
 (define (lower-comparison cst tk-type tk-value)
   (define kids (node-children cst))
   (define pairs (collect-op-pairs (cdr (any-tree-children cst)) tk-type))
-  (if (null? pairs)
-      (if (= (length kids) 1)
-          (lower-expr (first kids) tk-type tk-value)
-          (uir-symbol "?comparison"))
-      (let fold ([pairs pairs]
-                 [acc (if (pair? kids) (lower-expr (first kids) tk-type tk-value) (uir-null))])
-        (if (null? pairs)
-            acc
-            (let ([p (car pairs)])
-              (fold (cdr pairs)
-                    (uir-call (uir-symbol (op-symbol (car p) tk-type tk-value))
-                              (list acc (lower-expr (cdr p) tk-type tk-value)))))))))
+  (cond
+    [(null? pairs)
+     (if (= (length kids) 1)
+         (lower-expr (first kids) tk-type tk-value)
+         (uir-symbol "?comparison"))]
+    [(null? (cdr pairs))
+     (define p (car pairs))
+     (uir-call (uir-symbol (op-symbol (car p) tk-type tk-value))
+               (list (if (pair? kids) (lower-expr (first kids) tk-type tk-value) (uir-null))
+                     (lower-expr (cdr p) tk-type tk-value)))]
+    [else
+     (uir-call
+      (uir-symbol "cmp-chain")
+      (append
+       (list (if (pair? kids) (lower-expr (first kids) tk-type tk-value) (uir-null)))
+       (append-map
+        (lambda (p)
+          (list (uir-symbol (op-symbol (car p) tk-type tk-value))
+                (lower-expr (cdr p) tk-type tk-value)))
+        pairs)))]))
 
 ;; Handle binary expressions: expr (binop expr)*
 (define (lower-binop cst tk-type tk-value)
@@ -254,15 +282,28 @@
 ;; Lower subscriptlist into a UIR expression
 ;; For single subscript: return the expression
 ;; For multiple subscripts: return as uir-list (tuple)
+
+;; Wrap a single string subscript index so it is distinct from an attribute
+;; name (see lower-subscriptlist).
+(define (uir-get-field-wrap idx) (uir-list (list idx)))
+
 (define (lower-subscriptlist cst tk-type tk-value)
   (define sub-exprs
     (map (lambda (sub) (lower-subscript sub tk-type tk-value))
          (find-subscripts cst)))
-  (if (null? sub-exprs)
-      (uir-null)
-      (if (= (length sub-exprs) 1)
-          (first sub-exprs)
-          (uir-list sub-exprs))))
+  (cond
+    [(null? sub-exprs) (uir-null)]
+    [(= (length sub-exprs) 1)
+     (define idx (first sub-exprs))
+     ;; A single string index (`d["a"]`) must not be confusable with attribute
+     ;; access (`d.a`): both would otherwise be (uir-get d (uir-string "a")).
+     ;; The subscript keeps a one-element index uir-list in the field slot; the
+     ;; emitter renders a uir-list field as `[...]` and a bare uir-string field
+     ;; as `.attr`, so both spellings round-trip to distinct nodes.
+     (if (uir-string? idx)
+         (uir-get-field-wrap idx)
+         idx)]
+    [else (uir-list sub-exprs)]))
 
 ;; Lower one subscript_ node: a plain index or a slice.
 ;; subscript_ : test | test? ':' test? sliceop?
@@ -342,6 +383,14 @@
 
 (define (lower-argument cst tk-type tk-value)
   ;; argument : test (comp_for)? | keyword '=' test | '**' test | '*' test
+  ;;
+  ;; `*` / `**` unpacking appears as a raw STAR / POWER token before the
+  ;; argument's test child (node-children only keeps CST nodes, so the marker
+  ;; used to be dropped and `f(*xs)` lowered exactly like `f(xs)`). Encode
+  ;; them with the conventions the emitter renders back:
+  ;;   f(*xs)  → (uir-call f (list (uir-spread (uir-var xs))))
+  ;;   f(**kw) → (uir-call f (list (uir-call (uir-symbol "kw-spread")
+  ;;                                         (list (uir-var kw)))))
   ;; A keyword argument (`a=1`) is the first kid being a `keyword` node and the
   ;; second kid the value `test` (the `=` token is filtered out by
   ;; node-children). Emit it as (call "kwarg" (list name value)) so the value
@@ -351,7 +400,18 @@
   ;; filter)) so the loop variable is preserved for receiver-type dataflow
   ;; instead of being dropped.
   (define kids (node-children cst))
+  (define raw (any-tree-children cst))
+  (define (raw-marker? ty)
+    (for/or ([c raw] #:when (token-like? c tk-type)) (eq? (tk-type c) ty)))
+  (define (test-child)
+    (or (for/or ([k kids] #:when (eq? (any-tree-tag k) 'test)) k)
+        (and (pair? kids) (first kids))))
   (cond
+    [ (raw-marker? 'STAR)
+     (uir-spread (if (test-child) (lower-expr (test-child) tk-type tk-value) (uir-null)))]
+    [ (raw-marker? 'POWER)
+     (uir-call (uir-symbol "kw-spread")
+               (list (if (test-child) (lower-expr (test-child) tk-type tk-value) (uir-null))))]
     [(and (= (length kids) 2)
           (eq? (any-tree-tag (first kids)) 'keyword)
           (eq? (any-tree-tag (second kids)) 'test))
@@ -393,6 +453,30 @@
   (define n (string->number digits radix))
   (if n (number->string n) s))
 
+;; True for a plain or u-prefixed string token (no prefix, or u/U): the family
+;; whose value the UIR stores decoded.
+(define (plain-string-token? s)
+  (define-values (prefix _delim _body) (literal-prefix-and-body s))
+  (member (string-downcase prefix) '("" "u") equal?))
+
+;; Concatenate an implicit string-literal sequence (`"a" "b"` is one literal in
+;; Python). The generated parser wraps the whole STRING+ run in one atom, and
+;; only when every token is in the decoded family can the pieces be merged into
+;; the single uir-string the UIR models; a mixed run (an f-string or a
+;; raw/bytes prefix next to another token) keeps the first token and is a
+;; recorded residual gap (the corpus uses neither).
+(define (lower-string-tokens toks)
+  (cond
+    [(null? toks) (uir-null)]
+    [(null? (cdr toks)) (lower-string-token (car toks))]
+    [(for/and ([t toks]) (plain-string-token? t))
+     (uir-string
+      (apply string-append
+             (for/list ([t toks])
+               (define-values (_prefix _delim body) (literal-prefix-and-body t))
+               (decode-python-escapes body))))]
+    [else (lower-string-token (car toks))]))
+
 ;; Handle atom: NAME | NUMBER | STRING+ | NONE | TRUE | FALSE | [] | {} | ()
 (define (lower-atom cst tk-type tk-value)
   (define toks (cst-tokens cst tk-type tk-value))
@@ -405,6 +489,15 @@
                              (tk-type (car c)) #t)))
       (list (tk-type (car c)) (tk-value (car c)))))
   (define all-toks (append toks list-toks))
+  ;; STRING+ runs (implicit concatenation) are list-wrapped, so collect every
+  ;; STRING token in source order rather than only direct/single-list children.
+  (define (collect-string-tokens node)
+    (cond [(token-like? node tk-type)
+           (if (eq? (tk-type node) 'STRING) (list (tk-value node)) '())]
+          [(list? node) (append-map collect-string-tokens node)]
+          [(cst-node? node) (append-map collect-string-tokens (any-tree-children node))]
+          [else '()]))
+  (define string-tokens (collect-string-tokens cst))
   (define kids (node-children cst))
   ;; Detect bracket-delimited collections via raw children
   (define bracket-type
@@ -422,7 +515,7 @@
           (eq? (any-tree-tag (first kids)) 'testlist_comp))
      (if (has-comp-for? (first kids))
          (lower-comprehension (first kids) tk-type tk-value "list-comp")
-         (uir-list (lower-collection-items (first kids) tk-type tk-value)))]
+         (uir-list (lower-display-items (first kids) tk-type tk-value)))]
     [(eq? bracket-type 'list) (uir-list '())]
     ;; Dict or set: {expr, ...} — check for comprehension first
     [(and (eq? bracket-type 'brace) (pair? kids)
@@ -441,11 +534,12 @@
         (for/or ([t (cst-tokens-deep cst tk-type tk-value)])
           (eq? (first t) 'COMMA)))
       (if has-comma?
-          (uir-call (uir-symbol "tuple") (lower-tuple-items cst tk-type tk-value))
+          (uir-call (uir-symbol "tuple") (lower-display-items cst tk-type tk-value))
           ;; Parenthesized expression: lower the inner expression and wrap in uir-paren
-          (let* ([items (lower-tuple-items cst tk-type tk-value)]
+          (let* ([items (lower-display-items cst tk-type tk-value)]
                  [inner (if (pair? items) (car items) (uir-null))])
             (uir-paren inner)))]
+    [(pair? string-tokens) (lower-string-tokens string-tokens)]
     [(and (null? all-toks) (null? kids)) (uir-null)]
     [(pair? kids)
      (let ([inner (first kids)])
@@ -477,24 +571,152 @@
       (uir-var (uir-symbol (second (car toks))))
       (uir-symbol "?name")))
 
-;; Strip surrounding quotes from a STRING token value
-(define (unquote-string s)
-  (if (and (>= (string-length s) 2)
-           (or (eq? (string-ref s 0) #\") (eq? (string-ref s 0) #\'))
-           (eq? (string-ref s 0) (string-ref s (sub1 (string-length s)))))
-      (substring s 1 (sub1 (string-length s)))
-      s))
+;; ── String literals ────────────────────────────────────────────────
+;;
+;; A STRING token's value is the exact source text, including any prefix and
+;; delimiter, so its meaning depends on which of Python's four literal families
+;; it belongs to. The UIR stores each family in the form its emitter can render
+;; back exactly:
+;;
+;;   no prefix / u / U (single or triple quoted)
+;;       → uir-string holding the DECODED content (Python escape sequences
+;;         processed). `'a"b'` stores `a"b`, `'\n'` stores a real newline,
+;;         `'''a\nb'''` stores a real newline.
+;;   r / R / b / B / br / rb (any case)
+;;       → uir-string holding the FULL token text verbatim, delimiter
+;;         included, because the escaping rules are prefix-dependent and the
+;;         emitter writes prefixed literals back unchanged.
+;;   f / F / fr / rf (any case)
+;;       → uir-fstring holding the RAW body between the delimiters (escape
+;;         sequences NOT decoded; the emitter re-adds the prefix and a
+;;         delimiter it picks from the body).
 
-;; Lower a STRING token value, detecting f-strings
+;; Split a Python STRING token into (values prefix delimiter body). The lexer
+;; guarantees at most a two-letter prefix followed by one of the four
+;; delimiters.
+(define string-literal-shape-rx
+  #px"^([A-Za-z]{0,2})(\"\"\"|'''|\"|')")
+
+(define (literal-prefix-and-body s)
+  (define m (regexp-match string-literal-shape-rx s))
+  (cond
+    [(not m)
+     ;; Not shaped like a Python string literal (should be impossible for a
+     ;; STRING token); treat the whole value as bodyless content.
+     (values "" "" s)]
+    [else
+     (define prefix (second m))
+     (define delim (third m))
+     (define start (+ (string-length prefix) (string-length delim)))
+     (define end (- (string-length s) (string-length delim)))
+     (values prefix delim (if (>= end start) (substring s start end) ""))]))
+
+;; A code point -> character, or #f for a value Python would reject (out of
+;; range or a lone surrogate). Invalid escapes are preserved verbatim.
+(define (codepoint->char cp)
+  (and (integer? cp)
+       (<= 0 cp #x10FFFF)
+       (not (<= #xD800 cp #xDFFF))
+       (integer->char cp)))
+
+;; n hex digits at START in S -> integer or #f
+(define (hex-number s start n)
+  (and (<= (+ start n) (string-length s))
+       (let ([sub (substring s start (+ start n))])
+         (and (regexp-match? #px"^[0-9A-Fa-f]+$" sub)
+              (string->number sub 16)))))
+
+;; n octal digits at START in S -> integer or #f
+(define (octal-number s start n)
+  (and (<= (+ start n) (string-length s))
+       (let ([sub (substring s start (+ start n))])
+         (and (regexp-match? #px"^[0-7]+$" sub)
+              (string->number sub 8)))))
+
+;; Decode Python string-literal escape sequences. Handles \\ \' \" \a \b \f
+;; \n \r \t \v, octal \0-\777, \xXX, \uXXXX, \UXXXXXXXX, and the backslash
+;; line continuation. Any other escape keeps its backslash (so an unsupported
+;; escape such as \N{...} round-trips textually: the emitter escapes the
+;; backslash and the decoder restores it — the UIR is stable, though the
+;; character is not materialized; recorded as a residual gap).
+(define (decode-python-escapes s)
+  (define n (string-length s))
+  (let loop ([i 0] [out '()])
+    (cond
+      [(>= i n) (list->string (reverse out))]
+      [(char=? (string-ref s i) #\\) 
+       (cond
+         [(>= (add1 i) n) (loop (add1 i) (cons #\\ out))]  ; trailing backslash
+         [else
+          (define c (string-ref s (add1 i)))
+          (cond
+            [(char=? c #\\) (loop (+ i 2) (cons #\\ out))]
+            [(char=? c #\') (loop (+ i 2) (cons #\' out))]
+            [(char=? c #\") (loop (+ i 2) (cons #\" out))]
+            [(char=? c #\a) (loop (+ i 2) (cons #\u0007 out))]
+            [(char=? c #\b) (loop (+ i 2) (cons #\backspace out))]
+            [(char=? c #\f) (loop (+ i 2) (cons #\u000C out))]
+            [(char=? c #\n) (loop (+ i 2) (cons #\newline out))]
+            [(char=? c #\r) (loop (+ i 2) (cons #\return out))]
+            [(char=? c #\t) (loop (+ i 2) (cons #\tab out))]
+            [(char=? c #\v) (loop (+ i 2) (cons #\u000B out))]
+            ;; Backslash line continuation: remove both (and any \r\n pair).
+            [(char=? c #\newline) (loop (+ i 2) out)]
+            [(and (char=? c #\return)
+                  (< (+ i 2) n)
+                  (char=? (string-ref s (+ i 2)) #\newline))
+             (loop (+ i 3) out)]
+            ;; Octal: 1 to 3 digits.
+            [(and (char-numeric? c) (char<=? c #\7))
+             (define (digits k)
+               (cond [(and (>= (- n (+ i 1)) k) (octal-number s (add1 i) k)) k]
+                     [else #f]))
+             (define len (or (digits 3) (digits 2) (digits 1)))
+             (if len
+                 (loop (+ i 1 len)
+                       (cons (integer->char (octal-number s (add1 i) len)) out))
+                 (loop (+ i 2) (cons c (cons #\\ out))))]
+            [(char=? c #\x)
+             (define v (hex-number s (+ i 2) 2))
+             (define cp (and v (integer->char v)))
+             (if cp (loop (+ i 4) (cons cp out))
+                 (loop (+ i 2) (cons c (cons #\\ out))))]
+            [(char=? c #\u)
+             (define v (hex-number s (+ i 2) 4))
+             (define cp (and v (codepoint->char v)))
+             (if cp (loop (+ i 6) (cons cp out))
+                 (loop (+ i 2) (cons c (cons #\\ out))))]
+            [(char=? c #\U)
+             (define v (hex-number s (+ i 2) 8))
+             (define cp (and v (codepoint->char v)))
+             (if cp (loop (+ i 10) (cons cp out))
+                 (loop (+ i 2) (cons c (cons #\\ out))))]
+            ;; Unknown escape (incl. \N{...}): keep the backslash and the
+            ;; escaped character verbatim.
+            [else (loop (+ i 2) (cons c (cons #\\ out)))])])]
+      [else (loop (add1 i) (cons (string-ref s i) out))])))
+
+;; Whether a string token's value should be stored verbatim (raw/bytes family).
+(define (verbatim-string-prefix? prefix)
+  (member (string-downcase prefix) '("r" "b" "br" "rb") equal?))
+
+;; Whether a string token's value is an f-string.
+(define (fstring-prefix? prefix)
+  (member (string-downcase prefix) '("f" "fr" "rf") equal?))
+
+;; Lower a STRING token value per the encoding table above.
 (define (lower-string-token s)
-  (cond [(and (>= (string-length s) 3)
-              (or (eq? (string-ref s 0) #\f) (eq? (string-ref s 0) #\F))
-              (or (eq? (string-ref s 1) #\") (eq? (string-ref s 1) #\'))
-              (eq? (string-ref s 1) (string-ref s (sub1 (string-length s)))))
-         ;; f-string: strip 'f' prefix and quotes
-         (uir-fstring (substring s 2 (sub1 (string-length s))))]
-        [else
-         (uir-string (unquote-string s))]))
+  (define-values (prefix _delim body) (literal-prefix-and-body s))
+  (cond
+    [(fstring-prefix? prefix) (uir-fstring body)]
+    [(verbatim-string-prefix? prefix) (uir-string s)]
+    [else (uir-string (decode-python-escapes body))]))
+
+;; Strip the prefix and full delimiter from a STRING token value without
+;; decoding escapes (kept for callers that only need the literal body).
+(define (unquote-string s)
+  (define-values (_prefix _delim body) (literal-prefix-and-body s))
+  body)
 
 ;; Unified walker: recursively walk a CST node, collecting all nodes of interest
 ;; Returns list of '(test node) and '(colon) markers in tree order
@@ -524,31 +746,92 @@
   (for/list ([t (walk-collection cst tk-type)] #:when (eq? (first t) 'test))
     (lower-expr (second t) tk-type tk-value)))
 
-;; Lower dictorsetmaker: detect dict vs set via COLON, extract pairs or items
+;; Lower the items of a list/tuple/set display. Unlike walk-collection (which
+;; collects only `test` nodes for dict/comprehension analysis), this keeps
+;; iterable-unpacking entries: `[*xs, 1]`, `(1, *xs)`, `{*a, *b}`. A star_expr
+;; lowers to uir-spread, which the emitter renders as `*expr`.
+(define (lower-display-items cst tk-type tk-value)
+  (define out '())
+  (define (walk x)
+    (cond [(cst-node? x)
+           (cond [(memq (any-tree-tag x) '(test namedexpr_test))
+                  (set! out (cons (lower-expr x tk-type tk-value) out))]
+                 [(eq? (any-tree-tag x) 'star_expr)
+                  (define kids (node-children x))
+                  (define inner
+                    (if (pair? kids) (lower-expr (first kids) tk-type tk-value) (uir-null)))
+                  (set! out (cons (uir-spread inner) out))]
+                 [else (for-each walk (any-tree-children x))])]
+          [(and (list? x) (pair? x)) (for-each walk x)]
+          [else (void)]))
+  (walk cst)
+  (reverse out))
+
+;; Is a dict-display entry node a `**expr` unpack? The generated parser wraps
+;; each entry in a group whose raw children carry the entry marker: either a
+;; COLON token (key: value) or a POWER token (** expr).
+(define (dict-entry-unpack? node tk-type)
+  (and (cst-node? node)
+       (for/or ([c (any-tree-children node)] #:when (token-like? c tk-type))
+         (eq? (tk-type c) 'POWER))))
+
+(define (dict-entry-pair? node tk-type)
+  (and (cst-node? node)
+       (for/or ([c (any-tree-children node)] #:when (token-like? c tk-type))
+         (eq? (tk-type c) 'COLON))))
+
+;; Collect dict-display entries in source order as
+;;   ('pair key-uir . value-uir)          for `key: value`
+;;   ('unpack . expr-uir)                 for `**expr`
+;; The generated parser encodes the comma repetition as a list child of
+;; group(COMMA, entry) nodes; entries themselves are group nodes.
+(define (collect-dict-display-entries cst tk-type tk-value)
+  (define out '())
+  (define (expr-child node)
+    (for/or ([k (node-children node)]
+             #:when (memq (any-tree-tag k) '(test namedexpr_test expr)))
+      k))
+  (define (walk x)
+    (cond
+      [(cst-node? x)
+       (cond
+         [(dict-entry-unpack? x tk-type)
+          (define e (expr-child x))
+          (set! out (cons (cons 'unpack
+                                (if e (lower-expr e tk-type tk-value) (uir-null)))
+                          out))]
+         [(dict-entry-pair? x tk-type)
+          (define tests (for/list ([k (node-children x)]
+                                   #:when (memq (any-tree-tag k) '(test namedexpr_test)))
+                          k))
+          (define key (if (pair? tests) (lower-expr (first tests) tk-type tk-value) (uir-null)))
+          (define val (if (>= (length tests) 2)
+                          (lower-expr (second tests) tk-type tk-value)
+                          (uir-null)))
+          (set! out (cons (list 'pair key val) out))]
+         [else (for-each walk (any-tree-children x))])]
+      [(and (list? x) (pair? x)) (for-each walk x)]
+      [else (void)]))
+  (walk cst)
+  (reverse out))
+
+;; Lower dictorsetmaker: dict if any entry is `key: value` or `**expr`, else a
+;; set display. Dict-display entries keep their lowered key expression (numbers
+;; stay numbers, strings stay decoded strings) and `**` unpacks keep their
+;; value via the kw-spread call encoding the emitter renders back as `**expr`.
 (define (lower-dictorsetmaker cst tk-type tk-value)
-  (define tests-and-colons (walk-collection cst tk-type))
-  (define has-colon? (for/or ([t tests-and-colons] #:when (eq? (first t) 'colon)) #t))
-  (if has-colon?
-      (let* ([tests (filter (lambda (t) (eq? (first t) 'test)) tests-and-colons)]
-             [entries
-              (let loop ([ts tests])
-                (if (or (null? ts) (null? (cdr ts)))
-                    '()
-                    (let* ([key-expr (lower-expr (second (car ts)) tk-type tk-value)]
-                           [val-expr (lower-expr (second (cadr ts)) tk-type tk-value)]
-                           [key-str
-                            (cond [(uir-string? key-expr) (uir-string-value key-expr)]
-                                  [(uir-number? key-expr) (uir-number-value key-expr)]
-                                  [(uir-symbol? key-expr) (uir-symbol-name key-expr)]
-                                  [(uir-var? key-expr) (uir-symbol-name (uir-var-name key-expr))]
-                                  [else (format "~a" (uir-tag key-expr))])])
-                      (cons (cons (uir-string key-str) val-expr)
-                            (loop (cddr ts))))))])
-        (uir-record entries))
-      ;; Set: just collect test items
+  (define entries (collect-dict-display-entries cst tk-type tk-value))
+  (if (for/or ([e entries]) (memq (car e) '(pair unpack)))
+      (uir-record
+       (for/list ([e entries])
+         (cond
+           [(eq? (car e) 'unpack)
+            (cons (uir-call (uir-symbol "kw-spread") (list (cdr e))) (uir-null))]
+           [else (cons (cadr e) (caddr e))])))
+      ;; Set: collect the display items (iterable unpacking `{*a, *b}` lowers
+      ;; to uir-spread entries, which the emitter renders as `*expr`).
       (uir-call (uir-symbol "set")
-       (for/list ([t tests-and-colons] #:when (eq? (first t) 'test))
-         (lower-expr (second t) tk-type tk-value)))))
+                (lower-display-items cst tk-type tk-value))))
 
 ;; Lower tuple items: extract test/yield_expr nodes from a tuple atom
 (define (lower-tuple-items cst tk-type tk-value)
@@ -678,15 +961,80 @@
   (for/list ([t toks] #:when (eq? (first t) 'NAME))
     (uir-symbol (second t))))
 
-;; Helper: lower a dotted_name to uir-symbol or uir-get chain
+;; ── Assignment / binding targets ───────────────────────────────────
+;;
+;; A destructuring target (`a, b = x`, `[a, b] = x`, `a, *rest = x`) used to
+;; collapse to its first element because `testlist_star_expr` is not an
+;; expression rule. The UIR encoding is one `uir-list` in the set! name slot,
+;; whose elements are the lowered targets (uir-var / uir-get / nested uir-list
+;; / uir-spread). A single target keeps its plain expression node, so
+;; `x = 1` is unchanged.
+;;
+;; The generated parser encodes a comma-separated sequence as: the first item
+;; is a direct CST child, the rest are list-wrapped group(COMMA, item) nodes.
+;; Walk only through group/list wrappers and stop at sequence items, so a
+;; nested tuple (`(a, b)`) stays one item.
+(define sequence-item-tags '(test star_expr namedexpr_test))
+
+(define (sequence-item-nodes cst)
+  (define out '())
+  (define (walk x)
+    (cond [(cst-node? x)
+           (cond [(memq (any-tree-tag x) sequence-item-tags)
+                  (set! out (cons x out))]
+                 [else (for-each walk (any-tree-children x))])]
+          [(and (list? x) (pair? x)) (for-each walk x)]
+          [else (void)]))
+  (walk cst)
+  (reverse out))
+
+;; True when CST is a comma-separated target list (`a, b`, `a,`, `*a, b`)
+;; rather than a single target. The generated parser puts the repetition in a
+;; list child (even an empty one for a trailing comma) or leaves the COMMA
+;; token as a direct child. A single target (`a`, `a.b`, `(a, b)`) has neither.
+(define (target-sequence? cst tk-type)
+  (or (for/or ([c (any-tree-children cst)]) (and (list? c) (pair? c)))
+      (for/or ([c (any-tree-children cst)])
+        (and (token-like? c tk-type) (eq? (tk-type c) 'COMMA)))))
+
+;; Normalize a lowered target expression into the target encoding: a tuple
+;; call (`(a, b)` lowers to (call "tuple" ...)) becomes a uir-list, and lists /
+;; spreads are normalized recursively.
+(define (normalize-target u)
+  (cond
+    [(uir-spread? u) (uir-spread (normalize-target (uir-spread-expr u)))]
+    [(and (uir-call? u)
+          (uir-symbol? (uir-call-callee u))
+          (equal? (uir-symbol-name (uir-call-callee u)) "tuple"))
+     (uir-list (map normalize-target (uir-call-args u)))]
+    [(uir-list? u) (uir-list (map normalize-target (uir-list-items u)))]
+    [else u]))
+
+;; Lower one assignment / with-as target subtree into its UIR target node. A
+;; comma-separated target list becomes one uir-list; a lone target (including
+;; a parenthesized tuple target, which normalizes to a uir-list element) keeps
+;; its expression node.
+(define (lower-assignment-target cst tk-type tk-value)
+  (cond
+    [(target-sequence? cst tk-type)
+     (define items (sequence-item-nodes cst))
+     (if (pair? items)
+         (uir-list (map (lambda (n) (normalize-target (lower-expr n tk-type tk-value)))
+                        items))
+         (normalize-target (lower-expr cst tk-type tk-value)))]
+    [else (normalize-target (lower-expr cst tk-type tk-value))]))
+
+;; Helper: lower a dotted name (name_or_attr / dotted_name) to a full uir-get
+;; chain. Works off the NAME tokens for the same reason lower-dotted-name does:
+;; the generated parser wraps the dot repetition in list children.
 (define (lower-get-path cst tk-type tk-value)
-  (define kids (node-children cst))
-  (if (null? kids)
-      (uir-symbol "?")
-      (let* ([first-name (first kids)]
-             [nm (lower-name first-name tk-type tk-value)])
-        (if (= (length kids) 1)
-            nm
-            (uir-get nm (lower-name (second kids) tk-type tk-value))))))
+  (define toks (cst-tokens-deep cst tk-type tk-value))
+  (define names (for/list ([t toks] #:when (eq? (first t) 'NAME)) (second t)))
+  (cond
+    [(null? names) (uir-symbol "?")]
+    [else
+     (foldl (lambda (nm acc) (uir-get acc (uir-string nm)))
+            (uir-var (uir-symbol (car names)))
+            (cdr names))]))
 
 
