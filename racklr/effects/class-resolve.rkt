@@ -223,13 +223,12 @@
 ;; ── imported receiver-TYPE projection ────────────────────────────────
 
 ;; Effective MODULE PATH of an import binding used as a receiver root. A plain
-;; `import pkg.mod` binds a module handle on the dotted path; a `from pkg import
-;; submod` binding for a lowercase member is synthesized as an fn handle whose
-;; path is the PARENT package and whose name is the submodule, so its effective
-;; module path is parent.submod (`from email import generator` →
-;; "email.generator"). A lowercase class imported from its own module
-;; (`from datetime import datetime`) keeps its path: appending its name would
-;; invent a non-existent "datetime.datetime".
+;; `import pkg.mod` and a `from pkg import submod` binding both resolve to a
+;; module handle on the dotted submodule path (`from xml.dom import pulldom` →
+;; "xml.dom.pulldom"). A legacy fn handle (path = parent package, name = member)
+;; is still normalised: `from datetime import datetime` (the ambiguous
+;; same-name shape, which resolve-exports keeps as an fn handle) keeps the
+;; source path rather than inventing a non-existent "datetime.datetime" module.
 (define (imported-binding-module-path h root)
   (and (handle? h) (handle-path h)
        (cond

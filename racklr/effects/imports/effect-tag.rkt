@@ -87,12 +87,11 @@
   (module-effect-tag path config))
 
 ;; Dotted candidates for a call resolved through an import handle, most-specific
-;; first: the imported object's own path (package.obj), the called member's path
-;; (package.member — for module handles), and the bare package path. This is the
-;; re-export follow: `from django.utils import autoreload` synthesizes a handle
-;; whose path is the package (`django.utils`) but whose object actually lives in
-;; `django.utils.autoreload`; trying each candidate against the ordered DATA
-;; rules lets a specific submodule rule win without the engine knowing any name.
+;; first: the called member's path under the binding, the binding's own path,
+;; and — for a legacy fn handle whose path is the parent package and whose name
+;; is the member (`from django.utils import autoreload`) — the parent-relative
+;; candidates too. Trying each candidate against the ordered DATA rules lets a
+;; specific submodule rule win without the engine knowing any name.
 (define (dotted-candidates path name mname)
   (filter (λ (s) (and s (not (string=? s ""))))
           (list (and path name mname (string-append path "." name "." mname))

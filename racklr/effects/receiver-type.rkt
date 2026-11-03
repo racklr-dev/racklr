@@ -145,9 +145,11 @@
                      [table (hash-ref (effect-tokens-module-result-types tokens) path #f)]
                      [t (and table (hash-ref table (symbol->string func) #f))]
                      [rtn (and t (string->symbol t))]
-                     ;; A `from pkg import submod` fn-handle names a MODULE
-                     ;; (`from xml.dom import pulldom`), so its table entries
-                     ;; are trusted like a module handle's.
+                     ;; A `from pkg import submod` binding is a module handle on
+                     ;; the dotted submodule path (`from xml.dom import pulldom`
+                     ;; → "xml.dom.pulldom"), so its table entries are trusted
+                     ;; like any module handle's; the fn-handle shape is still
+                     ;; accepted for legacy/synthetic environments.
                      [module-binding?
                       (or (eq? (handle-kind h) 'module)
                           (and (eq? (handle-kind h) 'fn) (handle-name h)
@@ -155,10 +157,8 @@
                                                            (handle-name h)))))])
                 (and rtn
                      (or module-binding?
-                         ;; A non-module handle (`from datetime import datetime`,
-                         ;; which the lowercase class name synthesizes as an fn
-                         ;; handle) may borrow the module's table entry only when
-                         ;; it maps to that same binding — a classmethod
+                         ;; A class handle may borrow the module's table entry
+                         ;; only when it maps to that same binding — a classmethod
                          ;; constructor returning an instance of the class, so
                          ;; `Client.get(...)` cannot borrow `httpx.get`.
                          (and (memq (handle-kind h) '(class fn))

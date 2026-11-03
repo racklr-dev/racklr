@@ -98,9 +98,14 @@
 ;; unresolvable or its module untagged (falls through to the name heuristics).
 ;; A bare call to an imported FUNCTION from an unscanned module
 ;; (`get_migration_name_timestamp()` from django.db.migrations.utils): resolve
-;; the module's effect domain. The fn handle is synthesized only for external
+;; the module's effect domain. The handle is synthesized only for external
 ;; bindings; a scanned module's functions resolve as corpus edges earlier, and
 ;; a class handle never reaches here (bare class calls are pure constructors).
+;; A lowercase external binding is a MODULE handle on the dotted submodule path
+;; (resolve-exports binds `from xml.dom import pulldom` that way), so a bare
+;; call resolves by trying that path and its dotted parents against the
+;; injected import-tag rules; a legacy fn handle (path = source module, name =
+;; member) resolves the same way through its `path.name` candidate.
 (define (imported-fn-effect nm comp import-env [lex default-lexicon])
   (and import-env nm
        (let* ([config (lexicon-import-config lex)]
@@ -108,7 +113,7 @@
               [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
               [h (and e (hash-ref e (symbol->string nm) #f))])
          (and (handle? h)
-              (eq? (handle-kind h) 'fn)
+              (memq (handle-kind h) '(fn module))
               (handle-path h)
               (let ([dom (handle-effect-domain (handle-path h)
                                                (handle-name h)
