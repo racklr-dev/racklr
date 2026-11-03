@@ -29,6 +29,7 @@
          racklr/effects/receiver-type
          racklr/effects/return-type
          racklr/effects/library-tokens
+         racklr/effects/self-attr-relation
          racklr/effects/lexicon "type-relations-widen.rkt")
 
 (provide type-relations? type-relations
@@ -45,107 +46,6 @@
 
 (define (key<? a b)
   (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
-
-;; Class name of a class-body field initializer (`attr = KnownClass`), #f when
-;; the initializer does not name a known class. (was field-init-class.)
-(define (field-class init class-defs import-env comp [tokens default-effect-tokens])
-  (cond
-    [(bare-class-value init class-defs tokens import-env comp)]
-    [(uir-call? init) (call-result-type (uir-call-callee init) class-defs
-                                        tokens #f import-env comp)]
-    [else #f]))
-
-;; Class-level field initializers keyed by (comp . class) -> { attr -> class }.
-(define (class-field-attrs comp-programs class-defs import-env
-                           [tokens default-effect-tokens])
-  (define h (make-hash))
-  (for ([cp (in-list comp-programs)])
-    (define comp (car cp))
-    (let walk ([n (cdr cp)])
-      (cond
-        [(uir-class? n)
-         (define owner
-           (and (uir-class-name n) (uir-symbol? (uir-class-name n))
-                (string->symbol (uir-symbol-name (uir-class-name n)))))
-         (when owner
-           (define key (cons comp owner))
-           (define acc (hash-ref h key #f))
-           (unless acc (set! acc (make-hash)) (hash-set! h key acc))
-           (for ([f (in-list (uir-class-fields n))])
-             (when (uir-field? f)
-               (define attr (and (uir-field-name f) (uir-symbol? (uir-field-name f))
-                                 (string->symbol (uir-symbol-name (uir-field-name f)))))
-               (define cls (field-class (uir-field-init f) class-defs import-env comp tokens))
-               (when (and attr cls) (hash-set! acc attr cls)))))]
-        [(struct? n)
-         (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
-        [(pair? n) (walk (car n)) (walk (cdr n))])))
-  h)
-
-;; Wrap a propagated param type so the annotation-seeding path picks it up.
-(define (seed-params params k param-types)
-  (for/list ([i (in-naturals)] [p (in-list params)])
-    (define cls (hash-ref param-types (cons k i) #f))
-    (cond
-      [(and cls (uir-symbol? p))
-       (uir-typed-param p (uir-symbol (symbol->string cls)) #f #f)]
-      [(and cls (uir-typed-param? p) (not (uir-typed-param-type p)))
-       (uir-typed-param (uir-typed-param-name p)
-                        (uir-symbol (symbol->string cls))
-                        (uir-typed-param-default p)
-                        (uir-typed-param-kind p))]
-      [else p])))
-
-;; Self-attribute assignments across every class: class fields first, then
-;; `self.attr = KnownClass(...)` from each method (overlaying the defaults).
-;; Keyed by (comp . class), iterated over sorted method names so a conflicting
-;; attr resolves deterministically instead of by hash order.
-(define (class-self-attrs comp-programs class-defs import-env
-                          [param-types (hash)]
-                          [return-types #f]
-                          [methods #f] [fn-defs #f] [known #f] [comp-supers #f]
-                          #:tokens [tokens default-effect-tokens])
-  (define h (class-field-attrs comp-programs class-defs import-env tokens))
-  (for ([cp (in-list comp-programs)])
-    (define comp (car cp))
-    (define mparams (collect-method-params (cdr cp)))
-    (define cmethods (collect-methods (cdr cp)))
-    (for ([n (in-list (sort (hash-keys cmethods) symbol<?))])
-      (define body (hash-ref cmethods n))
-      (define owner (class-name-of-name n))
-      (define k (cons comp n))
-      (define sa (receiver-types-self-attrs
-                  (infer-receiver-types body class-defs (hash) import-env comp
-                                        (seed-params (hash-ref mparams n '()) k param-types)
-                                        owner
-                                        #:tokens tokens
-                                        #:return-types return-types
-                                        #:methods methods
-                                        #:fn-defs fn-defs
-                                        #:known known
-                                        #:comp-supers comp-supers)))
-      (define key (cons comp owner))
-      (define cur (hash-ref h key #f))
-      (cond
-        [(not cur) (unless (zero? (hash-count sa)) (hash-set! h key (hash-copy sa)))]
-        [else (for ([(attr kls) (in-hash sa)]) (hash-set! cur attr kls))])))
-  h)
-
-;; Inherited self-attribute environment, MRO across files (most-derived first);
-;; returns receiver-types with no locals (locals are per-function).
-(define (class-attr-env comp class-name self-attr class-defs comp-supers)
-  (define seen (make-hash))
-  (define acc (make-hash))
-  (let loop ([c comp] [cls class-name])
-    (when (and c cls (not (hash-has-key? seen (cons c cls))))
-      (hash-set! seen (cons c cls) #t)
-      (for ([(attr kls) (in-hash (hash-ref self-attr (cons c cls) (hash)))])
-        (unless (hash-has-key? acc attr) (hash-set! acc attr kls)))
-      (for ([sr (in-list (hash-ref comp-supers (cons c cls) '()))])
-        (define c2 (car sr))
-        (define s (cdr sr))
-        (when (and c2 s) (loop c2 s)))))
-  (receiver-types (hash) acc))
 
 ;; Syntax-visible seed: the self-attr relation from class fields + method
 ;; bodies. assign/param/return are empty until the join runs.
@@ -235,11 +135,24 @@
   (define (collect-params!)
     (define cands (make-hash))   ;; (cons key idx) -> (listof class-symbol)
     (define unres (make-hash))   ;; (cons key idx) -> count of unresolvable sites
+    ;; Var-positional parameters (`*args`): (cons key idx) -> (listof (listof
+    ;; class-or-#f)), one positional tuple per call site. A call that spreads
+    ;; such a parameter (`Page(*args, **kwargs)`) re-expands the tuple into
+    ;; slots, so a constructor whose arguments pass through `*args` still
+    ;; grounds its parameters (and thus the `self.attr` assignments in it) from
+    ;; the concrete call chain.
+    (define var-seq (make-hash))
     (define (note! key idx cls)
       (define kk (cons key idx))
       (if cls
           (hash-update! cands kk (λ (l) (cons cls l)) '())
           (hash-update! unres kk add1 0)))
+    ;; Index of the parameter list's var-positional (`*args`) parameter, or #f.
+    (define (var-positional-index ps)
+      (for/or ([i (in-naturals)] [p (in-list ps)])
+        (and (uir-typed-param? p)
+             (eq? (uir-typed-param-kind p) 'var-positional)
+             i)))
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
@@ -288,26 +201,74 @@
         (for/or ([i (in-naturals)] [p (in-list ps)])
           (and (eq? (param-name p) name) i)))
       ;; Record a param binding; `self-offset` skips `self`/`cls` for methods.
-      (define (note-positional! key self-offset positional)
-        (for ([i (in-naturals)] [a (in-list positional)])
-          (define idx (+ i self-offset))
-          (when (< idx (length (params-of key)))
-            (note! key idx (arg-class a)))))
+      ;; When the callee has a var-positional parameter (`*args`), the fixed
+      ;; slots fill the parameters before it and the remaining slots are its
+      ;; argument tuple, by position. A call site that passes no extra values
+      ;; leaves the tuple absent (unknown), never an empty tuple that could
+      ;; over-claim.
+      (define (note-positional! key self-offset slots)
+        (define ps (params-of key))
+        (define vp (var-positional-index ps))
+        (define fixed (and vp (max 0 (- vp self-offset))))
+        (cond
+          [fixed
+           (define n-fixed (min (length slots) fixed))
+           (for ([i (in-naturals)] [cls (in-list (take slots n-fixed))])
+             (note! key (+ i self-offset) cls))
+           (define rest-slots (drop slots n-fixed))
+           (when (pair? rest-slots)
+             (hash-update! var-seq (cons key vp)
+                           (λ (l) (cons rest-slots l)) '()))]
+          [else
+           (for ([i (in-naturals)] [cls (in-list slots)])
+             (define idx (+ i self-offset))
+             (when (< idx (length ps))
+               (note! key idx cls)))]))
       (define (note-kwargs! key kwargs)
         (define ps (params-of key))
         (for ([kw (in-list kwargs)])
           (define idx (param-index ps (car kw)))
           (when (and idx (< idx (length ps)))
             (note! key idx (arg-class (cdr kw))))))
+      ;; The Python lowerer encodes a `**expr` argument as a synthetic
+      ;; `(call "kw-spread" (list expr))` node; it carries keyword arguments,
+      ;; never a positional slot.
+      (define (keyword-spread-arg? a)
+        (and (uir-call? a)
+             (uir-symbol? (uir-call-callee a))
+             (string=? (uir-symbol-name (uir-call-callee a)) "kw-spread")))
+      ;; Argument classes for one call's positional arguments. A `*expr` spread
+      ;; of the ENCLOSING function's own var-positional parameter re-expands into
+      ;; the parameter's recorded argument tuple, so `Page(*args, **kwargs)` in a
+      ;; method that received them as `*args` still maps its slots positionally.
+      (define enclosing-ps (params-of k))
+      (define enclosing-vp (var-positional-index enclosing-ps))
+      (define enclosing-vp-name
+        (and enclosing-vp (param-name (list-ref enclosing-ps enclosing-vp))))
+      (define (positional-slots args)
+        (append*
+         (for/list ([a (in-list args)])
+           (cond
+             [(keyword-spread-arg? a) '()]
+             [else
+              (define spread-name
+                (and (uir-spread? a) (bare-name-symbol (uir-spread-expr a))))
+              (define v (and spread-name enclosing-vp
+                             (eq? spread-name enclosing-vp-name)
+                             (hash-ref param (cons k enclosing-vp) #f)))
+              (cond
+                [(and (pair? v) (eq? (car v) 'varargs)) (cdr v)]
+                [else (list (arg-class a))])]))))
       (define (visit! node)
         (when (uir-call? node)
           (define callee (uir-call-callee node))
           (define-values (positional kwargs) (split-args (uir-call-args node)))
+          (define slots (positional-slots positional))
           (define nm (callee-name callee))
           (define fk (and nm (bare-function-key nm comp fn-defs known)))
           (cond
             [fk
-             (note-positional! fk 0 positional)
+             (note-positional! fk 0 slots)
              (note-kwargs! fk kwargs)]
             [else
              ;; Syntactic keys plus the receiver-type-dataflow half.
@@ -316,8 +277,22 @@
              (cond
                [(pair? mks)
                 (define offset (tokens-method-receiver-offset tokens))
-                (for ([mk (in-list mks)])
-                  (note-positional! mk offset positional)
+                ;; A var-positional callee's tuple must not union the `self`
+                ;; classes of several sibling subclass call sites into one
+                ;; unresolved implementation (the shared
+                ;; `Base._get_page(self, *args, **kwargs)` pattern): only the
+                ;; most-derived dispatch key runs from this call, so only it
+                ;; collects the arguments. Fixed-signature methods keep flowing
+                ;; their arguments through every MRO target — an
+                ;; over-approximation that lets a base body still type a
+                ;; parameter (the pre-existing behaviour this lever does not
+                ;; change).
+                (define targets
+                  (if (var-positional-index (params-of (car mks)))
+                      (list (car mks))
+                      mks))
+                (for ([mk (in-list targets)])
+                  (note-positional! mk offset slots)
                   (note-kwargs! mk kwargs))]
                [else
                 (define cname (constructor-class callee class-defs tokens))
@@ -327,7 +302,7 @@
                                 (cons c (qualified-name-symbol
                                          cname (string->symbol init-name)))))
                 (when (and ik (hash-has-key? methods ik))
-                  (note-positional! ik (tokens-method-receiver-offset tokens) positional)
+                  (note-positional! ik (tokens-method-receiver-offset tokens) slots)
                   (note-kwargs! ik kwargs))])])))
       (walk-body (body-of k) visit!))
     ;; One class is the sound projection. Several classes are still usable when
@@ -361,6 +336,27 @@
       (when (zero? (hash-ref unres kk 0))
         (define c (resolve-candidate uniq))
         (when c (hash-set! out kk c))))
+    ;; Var-positional parameters: every call site must agree on the tuple
+    ;; LENGTH for the positions to align; each position then folds to its single
+    ;; candidate class (#f when it has none). A position with competing classes
+    ;; stays unresolved without invalidating the other positions — that is what
+    ;; lets `Page(*args)` type its third argument while the first two are
+    ;; outside the static call chain.
+    (for ([(kk seqs) (in-hash var-seq)])
+      (define seqs* (reverse seqs))
+      (define lens (remove-duplicates (map length seqs*)))
+      (when (= (length lens) 1)
+        (define elems
+          (for/list ([i (in-range (car lens))])
+            (define classes
+              (for/list ([s (in-list seqs*)]
+                         #:do [(define c (list-ref s i))]
+                         #:when c)
+                c))
+            (define uniq (remove-duplicates classes))
+            (and (= (length uniq) 1) (car uniq))))
+        (when (ormap values elems)
+          (hash-set! out kk (cons 'varargs elems)))))
     out)
 
   (define (collect-returns!)

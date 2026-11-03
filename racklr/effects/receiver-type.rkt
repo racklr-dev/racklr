@@ -18,6 +18,7 @@
          racklr/effects/class-resolve
          racklr/effects/imports
          racklr/effects/library-tokens
+         racklr/effects/receiver-predicates
          racklr/effects/receiver-assign
          racklr/effects/type-projection
          racklr/effects/lexicon)
@@ -30,41 +31,12 @@
   constructor-class
   call-result-type
   value-class-of
-  bare-class-value)
+  bare-class-value
+  annotation-class-of)
 
 (struct receiver-types (locals self-attrs) #:transparent)
 ;; locals:     hash name-symbol → class-name-symbol
 ;; self-attrs: hash attr-symbol → class-name-symbol (on self / cls)
-
-(define (self-or-cls-var? v [tokens default-effect-tokens])
-  (and (or (uir-var? v) (uir-symbol? v))
-       (tokens-self-name? tokens (bare-name-symbol v))))
-
-;; A pure stdlib/builtin value constructor name (`Path`, `md5`, `dict`): pure to
-;; construct, and therefore also a usable receiver type for a call result.
-(define (pure-stdlib-type? n [tokens default-effect-tokens])
-  (and n
-       (let ([s (symbol->string n)])
-         (or (set-member? (effect-tokens-pure-stdlib-bare-names tokens) s)
-             (set-member? (effect-tokens-builtin-type-roots tokens) s)))))
-
-;; A receiver value is a MODULE (not a class) when its name names an external
-;; module in the receiver-modules token table (pylibmc / pymemcache / memcache /
-;; redis). Module receivers resolve their method calls to the module's effect
-;; domain in classify-all, keeping engine code free of library names.
-(define (module-receiver? nm [tokens default-effect-tokens])
-  (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
-                         (symbol->string nm))))
-
-;; A receiver TYPE name that is not a corpus class definition but still a
-;; tracked receiver: a stdlib type with a method table (`open`, `Path`), an
-;; external module (pylibmc), or a module-path marker (`django.db`).
-(define (tracked-receiver-type? nm [tokens default-effect-tokens])
-  (define s (and nm (symbol->string nm)))
-  (and s (or (hash-has-key? (effect-tokens-stdlib-type-methods tokens) s)
-             (hash-has-key? (effect-tokens-receiver-modules tokens) s)
-             (regexp-match? #rx"[.]" s))
-       nm))
 
 ;; Class name (symbol) tracked for a receiver expression `base`, or #f. `base`
 ;; is either a local variable (`qs`), a `self`/`cls` attribute (`self.cursor`),
@@ -103,6 +75,21 @@
            (imported-class-ref nm comp import-env)
            (module-receiver? nm tokens))
        nm))
+
+;; Class named by a WRITTEN type annotation (`x: KnownClass`, `def f(x:
+;; KnownClass)`, class field `attr: KnownClass`), or #f. Only a bare annotation
+;; is projected: a subscripted/generic annotation (`list[Item]`) names a
+;; container, not its element, so unwrapping it would claim the wrong receiver.
+;; The tracked-type set is exactly `bare-class-value`'s (corpus class, pure
+;; stdlib value type, imported class, module marker) plus the tracked
+;; stdlib/module receiver markers that a relation-propagated annotation may
+;; reuse.
+(define (annotation-class-of ann class-defs [tokens default-effect-tokens]
+                             [import-env #f] [comp #f])
+  (define nm (and ann (bare-name-symbol ann)))
+  (and nm
+       (or (bare-class-value ann class-defs tokens import-env comp)
+           (tracked-receiver-type? nm tokens))))
 
 ;; Class name the constructor callee names, when it is a known class: a bare
 ;; callee (`QuerySet(...)`) or a dotted callee whose final field names a known
@@ -359,13 +346,22 @@
                                        (bare-name-symbol ann) tokens)))
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
+  ;; Declared-type projection for an annotated binding (`self.attr: KnownClass
+  ;; = ...`, lowered to `uir-ann-set!`): a bare annotation naming a tracked
+  ;; receiver class (corpus, pure stdlib value type, imported class, or a
+  ;; tracked stdlib/module marker) types the target when the initializer does
+  ;; not. A subscripted/generic annotation (`list[Item]`) names a container,
+  ;; not its element, so it is deliberately not unwrapped.
+  (define (annotation-class ann)
+    (annotation-class-of ann class-defs tokens import-env comp))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
   ;; caller supplies the value projection, host implicit-receiver name test and
   ;; env setters.
   (apply-assignments! body value-class
                       (λ (n) (tokens-self-name? tokens n))
                       (λ (nm cls) (hash-set! locals nm cls))
-                      (λ (attr cls) (hash-set! self-attrs attr cls)))
+                      (λ (attr cls) (hash-set! self-attrs attr cls))
+                      annotation-class)
   ;; `with ctx() as name:` binds the context manager's RESULT type: track the
   ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
   ;; later `executor.submit(...)` resolves instead of staying `unknown`.

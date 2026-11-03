@@ -86,9 +86,9 @@
         ;; class instead of `unknown`. The same fast path serves Python `self`
         ;; (a uir-var) and JS `this` (a uir-symbol).
         (or (hash-ref (receiver-types-self-attrs rt) attr #f)
-            (and owner return-types attr
+            (and owner return-types methods attr
                  (mro-property-return-type comp owner attr return-types
-                                           class-defs comp-supers)))]
+                                           methods class-defs comp-supers)))]
        [else
         (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
                                         owner return-types methods fn-defs known import-env

@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Attribute-read projection (P0.3, `self-attr-typing`): `self.attr` is typed
+  from its DEFINITION, so a call on it resolves through the receiver class
+  instead of carrying `unknown`. The self-attr relation seeds an
+  annotation-only class field (`attr: KnownClass`), handles PEP 526 annotated
+  instance assignments (`self.attr: KnownClass = value`, `uir-ann-set!`) with
+  the initializer projected first and the declared type as the fall-back, and
+  the self-attr seed now uses the same fail-closed call-result projection as
+  the assign relation (#119) instead of the older skip-missing lookup. Property
+  return projection inherits most-derived-first only: a subclass override whose
+  body does not project fails closed rather than inheriting the superclass
+  return (`mro-property-return-type` reads the first `mro-method-keys` key).
+  Constructor-parameter dataflow follows `*args`/`**kwargs`: a call that
+  spreads the enclosing function's var-positional parameter re-expands the
+  argument tuple recorded at that function's call sites; a var-positional
+  callee takes its arguments at the most-derived dispatch key alone (sibling
+  subclasses' `self` values would otherwise union into one unresolved tuple),
+  so `Page(*args, **kwargs)` types its constructor parameters (and therefore
+  `Page.paginator`) from the concrete call chain. The self-attr builders split
+  into `racklr/effects/self-attr-relation.rkt` and the receiver predicates into
+  `racklr/effects/receiver-predicates.rkt` (every file stays under the 400-line
+  obligation). Measured with `tools/unknown-census.rkt` on `django/django/core`:
+  unknown call sites 305 -> 297 (8 `self-attr` rows removed, none added),
+  unknown functions 292 -> 292, unknown files 73 -> 73; on `django/django`:
+  unknown call sites 4947 -> 4937 (10 removed rows, none added; 10
+  `self-attr-typing`), unknown functions 4000 -> 4000, unknown files 478 ->
+  478. The shared type-graph baseline pin is unchanged
+  (`sha256:f96a641b...`, 4704 atoms): the resolved sites became edges to callee
+  rows that are themselves still unknown effect rows, so the graph does not
+  move.
+
 - Call-result projection through the whole-program type relations:
   `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
   result class from the corpus return relation, then the receiver-type-dataflow

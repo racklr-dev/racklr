@@ -99,24 +99,24 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-02, racklr `6fb6ba6` + this change)
+## Baseline (observed 2026-11-02, attribute-read projection on `ddb2915`)
 
 `django/django/core` (the pinned baseline probe):
 
 ```
 files scanned: 112   parsed: 112   failed: 0
 functions: 979 (in 101 files with inferred functions)
-unknown call sites: 305   unknown functions: 292   unknown files: 73
-(this lever: 316 -> 305 call sites, 304 -> 292 functions, 75 -> 73 files)
+unknown call sites: 297   unknown functions: 292   unknown files: 73
+(this lever: 305 -> 297 call sites, 292 -> 292 functions, 73 -> 73 files)
 
-receiver shapes: bare-call 159, local 61, param 32, self-attr 23,
+receiver shapes: bare-call 159, local 61, param 32, self-attr 15,
                  chained 13, call-result 11, self-method 6
 local binding kinds (of 61): call-result 30, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
   bare-call-lexicon        116   return-type-projection    53
-  parameter-dataflow        32   self-attr-typing         23
+  parameter-dataflow        32   self-attr-typing         15
   element-type-dataflow     22   higher-order-row-hole    15
   attribute-alias-typing    14   multi-level-chain        13
   literal-constructor-typing 10  mro-edge-resolution       6
@@ -128,31 +128,30 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 4947   unknown functions: 4000   unknown files: 478
-(this lever: 4969 -> 4947 call sites, 4018 -> 4000 functions,
+unknown call sites: 4937   unknown functions: 4000   unknown files: 478
+(this lever: 4947 -> 4937 call sites, 4000 -> 4000 functions,
  478 -> 478 files)
 
-receiver shapes: bare-call 1687, local 1099, param 726, self-attr 647,
+receiver shapes: bare-call 1687, local 1099, param 726, self-attr 637,
                  chained 330, call-result 313, self-method 141, other 4
 local binding kinds (of 1099): call-result 429, unbound 232, loop-var 192,
                  attr 153, comp-var 59, literal 25, exception 9
 
 levers:
-  bare-call-lexicon        1484   return-type-projection   806
-  parameter-dataflow        726   self-attr-typing         647
-  multi-level-chain         330   element-type-dataflow    272
-  unbound-binding-resolution 232  attribute-alias-typing   216
-  mro-edge-resolution       141   higher-order-row-hole     41
-  literal-constructor-typing 39   exception-type-dataflow     9
-  unclassified                4
+  bare-call-lexicon          1484   return-type-projection      806
+  parameter-dataflow          726   self-attr-typing            637
+  multi-level-chain           330   element-type-dataflow       272
+  unbound-binding-resolution  232   attribute-alias-typing      216
+  mro-edge-resolution         141   higher-order-row-hole        41
+  literal-constructor-typing   39   exception-type-dataflow       9
+  unclassified                  4
 ```
 
-The full-package TSV diff for this lever is 22 removed rows and **no added
-rows**: 12 `return-type-projection`, 9 `parameter-dataflow` and 1
-`self-attr-typing` sites resolved, with no site gaining `unknown`. The effect
-alphabet moves at the margin (network-touching functions 93 -> 95, db 4516 ->
-4515), and `entries with typed ops` stays 72 (72 / 11,175 entries after the row
-changes) because this lever does not change the operation vocabulary.
+The core-probe TSV diff for this lever is 8 removed `self-attr` rows and **no
+added rows**: `Page.next_page_number` / `Page.previous_page_number` and the six
+`AsyncPage` paginator methods now resolve `self.paginator.<method>()` to the
+`Paginator`/`AsyncPaginator` method edge instead of `unknown`. The full-package
+TSV diff is 10 removed rows and **no** added rows (all 10 `self-attr-typing`), so no row gains `unknown`.
 
 One full-corpus run takes on the order of 8-15 min wall including parser
 generation and peaks at ~275 MB RSS. The relation join terminates on any input:
@@ -163,42 +162,54 @@ widening event identically before and after this lever, so the full-package
 counters are a deterministic tracked state.
 
 The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the same
-305 sites / 292 functions / 73 files and the same shape histogram on
+297 sites / 292 functions / 73 files and the same shape histogram on
 `django/django/core`, so the census agrees with the diagnostic already used by
 the loop.
 
-The effect-graph gate is unchanged by this diagnostic. On `django/django/core`,
+The effect-graph gate is unchanged by this lever. On `django/django/core`,
 `racket tools/baseline-check.rkt` reports
-`baseline COVERAGE-FAILED sha256:995a25ab332c6e504bae4d0311016f9dfecd5cb2a59c9a221aadda5a10c17022`:
-the graph **matches the re-pinned snapshot** (the pass/fail half is green;
-2708 -> 2720 atom lines) while the Phase-0.3 unknown-elimination obligation is
-still open (292 unknown functions / 73 unknown files, `<= 0` required). The
-census in this document is the aiming instrument for that open obligation, not
-a claim that it is discharged.
+`baseline COVERAGE-FAILED sha256:f96a641b8dd79f08b2c8c6410a358eedbaef98f39ca33d1a07739e2d0003cf7c`:
+the graph **matches the pinned snapshot** (4704 atoms, 112 files; the pass/fail
+half is green), while the Phase-0.3 unknown-elimination obligation is still
+open (292 unknown functions / 73 unknown files, `<= 0` required). The shared
+pin did not move with this lever: the resolved call sites became edges to callee
+rows that are themselves still unknown effect rows, so no `fn-effect-row`
+witness changed. The census in this document is the aiming instrument for that
+open obligation, not a claim that it is discharged.
 
 ### Remaining surface after this lever
 
-The call-result projection reaches the receiver-method-return and returned-call
-sites of the `return-type-projection` family. The largest families in the
-before-census are `bare-call-lexicon` (1484, dominated by the `kw-spread`
-lowering), `return-type-projection` (818), `parameter-dataflow` (735),
-`self-attr-typing` (648) and `multi-level-chain` (330). Within
-`return-type-projection` the largest unresolved groups are `super().m()`
-results (out-of-corpus parent-method classification, not return projection),
-receiver-method returns limited by an unprojected receiver, imported/module
-result-type DATA entries, and function values. `parameter-dataflow` is largely
-outside call-chain reach: most of its sites have no statically visible
-in-corpus call site (framework/dispatch-invoked callbacks and protocol
-methods); the visible residual call sites pass locals/attributes, i.e.
-upstream dataflow.
+The attribute-read projection reaches classes whose fields are declared (a
+written field/parameter annotation), whose constructor stores a tracked value,
+or whose property body projects one. The largest families in the before-census
+remain `bare-call-lexicon` (1484, dominated by the `kw-spread` lowering),
+`return-type-projection` (806), `parameter-dataflow` (726),
+`self-attr-typing` (647 -> 637) and `multi-level-chain` (330).
 
-Two deliberate conservatisms of this lever: a method call projects only its
-most-derived dispatch key, so an unprojected override fails closed instead of
-inheriting a superclass projection, and the relation projection is not
-compositional through call-result receivers (`x = f().m()` is not projected in
-the relations; the classification-time receiver chain does handle `f().m()`).
-The `class-self-attrs` seed path keeps the older skip-missing corpus lookup
-(pre-existing).
+The 15 remaining `self-attr-typing` sites on the core probe are definitions this
+lever deliberately does not guess: module-scope literal registries read through
+`dict.setdefault` (`LocMemCache._cache` / `_expire_info`), `or`-fallback
+assignments whose untyped branch is a parameter
+(`RedisCacheClient._pool_class` / `_serializer`), an attribute assigned only by
+a SUBCLASS constructor (`FileProxyMixin.file`), a class-valued callee whose
+result type is not in the DATA tables (`ASGIRequest._stream`), and attributes
+assigned by an out-of-corpus parent class (`WSGIRequestHandler.connection` /
+`.server`, `ManagementUtility.argv`, `OutputWrapper._out`). Each needs another
+lever (module-scope assignment tracking, `or` type narrowing, module result-type
+DATA entries, external base-class attribute data); none is resolvable from the
+in-corpus declaration alone.
+
+Three deliberate conservatisms of this lever: a projected method call resolves
+only its most-derived dispatch key, so an unprojected override fails closed
+instead of inheriting a superclass projection (applied here to the self-attr
+seed and to property projection); a var-positional callee receives propagated
+arguments at its most-derived dispatch key alone, while fixed-signature methods
+keep the pre-existing all-MRO-target argument flow; and var-positional argument
+tuples are re-expanded only when every call site agrees on their length, with
+each position folded independently (an unknown or conflicting position does not
+invalidate the others). The `class-self-attrs` seed path now uses the same
+call-result rule as the assign relation, so it no longer keeps the pre-#119
+skip-missing lookup.
 
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change

@@ -2463,6 +2463,138 @@
   (check-equal? (row-names r) '(db))
   (check-false (row-lookup r 'unknown)))
 
+;; ── attribute-read projection (P0.3, issue #124) ────────────────────
+;; `self.attr` is typed from its DEFINITION: the constructor assignment (its
+;; value projected through the shared call-result rule), the class field's
+;; written type annotation, a property's projected return, and the MRO for
+;; inherited definitions. `self.attr.m()` then resolves through that class.
+
+(define (test-attribute-read-field-annotation)
+  ;; `attr: KnownClass` (annotation-only class field) types `self.attr`, so
+  ;; `self.qs.m1()` resolves to QuerySet.m1 instead of carrying `unknown`.
+  (define app
+    (prog (py-class "QuerySet"
+                    (list (py-method "m1" (uir-call (dot (v "db") "commit") '()))))
+          (py-class/field
+           "Repo"
+           (list (uir-field (uir-symbol "qs") (v "QuerySet") (uir-null)))
+           (list (py-method "run"
+                            (uir-call (dot (uir-get (v "self") (sym "qs")) "m1") '()))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'Repo.run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'must)
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-attribute-read-annotated-assignment)
+  ;; `self.qs: KnownClass = <unprojected call>`: the annotation types the
+  ;; instance attribute when the initializer does not project one.
+  (define app
+    (prog (py-class "QuerySet"
+                    (list (py-method "m1" (uir-call (dot (v "db") "commit") '()))))
+          (fn "make" (uir-null))
+          (py-class
+           "Repo"
+           (list (uir-method (uir-symbol "__init__")
+                             (list (uir-typed-param (uir-symbol "self") #f #f #f))
+                             (uir-ann-set! (uir-get (v "self") (sym "qs"))
+                                           (v "QuerySet")
+                                           (uir-call (v "make") '()))
+                             'public)
+                 (py-method "run"
+                            (uir-call (dot (uir-get (v "self") (sym "qs")) "m1") '()))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'Repo.run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'must)
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-attribute-read-property-most-derived-override)
+  ;; A subclass override of a property without a projected return FAILS CLOSED:
+  ;; the superclass projection is never inherited for the override (the same
+  ;; most-derived dispatch discipline as #119's call-result projection).
+  (define app
+    (prog
+     (py-class "Client" (list (py-method "m1" (uir-null))))
+     (fn "load" (uir-null))
+     (py-class/super
+      "Base" (uir-null)
+      (list (py-method "__init__"
+                       (uir-set! (uir-get (v "self") (sym "_class")) (v "Client")))
+            (uir-decorated
+             (list (uir-call (v "property") '()))
+             (py-method "_cache"
+                        (prog (uir-return
+                               (uir-call (uir-get (v "self") (sym "_class")) '())))))))
+     (py-class/super
+      "Sub" (v "Base")
+      (list (uir-decorated
+             (list (uir-call (v "property") '()))
+             (py-method "_cache"
+                        (prog (uir-return (uir-call (v "load") '())))))
+            (py-method "touch"
+                       (uir-call (dot (uir-get (v "self") (sym "_cache")) "m1") '()))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
+                      (cons "app.py" 'Sub.touch)))
+  (check-equal? (modality r 'unknown) 'unknown))
+
+(define (test-attribute-read-constructor-through-varargs)
+  ;; `Page.paginator` is assigned in the constructor from a parameter; the
+  ;; concrete call chain passes it through `*args`/`**kwargs`
+  ;; (`Page(*args, **kwargs)`), which the parameter relation follows, so the
+  ;; self-attribute is typed and `self.paginator.validate_number()` resolves.
+  (define app
+    (prog
+     (uir-class
+      (uir-symbol "Paginator") '() '()
+      (list
+       (uir-method
+        (uir-symbol "_get_page")
+        (list (uir-typed-param (uir-symbol "self") #f #f #f)
+              (uir-typed-param (uir-symbol "args") #f #f 'var-positional)
+              (uir-typed-param (uir-symbol "kwargs") #f #f 'var-keyword))
+        (prog (uir-return
+               (uir-call (v "Page")
+                         (list (uir-spread (v "args"))
+                               (uir-call (sym "kw-spread") (list (v "kwargs")))))))
+        'public)
+       (uir-method
+        (uir-symbol "page")
+        (list (uir-typed-param (uir-symbol "self") #f #f #f)
+              (uir-typed-param (uir-symbol "number") #f #f #f))
+        (prog (uir-return
+               (uir-call (dot (v "self") "_get_page")
+                         (list (v "number") (v "num_pages") (v "self")))))
+        'public)
+       (py-method "validate_number" (uir-call (dot (v "db") "commit") '()))))
+     (uir-class
+      (uir-symbol "Page") '() '()
+      (list
+       (uir-method
+        (uir-symbol "__init__")
+        (list (uir-typed-param (uir-symbol "self") #f #f #f)
+              (uir-typed-param (uir-symbol "object_list") #f #f #f)
+              (uir-typed-param (uir-symbol "number") #f #f #f)
+              (uir-typed-param (uir-symbol "paginator") #f #f #f))
+        (uir-set! (uir-get (v "self") (sym "paginator")) (v "paginator"))
+        'public)
+       (uir-method
+        (uir-symbol "next_page_number") '()
+        (prog (uir-return
+               (uir-call (dot (uir-get (v "self") (sym "paginator"))
+                              "validate_number")
+                         (list (v "number")))))
+        'public)))
+     (fn "use"
+         (uir-block
+          (list (uir-set! (v "p") (uir-call (v "Paginator") '()))
+                (uir-call (dot (v "p") "page") (list (v "n"))))))))
+  (define rows (infer-effects-all (list (cons "app.py" app))))
+  (define r (hash-ref rows (cons "app.py" 'Page.next_page_number)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'must)
+  (check-false (row-lookup r 'unknown)))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -2647,4 +2779,8 @@
   (test-projection-return-mixed-expressions-not-projected)
   (test-projection-return-strict-override)
   (test-projection-return-most-derived-override)
+  (test-attribute-read-field-annotation)
+  (test-attribute-read-annotated-assignment)
+  (test-attribute-read-property-most-derived-override)
+  (test-attribute-read-constructor-through-varargs)
   (displayln "All infer tests passed."))
