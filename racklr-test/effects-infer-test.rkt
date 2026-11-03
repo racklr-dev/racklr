@@ -2250,6 +2250,59 @@
   (check-false (row-lookup r 'unknown)))
 
 
+(define (test-projection-smtp-conditional-property-alias-hop)
+  ;; Django's smtp `EmailBackend` connection chain
+  ;; (`django/core/mail/backends/smtp.py`): `connection_class` is a conditional
+  ;; `@property` returning `smtplib.SMTP_SSL if self.use_ssl else smtplib.SMTP`;
+  ;; `open()` constructs the connection through it and the instance hops through
+  ;; the `_partial_connection` alias to `self.connection`; `_send()` then calls a
+  ;; method on `self.connection`. Both receiver sites must resolve through the
+  ;; conditional property and the alias hop to the SMTP receiver type (network)
+  ;; instead of `unknown` (issue #125).
+  (define backend
+    (prog (py-class "EmailBackend"
+                    (list
+                     (uir-decorated (list (uir-call (v "property") '()))
+                                    (py-method "connection_class"
+                                               (uir-return
+                                                (uir-if (dot (v "self") "use_ssl")
+                                                        (dot (v "smtplib") "SMTP_SSL")
+                                                        (dot (v "smtplib") "SMTP")))))
+                     (py-method "open"
+                                (uir-block
+                                 (list
+                                  (uir-set! (dot (v "self") "_partial_connection")
+                                            (uir-call (dot (v "self") "connection_class")
+                                                      (list (uir-string "host")
+                                                            (uir-number "25"))))
+                                  (uir-call (dot (dot (v "self") "_partial_connection")
+                                                 "starttls")
+                                            '())
+                                  (uir-call (dot (dot (v "self") "_partial_connection")
+                                                 "login")
+                                            (list (uir-string "user")
+                                                  (uir-string "pass")))
+                                  (uir-set! (dot (v "self") "connection")
+                                            (dot (v "self") "_partial_connection")))))
+                     (py-method "_send"
+                                (uir-call (dot (dot (v "self") "connection")
+                                               "sendmail")
+                                          (list (uir-string "from")
+                                                (uir-string "to")
+                                                (uir-string "body"))))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "smtplib" (handle 'module "smtplib" #f)))
+                (hash)))
+  (define rows
+    (infer-effects-all (list (cons "app.py" backend)) #:import-env env))
+  (define open-row (hash-ref rows (cons "app.py" 'EmailBackend.open)))
+  (check-equal? (row-names open-row) '(network))
+  (check-false (row-lookup open-row 'unknown))
+  (define send-row (hash-ref rows (cons "app.py" 'EmailBackend._send)))
+  (check-equal? (row-names send-row) '(network))
+  (check-false (row-lookup send-row 'unknown)))
+
 (define (test-projection-submodule-module-function)
   ;; `from xml.dom import pulldom` is a submodule binding (fn handle path
   ;; "xml.dom", name "pulldom"): its effective module path is
@@ -2694,6 +2747,7 @@
   (test-projection-module-receiver-class-ref)
   (test-projection-module-receiver-client-methods)
   (test-projection-property-mro)
+  (test-projection-smtp-conditional-property-alias-hop)
   (test-projection-submodule-module-function)
   (test-projection-lowercase-imported-class)
   (test-projection-return-through-returned-call)
