@@ -19,6 +19,7 @@
          racklr/effects/imports
          racklr/effects/library-tokens
          racklr/effects/receiver-assign
+         racklr/effects/receiver-module
          racklr/effects/type-projection
          racklr/effects/lexicon)
 
@@ -50,21 +51,7 @@
 
 ;; A receiver value is a MODULE (not a class) when its name names an external
 ;; module in the receiver-modules token table (pylibmc / pymemcache / memcache /
-;; redis). Module receivers resolve their method calls to the module's effect
-;; domain in classify-all, keeping engine code free of library names.
-(define (module-receiver? nm [tokens default-effect-tokens])
-  (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
-                         (symbol->string nm))))
-
-;; A receiver TYPE name that is not a corpus class definition but still a
-;; tracked receiver: a stdlib type with a method table (`open`, `Path`), an
-;; external module (pylibmc), or a module-path marker (`django.db`).
-(define (tracked-receiver-type? nm [tokens default-effect-tokens])
-  (define s (and nm (symbol->string nm)))
-  (and s (or (hash-has-key? (effect-tokens-stdlib-type-methods tokens) s)
-             (hash-has-key? (effect-tokens-receiver-modules tokens) s)
-             (regexp-match? #rx"[.]" s))
-       nm))
+;; redis); see receiver-module.rkt for the module→class→domain lookups.
 
 ;; Class name (symbol) tracked for a receiver expression `base`, or #f. `base`
 ;; is either a local variable (`qs`), a `self`/`cls` attribute (`self.cursor`),
@@ -199,6 +186,15 @@
       (let ([nm (callee-name callee)])
         (and nm comp import-env (imported-class-ref nm comp import-env)))
       (imported-module-class-ref callee comp import-env tokens)
+      ;; A module-qualified CLASS value constructed through a tracked module
+      ;; receiver (`self._lib.DriverInfo(...)` where `self._lib = redis`): the
+      ;; module-class-ref table names the constructed class, whose method table
+      ;; (stdlib-type-methods-data) then classifies the calls on the result.
+      (and rt (member-access-callee? callee)
+           (let* ([base (member-access-base callee)]
+                  [attr (member-access-field callee)])
+             (module-class-ref-type (and base (receiver-class-of rt base tokens))
+                                    attr tokens)))
       (imported-module-result-type callee comp import-env tokens)
       (method-result-type callee
                           (λ (base) (receiver-class-of rt base tokens))
@@ -285,15 +281,15 @@
         (hash-ref (receiver-types-self-attrs rt) attr #f)]
        [else
         ;; `module.Class` where `module` is a tracked module receiver:
-        ;; resolve to the module-qualified class marker (pylibmc.Client), whose
-        ;; domain is the module's domain in classify-all.
-        (define bm (receiver-class-of rt (uir-get-base value)))
+        ;; resolve to the module's class table type (redis.Redis → Redis), or
+        ;; to the module-qualified class marker (pylibmc.Client) whose domain is
+        ;; the module's domain in classify-all.
+        (define bm (receiver-class-of rt (uir-get-base value) tokens))
         (cond
           ;; `module.Class` where `module` is an imported module handle: the
           ;; class table names the attribute (smtplib.SMTP → SMTP).
           [(imported-module-class-ref value comp import-env tokens)]
-          [(and attr bm (module-receiver? bm tokens))
-           (string->symbol (format "~a.~a" bm attr))]
+          [(module-receiver-attr-type bm attr tokens)]
           ;; A subscript into an imported module/fn singleton
           ;; (`connections[database]`): the field is the index expression (not
           ;; an attribute name), and the base resolves through the import graph

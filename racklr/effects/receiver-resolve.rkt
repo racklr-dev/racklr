@@ -21,6 +21,7 @@
          racklr/effects/shape
          racklr/effects/class-resolve
          racklr/effects/receiver-type
+         racklr/effects/receiver-module
          racklr/effects/effect-roots
          racklr/effects/library-tokens
          racklr/effects/lexicon)
@@ -127,13 +128,9 @@
 ;; Returns an effect-cap or #f (not a module receiver).
 (define (module-receiver-effect rcls [tokens default-effect-tokens])
   (and rcls
-       (let* ([s (symbol->string rcls)]
-              [m (regexp-match #rx"^([^.]+)" s)]
-              [mod (and m (cadr m))]
-              [domain (or (hash-ref (effect-tokens-receiver-modules tokens) s #f)
-                          (and mod
-                               (hash-ref (effect-tokens-receiver-modules tokens)
-                                         mod #f)))])
+       (let* ([root (module-receiver-root rcls tokens)]
+              [domain (and root (hash-ref (effect-tokens-receiver-modules tokens)
+                                          root #f))])
          (and domain (effect-cap domain '())))))
 
 ;; Effect domain of a module-PATH marker — a dotted symbol like `django.db`

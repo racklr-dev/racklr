@@ -266,6 +266,14 @@
                  "mget" 'cache "mset" 'cache "pipeline" 'cache "flushdb" 'cache
                  "keys" 'cache "ttl" 'cache "setex" 'cache "hset" 'cache
                  "hget" 'cache "publish" 'cache "eval" 'cache)
+   ;; redis-py Pipeline objects queue commands and run them as cache round
+   ;; trips when executed; `Redis.pipeline` projects to this type.
+   "Pipeline" (hash "execute" 'cache "expire" 'cache "mset" 'cache
+                    "get" 'cache "set" 'cache "delete" 'cache "incr" 'cache
+                    "decr" 'cache "persist" 'cache "exists" 'cache
+                    "flushdb" 'cache "mget" 'cache "hset" 'cache
+                    "hget" 'cache "publish" 'cache "eval" 'cache
+                    "keys" 'cache "ttl" 'cache "setex" 'cache)
    "ConnectionPool" (hash "from_url" 'pure "disconnect" 'io "reset" 'io)
    "DriverInfo" (hash "add_upstream_driver" 'pure)))
 
@@ -340,7 +348,11 @@
 ;; result has no type, so a later `.stat()` / `.parent` stays `unknown`.
 ;; pathlib joins/suffix operations return the same path type.
 (define stdlib-type-result-projections-data
-  (hash "Path" (hash "/" "Path" "joinpath" "Path" "with_suffix" "Path"
+  (hash
+   ;; redis-py: `client.pipeline()` returns the command queue, whose command
+   ;; methods are cache round trips like the client's.
+   "Redis" (hash "pipeline" "Pipeline")
+   "Path" (hash "/" "Path" "joinpath" "Path" "with_suffix" "Path"
                      "with_name" "Path" "with_stem" "Path" "relative_to" "Path"
                      "resolve" "Path" "absolute" "Path" "expanduser" "Path"
                      "parent" "Path")

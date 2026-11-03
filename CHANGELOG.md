@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Module-receiver tracking: memcache / redis client handles and their methods
+  resolve to `cache` instead of `db` / `unknown`. `racklr/effects/receiver-module.rkt`
+  (new) is the MODULE half of receiver dataflow: a tracked module receiver
+  (`pylibmc` / `pymemcache` / `memcache` / `redis`) resolves a module-qualified
+  class read to the module's class-ref DATA type (`self._lib.Redis` → `Redis`,
+  `self._lib.DriverInfo` → `DriverInfo`) and falls back to the dotted module
+  marker so the module domain still classifies; `classify-all.rkt` treats such a
+  construction as pure construction, and `receiver-type.rkt`'s
+  `value-class-of` / `call-result-type` project it. `library-stdlib-types.rkt`
+  adds the redis `Pipeline` receiver type plus the `Redis.pipeline` result
+  projection (pipeline command calls are cache round trips). In the same
+  increment `library-dialect.rkt` declares `kw-spread` (the `**expr`
+  argument/dict-unpack encoding) a synthetic callee: it is a language construct,
+  not a runtime-dispatched call, so `f(..., **options)` no longer counts as an
+  unknown call site. Measured on the pinned `django/django/core` probe: unknown
+  call sites 305 -> 202, unknown functions 292 -> 223, unknown files 73 -> 62
+  (100 `kw-spread` sites + 3 module-receiver projections resolved, 0 rows
+  added). The full package goes 4947 -> 3764 call sites / 4000 -> 3549
+  functions / 478 -> 453 files, with no site gaining `unknown`. `db` falls
+  (core 165 -> 164 functions) as `RedisCacheClient`'s spurious `db` class
+  capability and `RedisCacheClient.set_many`'s `db` entry are removed; `cache`
+  is unchanged because earlier increments already classified these methods
+  `cache`. The four residual memcache/redis unknowns are caller-supplied
+  `serializer` / `pool_class` OR-fallback receivers and stay fail-closed. The
+  type-graph baseline is re-pinned to the reduced graph
+  (`sha256:f96a641b...` -> `sha256:291dca50...`); the gate still answers
+  `baseline COVERAGE-FAILED` with the Phase-0.3 obligation open.
 - Call-result projection through the whole-program type relations:
   `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
   result class from the corpus return relation, then the receiver-type-dataflow

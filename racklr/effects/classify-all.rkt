@@ -19,6 +19,7 @@
          racklr/effects/class-resolve
          racklr/effects/classify
          racklr/effects/receiver-type
+         racklr/effects/receiver-module
          racklr/effects/receiver-chain
          racklr/effects/receiver-resolve
          racklr/effects/effect-roots
@@ -81,8 +82,20 @@
                            (imported-module-class-ref callee comp import-env tokens)
                            (and nm comp import-env
                                 (imported-class-ref nm comp import-env)))))
+     ;; A module-qualified CLASS VALUE on a tracked module receiver
+     ;; (`self._lib.DriverInfo(...)` where `self._lib = redis`): the
+     ;; module-class-ref DATA table names a class, so construction is pure like
+     ;; any other known class. It is checked before the receiver-domain rule
+     ;; because the callee's BASE is the module receiver, not a method receiver.
+     (define module-ctor
+       (and rt (member-access-callee? callee)
+            (let* ([base (member-access-base callee)]
+                   [attr (member-access-field callee)])
+              (module-class-ref-type (and base (receiver-class-of rt base tokens))
+                                     attr tokens))))
      (cond
        [ctor (cons 'pure #f)]
+       [module-ctor (cons 'pure #f)]
        ;; `cls(...)` in a classmethod constructs the enclosing class — the same
        ;; pure construction as `KnownClass(...)`, but `cls` names the class
        ;; dynamically (its value is the first parameter), so the constructor
