@@ -36,6 +36,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type-graph baseline is re-pinned to the reduced graph
   (`sha256:f96a641b...` -> `sha256:291dca50...`); the gate still answers
   `baseline COVERAGE-FAILED` with the Phase-0.3 obligation open.
+- JS/TS front-end real-world hardening (issue #122): the JavaScript and
+  TypeScript front ends now cleanly round-trip real express/axios source. The
+  front ends' grammars are tracked (`grammars/javascript/`,
+  `grammars/typescript/`, `grammars/jsx/` — same layout as `grammars/python3/`
+  and `grammars/koka/`), replacing the untracked, locally-edited
+  `grammars-v4/javascript/*-cleaned/` copies the tests used to depend on, and
+  `tools/js-ts-corpus.rkt` (+ `tools/js-ts-corpus-lib.rkt`) is the committed
+  corpus scorer: for every `.js`/`.mjs`/`.ts`/`.tsx`/`.json` file it runs
+  tokenize -> parse -> lower -> emit -> re-parse and classifies the first
+  blocking stage (`ok`, `tokenize-error`, `parse-fail`, `lower-error`,
+  `fallback`, `emit-error`, `emit-empty`, `reparse-fail`, `timeout`), with a
+  per-file watchdog, `--parse-only` and `--json` modes. Grammar fixes: class
+  elements no longer swallow a plain method/field name in the greedy optional
+  prefix; `obj?.()` (optional call), `&&=`/`||=` (logical assignment),
+  `import.meta` and `#name in obj` (private-name brand check) parse; the
+  generated lexer's template-literal bookkeeping is a per-nesting frame stack
+  so nested templates tokenize (`` `a${`b${c}`}` ``), and the generator no
+  longer lists `fragment` rules as token candidates inside lexer modes (digits
+  in template text were tokenized as numeric literals). Lowering fixes:
+  destructuring declarations and for-in/for-of bindings lower to structural
+  patterns (`racklr/lower-javascript/pattern.rkt`) that the JavaScript emitter
+  renders back as binding syntax instead of a `?` placeholder (the largest
+  fallback class); named-function parameters after the first are no longer
+  dropped (repetition groups); statement-`if`s keep statement form instead of
+  emitting invalid `cond ? return x : null`; reserved-word property names
+  (`p.catch`, `x.new`), anonymous class expressions, block-bodied arrow
+  functions (the body no longer mis-parses as an object literal) and empty
+  `catch` blocks lower correctly;
+  `import.meta`, dynamic `import()` and `#field` brand checks lower instead of
+  crashing or being dropped; `?.`, `??`, `in`, `instanceof`, `&`, `^`, `|`,
+  `<<`, `>>`, `>>>` and every compound assignment are emitted as operators;
+  and `for-of`/`for-in` binding kinds are preserved. TypeScript/TSX: the
+  preprocess that inserts type separators no longer corrupts type sources
+  (declaration-body-targeted, comment/string-safe, continuation-aware,
+  bracket-depth-aware member separators), type-only imports are erased, and the
+  grammar/lowering add conditional types, labeled tuple elements, `declare`
+  declarations, type predicates, full types after `as`, class members beyond
+  property methods, named exports and `instanceof`/`in` infix lowering. Corpus
+  result: express JavaScript 91/142 -> 142/142 clean and axios JavaScript
+  103/226 -> 225/226 (the remaining row is a 120 s watchdog timeout on one very
+  large test file), axios TypeScript 13/30 -> 22/30; the before/after tables and
+  the remaining gaps are recorded in `docs/js-ts-real-world-battery.md`.
 - Call-result projection through the whole-program type relations:
   `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
   result class from the corpus return relation, then the receiver-type-dataflow

@@ -471,7 +471,15 @@
     (for/list ([mn mode-nodes])
       (define children (any-tree-children mn))
       (define mode-name (any-tree-text (first children)))
-      (define mode-rules (rest children))
+      ;; Fragment rules textually after a `mode` declaration belong to that
+      ;; mode node, but a fragment is a matcher helper, never a token. Listing
+      ;; one as a token candidate makes it win maximal munch in that mode: in
+      ;; the JavaScript TEMPLATE mode the `DecimalIntegerLiteral` fragment beat
+      ;; one-character `TemplateStringAtom` on digit runs, so a template such as
+      ;; `a ${code}. 1000.` produced a DecimalIntegerLiteral token.
+      (define mode-rules
+        (filter (λ (r) (not (eq? (any-tree-tag r) 'fragment-rule)))
+                (rest children)))
       (cons mode-name mode-rules)))
   (cons (cons 'default (append lexer-rules implicit-rules))
         mode-entries))
@@ -508,10 +516,12 @@
                    (loop (+ p 1) (+ l 1) 1 (+ o 1) tks mode mstack pending)
                    (loop (+ p 1) l (+ c 1) (+ o 1) tks mode mstack pending))]\n"]))
   (string-append
+   (or (language-policy-lexer-helper-source policy) "")
+   "\n"
    (format "(define (~a in)~n" (if indent-tokens? "tokenize-raw" "tokenize"))
     "   (define il (string-length in))
     (define template-depth (box 0))
-    (define brace-depth (box 0))
+    (define brace-depths (box '()))
     (let loop ([p 0] [l 1] [c 1] [o 0] [tks '()] [mode 'default] [mstack '()] [pending #f])
      (if (>= p il)
          (let ([final-tks (if pending
@@ -568,8 +578,15 @@
         (format "'~a" raw-name)
         (format "(string->symbol ~s)" raw-name)))
   (define cmd-body (gen-command-body commands token-expr raw-name preserve-comments? policy))
-  (format "               (cons ~a-match (lambda (np v) ~a))"
-          mangled cmd-body))
+  ;; A host may veto a lexical rule match from context the character alone
+  ;; cannot decide (e.g. JavaScript regex literal vs division). A rejected
+  ;; match lets maximal munch fall through to the next rule.
+  (define guard ((language-policy-lexer-rule-guard policy) raw-name))
+  (define matcher (if guard
+                      (format "(lambda (p i) (and ~a (~a-match p i)))" guard mangled)
+                      (format "~a-match" mangled)))
+  (format "               (cons ~a (lambda (np v) ~a))"
+          matcher cmd-body))
 
 ;; Resume the scanner after an accepted token. advance-line-col updates the
 ;; line/column across the token's own line breaks (a multi-line string or a

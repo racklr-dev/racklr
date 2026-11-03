@@ -16,10 +16,10 @@
 
 ;; Load parsers
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (jsx-parse jsx-tokenize jsx-tok-type jsx-tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 (define (tsx->uir source)
   (define cleaned (preprocess-imports source))
@@ -303,7 +303,7 @@ export { App };"
 ;; lower-program so a JSDoc @effects row attaches to the declaration that
 ;; follows it, then emit-javascript renders the __withEffects guard.
 (define-values (ts-parse-c ts-tokenize-c ts-tok-type-c ts-tok-value-c)
-  (gen-and-load-comments "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load-comments "../grammars/typescript/TypeScriptParser.g4"))
 
 (define emit-pages-jsdoc
   (make-emit-pages-html ts-parse-c ts-tokenize-c ts-tok-type-c ts-tok-value-c

@@ -25,6 +25,76 @@
           [(char=? (string-ref s pos) #\}) (loop (+ pos 1) (- depth 1))]
           [else (loop (+ pos 1) depth)])))
 
+(define (line-comment-or-blank? trimmed)
+  (or (equal? trimmed "")
+      (regexp-match #rx"^//" trimmed)
+      (regexp-match #rx"^/\\*" trimmed)
+      (regexp-match #rx"^\\*" trimmed)))
+
+(define (strip-type-only-imports source)
+  ;; TypeScript 4.5 `import type ...` / `export type { ... } from ...` have no
+  ;; runtime form and the vendored TS grammar has no `import type` production.
+  ;; The lowering erases type-only declarations anyway, so drop these
+  ;; statements before parsing. Only single-line statements are matched.
+  (define lines (string-split source "\n" #:trim? #f))
+  (define in-block-comment? #f)
+  (string-join
+   (for/list ([line (in-list lines)])
+     (define trimmed (string-trim line))
+     (cond
+       [in-block-comment?
+        (define closes? (regexp-match? #rx"\\*/" line))
+        (set! in-block-comment? (not closes?))
+        line]
+       [(regexp-match #rx"^/\\*" trimmed)
+        (unless (regexp-match? #rx"\\*/" trimmed) (set! in-block-comment? #t))
+        line]
+       [(regexp-match #rx"^//" trimmed) line]
+       [(regexp-match #px"^[[:blank:]]*import[[:blank:]]+type[[:blank:]]+.*from[[:blank:]]+['\"][^'\"]*['\"][[:blank:]]*;?[[:blank:]]*$" line)
+        ""]
+       [(regexp-match #px"^[[:blank:]]*export[[:blank:]]+type[[:blank:]]+\\{[^}]*\\}[[:blank:]]*from[[:blank:]]+['\"][^'\"]*['\"][[:blank:]]*;?[[:blank:]]*$" line)
+        ""]
+       [else line]))
+   "\n"))
+
+(define (balanced-single-line? line)
+  ;; Net bracket depth change of one line (strings/comments ignored), used to
+  ;; avoid treating the first line of a multi-line import as a complete one.
+  (call-with-values (λ () (line-bracket-delta line 'code)) (λ (d _) (= d 0))))
+
+(define (insert-import-semicolons source)
+  ;; The grammar's `importStatement` / `exportStatement` end in `eos`
+  ;; (SemiColon | EOF); standard TypeScript relies on ASI, so single-line
+  ;; imports without a semicolon fail to parse as an import statement and get
+  ;; misparsed as expressions. Add the `;` the grammar wants.
+  (define lines (string-split source "\n" #:trim? #f))
+  (define in-block-comment? #f)
+  (string-join
+   (for/list ([line (in-list lines)])
+     (define trimmed (string-trim line))
+     (cond
+       [in-block-comment?
+        (define closes? (regexp-match? #rx"\\*/" line))
+        (set! in-block-comment? (not closes?))
+        line]
+       [(regexp-match #rx"^/\\*" trimmed)
+        (unless (regexp-match? #rx"\\*/" trimmed) (set! in-block-comment? #t))
+        line]
+       [(line-comment-or-blank? trimmed) line]
+       [(and (regexp-match #px"^[[:blank:]]*import[[:blank:]]" line)
+             (not (regexp-match? #px";[[:blank:]]*$" line))
+             (balanced-single-line? line)
+             (or (regexp-match #px"['\"][^'\"]*['\"][[:blank:]]*$" line)
+                 (regexp-match #px"\\)[[:blank:]]*$" line)))
+        (string-append line ";")]
+       [(and (regexp-match #px"^[[:blank:]]*export[[:blank:]]+(\\*|\\{)" line)
+             (not (regexp-match? #px";[[:blank:]]*$" line))
+             (balanced-single-line? line)
+             (regexp-match #px"['\"][^'\"]*['\"][[:blank:]]*$" line))
+        (string-append line ";")]
+       [else line]))
+   "\n"))
+
 ;; ── B56/B63: Insert ; between type/interface members separated by newlines ─
 ;; The ANTLR TS grammar requires `;` or `,` between members of `type X = {}`
 ;; and `interface X {}` blocks; standard TS allows bare newlines. Semicolons
@@ -33,54 +103,146 @@
 (define (insert-type-separators source)
   ;; Scan for `type X = {` or `interface X ... {` blocks, and within each,
   ;; add `;` at the end of member lines that lack a separator.
-  ;; `[^\n{]` keeps the `{` on the same line as the keyword (newline is excluded
-  ;; from the match), so prose like "import the interface below do:" cannot
-  ;; reach the `{` of a commented-out import on a later line (which corrupted
-  ;; `import { User }` into `import { User ;}`).
-  (define rx-type-start #px"(?:type|interface)\\s+\\w+[^\n{]*?\\{")
+  ;; The match must land on the brace that opens the declaration's *body*:
+  ;; for a type alias that is the `{` immediately after the `=`, and for an
+  ;; interface it is a `{` on the same line as the header. A looser
+  ;; `type X ... {` match also catches an object type or object literal on the
+  ;; declaration's right-hand side, and the old pattern rewrote the `{}` of
+  ;; `type T = A | (string & {})` into `(string & {};)`, corrupting the file.
+  ;; The match must also start in code, not a comment or string: prose like
+  ;; "... the request data type" followed by a line containing a `{` was
+  ;; treated as a declaration and got a `;` inserted into the next annotation.
+  (define rx-type-start
+    #px"\\b(?:type[[:blank:]]+\\w+(?:[[:blank:]]*<[^>\n]*>)?[[:blank:]]*=[[:space:]]*\\{|interface[[:blank:]]+\\w+(?:[[:blank:]]*<[^>\n]*>)?[^\n{]*?\\{)")
   (let loop ([s source] [start 0])
     (define m (regexp-match-positions rx-type-start s start (string-length s)))
-    (if (not m)
-        s
-        (let* ([match-end (cdar m)]
-               [brace-pos (- match-end 1)]  ;; position of the {
-               [after-brace (substring s brace-pos)]
-               [close-pos (find-matching-brace after-brace 0)])
-          (if (not close-pos)
-              ;; Unmatched brace — skip past the { and continue
-              (loop s (+ brace-pos 1))
-              (let* ([block-content (substring after-brace 1 close-pos)]
-                     [fixed-block (fix-type-member-lines block-content)]
-                     [before (substring s 0 brace-pos)]
-                     [close-abs (+ brace-pos close-pos)]
-                     [after (substring s (add1 close-abs))]
-                     ;; The grammar's `typeAliasDeclaration` ends in `eos`
-                     ;; (SemiColon | EOF); a bare newline before the next
-                     ;; statement does not terminate a `type X = {...}`. Add a
-                     ;; `;` after the closing `}` when the next non-space char
-                     ;; isn't already `;` (interfaces accept it, so this is
-                     ;; harmless there too).
-                     [needs-semi (not (regexp-match? #px"^[[:space:]]*;" after))])
-                (define new-s (string-append before "{" fixed-block "}"
-                                             (if needs-semi ";" "") after))
-                (loop new-s (+ (string-length before) 1
-                               (string-length fixed-block) 1
-                               (if needs-semi 1 0)))))))))
+    (cond
+      [(not m) s]
+      [(not (code-position? s (caar m)))
+       (loop s (add1 (caar m)))]
+      [else
+       (define brace-pos (sub1 (cdar m)))
+       (define after-brace (substring s brace-pos))
+       (define close-pos (find-matching-brace after-brace 0))
+       (cond
+         [(not close-pos)
+          ;; Unmatched brace — skip past the { and continue
+          (loop s (add1 brace-pos))]
+         [else
+          (define block-content (substring after-brace 1 close-pos))
+          (define fixed-block (fix-type-member-lines block-content))
+          (define before (substring s 0 brace-pos))
+          (define close-abs (+ brace-pos close-pos))
+          (define after (substring s (add1 close-abs)))
+          ;; The grammar's `typeAliasDeclaration` ends in `eos`
+          ;; (SemiColon | EOF); a bare newline before the next statement does
+          ;; not terminate a `type X = {...}`. Add a `;` after the closing `}`
+          ;; when the declaration continues into a new statement. A type
+          ;; expression can continue past the block (`{...} & {...}`,
+          ;; `{...}[]`, `{...} | T`), so a continuation token means the block is
+          ;; mid-expression: inserting `;` there splits the type and makes the
+          ;; source unparseable.
+          (define next-non-space
+            (let loop ([i 0])
+              (cond [(>= i (string-length after)) #f]
+                    [(char-whitespace? (string-ref after i)) (loop (add1 i))]
+                    [else (string-ref after i)])))
+          (define type-continuation-chars (string->list "&|[,.)]}>?:;=<>("))
+          (define needs-semi
+            ;; EOF also needs the `;`: the grammar's `typeAliasDeclaration` ends
+            ;; in `eos` (`SemiColon | EOF`), and the historical contract of this
+            ;; pass is to terminate the alias with `;` even at end of file.
+            (not (and next-non-space
+                      (memv next-non-space type-continuation-chars))))
+          (define new-s (string-append before "{" fixed-block "}"
+                                       (if needs-semi ";" "") after))
+          (loop new-s (+ (string-length before) 1
+                         (string-length fixed-block) 1
+                         (if needs-semi 1 0)))])])))
+
+(define (line-bracket-delta line state)
+  ;; Net bracket depth change of one line, ignoring brackets inside strings and
+  ;; comments. `state` carries an open block comment / string across lines.
+  (define len (string-length line))
+  (let loop ([i 0] [state state] [delta 0])
+    (cond
+      [(>= i len) (values delta (if (eq? state 'line-comment) 'code state))]
+      [else
+       (define c (string-ref line i))
+       (define next (and (< (+ i 1) len) (string-ref line (+ i 1))))
+       (case state
+         [(code)
+          (cond [(char=? c #\\) (loop (+ i 2) state delta)]
+                [(char=? c #\') (loop (+ i 1) 'single delta)]
+                [(char=? c #\") (loop (+ i 1) 'double delta)]
+                [(char=? c #\`) (loop (+ i 1) 'template delta)]
+                [(and (char=? c #\/) next (char=? next #\/))
+                 (loop (+ i 2) 'line-comment delta)]
+                [(and (char=? c #\/) next (char=? next #\*))
+                 (loop (+ i 2) 'block-comment delta)]
+                [(or (char=? c #\() (char=? c #\[) (char=? c #\{))
+                 (loop (+ i 1) state (+ delta 1))]
+                [(or (char=? c #\)) (char=? c #\]) (char=? c #\}))
+                 (loop (+ i 1) state (- delta 1))]
+                [else (loop (+ i 1) state delta)])]
+         [(single)
+          (cond [(char=? c #\\) (loop (+ i 2) state delta)]
+                [(char=? c #\') (loop (+ i 1) 'code delta)]
+                [else (loop (+ i 1) state delta)])]
+         [(double)
+          (cond [(char=? c #\\) (loop (+ i 2) state delta)]
+                [(char=? c #\") (loop (+ i 1) 'code delta)]
+                [else (loop (+ i 1) state delta)])]
+         [(template)
+          (cond [(char=? c #\\) (loop (+ i 2) state delta)]
+                [(char=? c #\`) (loop (+ i 1) 'code delta)]
+                [else (loop (+ i 1) state delta)])]
+         [(line-comment) (loop (+ i 1) state delta)]
+         [(block-comment)
+          (if (and (char=? c #\*) next (char=? next #\/))
+              (loop (+ i 2) 'code delta)
+              (loop (+ i 1) state delta))])])))
 
 (define (fix-type-member-lines block-str)
-  ;; For each line in the block: if it's non-empty and doesn't end with
-  ;; {, }, ,, or ;, add ; at the end. #:trim? #f preserves the leading
-  ;; and trailing newlines of the block.
+  ;; Add `;` after a top-level (bracket depth 0) member that lacks a
+  ;; separator, but only when the member really ends on this line: the next
+  ;; non-empty, non-comment line must not continue the same type (a leading
+  ;; `|`, `&`, `)`, `]`, `>`, `.`, `?` or `:` starts a continuation). Line
+  ;; endings alone are not enough — a multi-line union arm ends in `)` or `>`
+  ;; mid-member, and a bare method signature ends in `void`.
+  ;; `#:trim? #f` preserves the leading and trailing newlines of the block.
   (define lines (string-split block-str "\n" #:trim? #f))
+  (define n (length lines))
+  (define (comment-line? trimmed)
+    (or (regexp-match #rx"^//" trimmed)
+        (regexp-match #rx"^/\\*" trimmed)
+        (regexp-match #rx"^\\*" trimmed)))
+  (define (next-content i)
+    (let loop ([j (add1 i)])
+      (cond [(>= j n) #f]
+            [else
+             (define t (string-trim (list-ref lines j)))
+             (cond [(equal? t "") (loop (add1 j))]
+                   [(comment-line? t) (loop (add1 j))]
+                   [else t])])))
+  (define (continuation-start? t)
+    (and t (pair? (string->list t))
+         (memv (first (string->list t)) (string->list "|&)]>.?:"))))
+  (define depth 0)
+  (define state 'code)
   (string-join
-   (for/list ([line (in-list lines)])
+   (for/list ([line (in-list lines)] [i (in-naturals)])
      (define trimmed (string-trim line))
+     (define-values (delta next-state) (line-bracket-delta line state))
+     (set! state next-state)
+     (set! depth (max 0 (+ depth delta)))
      (cond [(equal? trimmed "") line]
-            ;; A trailing `}` closes a nested object type (e.g. `ogImage: {…}`);
-            ;; it still needs a member separator. Only `{`, `,`, `;` are already
-            ;; terminated (or open a nested block).
-            [(regexp-match #rx"[{,;]\\s*$" trimmed) line]
-           [else (string-append line ";")]))
+           [(comment-line? trimmed) line]
+           [(and (= depth 0)
+                 (not (continuation-start? (next-content i)))
+                 (not (regexp-match #rx"[{(,;|&=<>?:]\\s*$" trimmed)))
+            (string-append line ";")]
+           [else line]))
    "\n"))
 
 ;; ── Ambient module declarations (`.d.ts` bodies) ─────────────────────
@@ -213,4 +375,8 @@
   (define s4 (regexp-replace* #px"\\{ {2,}" s3b "{ "))
 
   ;; Step 1.7: Insert ; between type/interface members separated by newlines
-  (insert-type-separators s4))
+  (define s5 (insert-type-separators s4))
+  ;; Step 1.8: Erase type-only import/export statements the grammar cannot parse
+  (define s6 (strip-type-only-imports s5))
+  ;; Step 1.9: ASI for import/export statements (grammar requires `eos`)
+  (insert-import-semicolons s6))

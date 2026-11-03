@@ -34,8 +34,10 @@
 
 (define infix-ops
   (set "+" "-" "*" "/" "%" "=" "==" "===" "!=" "!=="
-       "<" ">" "<=" ">=" "&&" "||" "**"
-       "+=" "-=" "*=" "/=" "**="))
+       "<" ">" "<=" ">=" "&&" "||" "**" "??" "?."
+       "&" "^" "|" "<<" ">>" ">>>" "in" "instanceof"
+       "+=" "-=" "*=" "/=" "%=" "**=" "<<=" ">>=" ">>>=" "&=" "^=" "|="
+       "&&=" "||=" "??="))
 
 (define postfix-ops (set "postfix++" "postfix--"))
 
@@ -262,12 +264,12 @@
                     (emit-body (fourth args)))]
            [(and op-name (string=? op-name "forin") (= (length args) 3))
             (format "for (~a in ~a) { ~a }"
-                    (emit-js (first args))
+                    (emit-for-binding (first args))
                     (emit-js (second args))
                     (emit-body (third args)))]
             [(and op-name (string=? op-name "forof") (= (length args) 3))
              (format "for (~a of ~a) { ~a }"
-                     (emit-js (first args))
+                     (emit-for-binding (first args))
                      (emit-js (second args))
                      (emit-body (third args)))]
             [(and op-name (string=? op-name "switch") (= (length args) 3))
@@ -318,11 +320,14 @@
              [(and op-name (string=? op-name "try") (= (length args) 4))
               (define try-str (format "try { ~a }" (emit-body (first args))))
               (define catch-str
-                (if (uir-null? (third args))
-                    ""
-                    (format " catch (~a) { ~a }"
-                            (emit-js (second args))
-                            (emit-body (third args)))))
+                (cond
+                  [(and (uir-null? (second args)) (uir-null? (third args))) ""]
+                  [(uir-null? (second args))
+                   (format " catch { ~a }" (emit-body (third args)))]
+                  [else
+                   (format " catch (~a) { ~a }"
+                           (emit-js (second args))
+                           (emit-body (third args)))]))
               (define finally-str
                 (if (uir-null? (fourth args))
                     ""
@@ -348,6 +353,28 @@
                      (emit-js (second args)))]
             [(and op-name (set-member? (set "var" "let" "const") op-name) (= (length args) 1))
              (emit-declaration op-name (first args))]
+            ;; Binding patterns (destructuring): structural forms emitted back
+            ;; as JS binding syntax; also the optional-call form a?.().
+            [(and op-name (string=? op-name "object-pattern"))
+             (format "{~a}" (string-join (map emit-js args) ", "))]
+            [(and op-name (string=? op-name "array-pattern"))
+             (format "[~a]" (string-join (map emit-js args) ", "))]
+            [(and op-name (string=? op-name "pattern-hole")) ""]
+            [(and op-name (string=? op-name "bind-rename") (= (length args) 2))
+             (format "~a: ~a" (emit-js (first args)) (emit-js (second args)))]
+            [(and op-name (string=? op-name "bind-default") (= (length args) 2))
+             (format "~a = ~a" (emit-js (first args)) (emit-js (second args)))]
+            [(and op-name (string=? op-name "bind-rest") (= (length args) 1))
+             (format "...~a" (emit-js (first args)))]
+            [(and op-name (string=? op-name "bind-computed") (= (length args) 2))
+             (format "[~a]: ~a" (emit-js (first args)) (emit-js (second args)))]
+            [(and op-name (string=? op-name "private-name") (= (length args) 1))
+             (format "#~a" (emit-js (first args)))]
+            [(and op-name (string=? op-name "dynamic-import") (= (length args) 1))
+             (format "import(~a)" (emit-js (first args)))]
+            [(and op-name (string=? op-name "optcall") (pair? args))
+             (format "~a?.(~a)" (emit-js (first args))
+                     (string-join (map emit-js (rest args)) ", "))]
             [(and op-name (= (length args) 1) (set-member? postfix-ops op-name))
             (format "~a~a" (emit-js (first args)) (substring op-name 7))]
            [(and op-name (= (length args) 1) (set-member? prefix-ops op-name))
@@ -386,7 +413,9 @@
     
     [(uir-class name supers fields methods)
      (format "class ~a~a {~a}"
-             (emit-js name)
+             (if (and (uir-symbol? name) (string=? (uir-symbol-name name) ""))
+                 ""
+                 (emit-js name))
              (if (null? supers) "" (format " extends ~a" (emit-js (car supers))))
              (if (null? methods)
                  ""
@@ -455,6 +484,17 @@
           (pair? (uir-call-args node)))
      (for/or ([a (in-list (uir-call-args node))]) (statement-effect-row a))]
     [else #f]))
+
+;; The binding position of a for-in/for-of loop: `(for-binding KIND TARGET)`
+;; renders as `const target`, preserving the declaration kind.
+(define (emit-for-binding left)
+  (if (and (uir-call? left)
+           (uir-symbol? (uir-call-callee left))
+           (string=? (uir-symbol-name (uir-call-callee left)) "for-binding")
+           (= (length (uir-call-args left)) 2))
+      (format "~a ~a" (emit-js (first (uir-call-args left)))
+              (emit-js (second (uir-call-args left))))
+      (emit-js left)))
 
 (define (emit-statement node)
   (define body
