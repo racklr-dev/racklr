@@ -1,8 +1,9 @@
 # JavaScript/TypeScript front end: real-world corpus capability battery (express + axios)
 
 Goal: the JavaScript and TypeScript front ends absorb real-world framework and
-library source cleanly, the way the Python front end was hardened against
-Django. The measurement is the JS/TS slice of the cross-language capability
+library source without absorb/emit/re-parse failures, the way the Python front
+end was hardened against Django (one large-file parser timeout is quarantined
+and reported separately, never counted as clean). The measurement is the JS/TS slice of the cross-language capability
 battery, committed as `tools/js-ts-corpus.rkt`; this document records the
 before/after numbers, the failure taxonomy and the fixes.
 
@@ -91,9 +92,13 @@ AFTER (this branch, same corpus/tool/watchdog):
 | tokenize-error | 0 | 2 |
 | timeout | 0 | 1 |
 
-JavaScript is the issue's headline: express JavaScript goes from 91/142 clean
-(64.1%) to 142/142 (100%), and axios JavaScript from 103/226 clean (45.6%) to
-225/226 (99.6%; the one remaining row is the watchdog timeout below).
+JavaScript is the issue's headline: express JavaScript goes from 91/142 ok
+(64.1%) to 142/142 (100%), and axios JavaScript from 103/226 ok (45.6%) to
+225/226 ok. The one remaining axios JavaScript row is **not** counted as clean:
+it is the quarantined watchdog timeout `tests/unit/adapters/http.test.js`
+(231,083 bytes / 7,437 lines: tokenize 1.3 s, parse alone exceeds the 120 s
+per-file budget), a parser-performance failure tracked as issue #133. Timeouts are a failing/quarantined bucket in the
+scorer's taxonomy and the summary lists each affected file by name.
 Per-language AFTER totals (TypeScript and JSON are carried by the same
 scanner):
 
@@ -109,6 +114,45 @@ lifetime on the largest test files); every file appears in exactly one shard.
 The TypeScript rows are from a TypeScript-only run of the same tool over the
 same 30 files with the same watchdog (the first shard runs predate the last
 TypeScript grammar fixes).
+
+## Cross-cutting lexer safety (review evidence)
+
+`racklr/gend-parser/lexer.rkt` and `language-policy.rkt` are shared by every
+front end, so "the JS/TS tests pass" is not by itself evidence that the other
+front ends are untouched. Both generator changes are policy-gated per rule, and
+the gate is exercised by regenerating every front end and comparing:
+
+- **Every non-JS generated parser module is byte-identical to the pre-change
+  generator output.** The tracked grammars for Python 3, Koka, OCaml, Rust,
+  Haskell and Clojure were regenerated with the old (`f80c3b5`) and the new
+  generator; all six generated modules (lexer + parser + entry) are identical
+  (`diff` empty). Host-only data is emitted only when a grammar actually uses
+  it: the regex-literal guard helper is included only when a grammar rule has a
+  guard, and template-literal bookkeeping declarations keep the historical
+  preamble for hosts whose token rules are not post-processed.
+- **Python token-stream golden diff: zero diff.** The Python tuple token stream
+  (token type, value, start/end line/column/offset) was dumped for all 907
+  `django/django` files with the old and the new generator; both dumps are
+  33,132,101 bytes over 907 rows with SHA-256
+  `9cb74a4ce989c0c761138a7297d2252bd10a7d58fffb609bc468b4c3372deef4`, i.e.
+  identical. The corpus is `/home/jm/.../django/django` (Django pinned
+  submodule).
+- **Python/Django full-tree scan on the rebased tree**:
+  `racket tools/scan-python.rkt django/django` → `files=907, ok=907` with 0 in every failure bucket (`INDENT-ERROR`, `PARSE-FAIL`, `LOWER-ERROR`, `FALLBACK`) (the documented
+  acceptance bar, unchanged).
+- **`tools/baseline-check.rkt` against a regenerated parser**: the run
+  regenerates the Python parser from the tracked grammar (no prebuilt parser
+  file is read) and reports `baseline COVERAGE-FAILED
+  sha256:291dca50674fd1e45eb246e9cd794227d87ea7e21a39f6922d611ee8c6f6a1ed`,
+  which is exactly the pin in `baseline/type-graph.sha256` on current `main`
+  (223 unknown functions / 62 unknown files: the pre-existing Phase-0.3
+  obligation, not drift from this branch).
+- **Clojure / Koka / TypeScript coverage on the rebased tree**:
+  `lower-clojure-test`, `effects-clojure-test`, `effects-clojure-annot-test`,
+  `lower-koka-test`, `effects-koka-annot-test` and `koka-real-world-test` all
+  exit 0; `tools/koka-corpus.rkt --parse-only` over koka-lang/koka gives
+  `files=1144, parse-ok=1035, tokenize-error=0, parse-fail=109, timeout=0` — identical to the documented Koka result (the documented result); the TypeScript corpus rows are unchanged
+  at 22 ok / 7 fallback / 1 reparse-fail of 30.
 
 ## Fixes
 
@@ -249,12 +293,15 @@ TypeScript result on axios: BEFORE 13/30 ok (8 parse-fail, 2 lower-error,
 
 ## Remaining gaps
 
-- **JavaScript: one watchdog timeout, no uncovered constructs.** The last
-  JavaScript row that is not `ok` is `tests/unit/adapters/http.test.js`, which
-  exceeds the 120 s per-file watchdog (the single-file pipeline is parse plus
-  re-parse of a very large, densely nested file). It is a parser-performance
-  limit of the generated recursive-descent parser, not a grammar/lowering gap;
-  every other `.js` file in both corpora is `ok`.
+- **JavaScript: one quarantined watchdog timeout, no uncovered constructs.**
+  The last JavaScript row that is not `ok` is `tests/unit/adapters/http.test.js`
+  (231,083 bytes / 7,437 lines): tokenize is 1.3 s and parse alone exceeds the
+  120 s per-file budget. This is the generated parser's superlinear backtracking
+  cost on large, densely nested files — a parser-performance limit, not a
+  grammar/lowering gap — and it is tracked as issue #133 (with a size/time
+  scaling table and reproduction). The scorer classifies it as `timeout`, a
+  failing/quarantined bucket that the summary lists by file name; it is never
+  counted as `ok`. Every other `.js` file in both corpora is `ok`.
 - **TypeScript: 7 fallback files and one reparse failure.** Six files
   (`cjs-typing.ts`, `esm-index.ts`, and four bun/deno smoke tests) still leave
   `?` symbols when a lowered declaration recovers a binding name, and the
@@ -294,7 +341,15 @@ TypeScript result on axios: BEFORE 13/30 ok (8 parse-fail, 2 lower-error,
   - `grammars/jsx/JSXParser.g4` `6652df368ec7d46e727d0f3489f0ac55f119ef4b93fd3f467becb0e4d2600338`
 - Corpus revisions: express `43fca52d28a422c8be48fd489cbd4f2d6152bab6`,
   axios `7324e94d8a7b5156a4baf3c86c8b5daa242daee3`.
-- BEFORE was run from a pristine `git worktree` at `ddb2915` with
-  `tools/js-ts-corpus.rkt` copied in and the pre-hardening cleaned grammars in
-  the tracked layout; AFTER from this branch. Both used `--timeout-ms 120000`
-  and the same corpus directories.
+- BEFORE was run from a pristine `git worktree` at `ddb2915` (the ticket
+  branch's original base) with `tools/js-ts-corpus.rkt` copied in and the
+  pre-hardening cleaned grammars in the tracked layout; AFTER from this branch
+  rebased onto `f80c3b5` (the rebase only conflicted in `CHANGELOG.md`; the
+  corpus numbers were re-measured on the rebased tree and are unchanged). Both
+  used `--timeout-ms 120000` and the same corpus directories. The cross-cutting
+  comparison in the previous section regenerates with the old generator from a
+  pristine `f80c3b5` worktree and with the new generator from this tree.
+- Tool hashes (this tree): `tools/js-ts-corpus.rkt`
+  `48fd351fb0126b82e0c7019b986738d3624d614e6f74afe8434ccae1062e72c8`,
+  `tools/js-ts-corpus-lib.rkt`
+  `b9087748193ef2b1f724a64149f3269a60eb4d067b1c8dd403dc367e65600021`.

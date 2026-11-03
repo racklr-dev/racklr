@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`sha256:f96a641b...` -> `sha256:291dca50...`); the gate still answers
   `baseline COVERAGE-FAILED` with the Phase-0.3 obligation open.
 - JS/TS front-end real-world hardening (issue #122): the JavaScript and
-  TypeScript front ends now cleanly round-trip real express/axios source. The
+  TypeScript front ends now round-trip real express/axios source without
+  absorb/emit/re-parse failures (one large-file parser timeout is quarantined
+  and never counted as ok; issue #133). The
   front ends' grammars are tracked (`grammars/javascript/`,
   `grammars/typescript/`, `grammars/jsx/` — same layout as `grammars/python3/`
   and `grammars/koka/`), replacing the untracked, locally-edited
@@ -74,10 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grammar/lowering add conditional types, labeled tuple elements, `declare`
   declarations, type predicates, full types after `as`, class members beyond
   property methods, named exports and `instanceof`/`in` infix lowering. Corpus
-  result: express JavaScript 91/142 -> 142/142 clean and axios JavaScript
-  103/226 -> 225/226 (the remaining row is a 120 s watchdog timeout on one very
-  large test file), axios TypeScript 13/30 -> 22/30; the before/after tables and
-  the remaining gaps are recorded in `docs/js-ts-real-world-battery.md`.
+  result: express JavaScript 91/142 -> 142/142 ok and axios JavaScript
+  103/226 -> 225/226 ok, plus one quarantined 120 s watchdog timeout
+  (`axios/tests/unit/adapters/http.test.js`, parse alone > 120 s; a
+  failing bucket, never counted as ok, tracked as issue #133), axios
+  TypeScript 13/30 -> 22/30; the before/after tables and the remaining gaps are
+  recorded in `docs/js-ts-real-world-battery.md`.
 - Call-result projection through the whole-program type relations:
   `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
   result class from the corpus return relation, then the receiver-type-dataflow

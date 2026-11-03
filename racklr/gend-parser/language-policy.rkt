@@ -299,21 +299,30 @@ KOKA-LAYOUT-SRC
 (define js-regex-lexer-helper-source
   "
 (define js-regex-operand-end-tokens
-  '(Identifier This Super NullLiteral BooleanLiteral StringLiteral
-    RegularExpressionLiteral DecimalLiteral HexIntegerLiteral OctalIntegerLiteral
-    OctalIntegerLiteral2 BinaryIntegerLiteral BigDecimalIntegerLiteral
-    BigHexIntegerLiteral BigOctalIntegerLiteral BigBinaryIntegerLiteral
-    CloseParen CloseBracket BackTick PlusPlus MinusMinus))
+  (for/hash ([s (in-list
+                 '(Identifier This Super NullLiteral BooleanLiteral StringLiteral
+                   RegularExpressionLiteral DecimalLiteral HexIntegerLiteral
+                   OctalIntegerLiteral OctalIntegerLiteral2 BinaryIntegerLiteral
+                   BigDecimalIntegerLiteral BigHexIntegerLiteral
+                   BigOctalIntegerLiteral BigBinaryIntegerLiteral
+                   CloseParen CloseBracket BackTick PlusPlus MinusMinus))])
+    (values s #t)))
 
 (define (js-regex-allowed? tks)
   (let ([prev (and (pair? tks) (car tks))])
     (or (not prev)
-        (not (memq (token-type prev) js-regex-operand-end-tokens)))))
+        (not (hash-ref js-regex-operand-end-tokens (token-type prev) #f)))))
+
+(define (js-regex-candidate? i p)
+  (and (< p (string-length i)) (char=? (string-ref i p) #\\/)))
 ")
 
 (define (js-lexer-rule-guard raw-name)
+  ;; The guard is evaluated before the rule's matcher at every position, so it
+  ;; starts with a one-character test; the previous-token check only runs where
+  ;; a regular expression could actually start.
   (and (string=? raw-name "RegularExpressionLiteral")
-       "(js-regex-allowed? tks)"))
+       "(and (js-regex-candidate? i p) (js-regex-allowed? tks))"))
 
 (define koka-layout-policy
   (language-policy

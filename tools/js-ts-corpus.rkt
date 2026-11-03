@@ -15,7 +15,8 @@
 ;;   emit-error     the emitter raised
 ;;   emit-empty     the emitter returned a non-string or an empty string
 ;;   reparse-fail   the emitted text did not re-parse (or raised)
-;;   timeout        a single-file pipeline exceeded --timeout-ms (watchdog)
+;;   timeout        a single-file pipeline exceeded --timeout-ms (watchdog);
+;;                  quarantined as a processing failure, never counted clean
 ;;
 ;; Languages are selected by extension, matching the cross-language battery:
 ;; `.js` / `.mjs` (JavaScript), `.ts` (TypeScript), `.tsx` (TSX, parsed as
@@ -42,7 +43,9 @@
 ;;                 parse-ok only (the fast grammar/tokenizer measurement)
 ;;   --json PATH   write the full per-file result set as JSON to PATH
 ;;   --timeout-ms N per-file watchdog in milliseconds (default 60000); a file
-;;                 that trips it is classified `timeout` and the scan continues
+;;                 that trips it is classified `timeout` (a quarantined
+;;                 processing failure, listed by name in the summary, never
+;;                 folded into the ok count) and the scan continues
 ;;
 ;; Exit codes: 0 = every file in the selected mode is ok/parse-ok,
 ;; 1 = at least one blocker, 2 = usage error.
@@ -74,6 +77,13 @@
                (for/list ([s (in-list statuses)])
                  (format "~a=~a" s (count-lang-status results lang s)))
                " "))))
+  ;; A watchdog timeout is a processing failure, not a clean pass: name every
+  ;; file that tripped the watchdog so it can never be folded into an ok count.
+  (define timed-out (filter (λ (r) (eq? 'timeout (scan-result-status r))) results))
+  (when (pair? timed-out)
+    (printf "\nquarantined timeouts (~a; not counted as clean):\n" (length timed-out))
+    (for ([r (in-list timed-out)])
+      (printf "  ~a  (~a)\n" (scan-result-file r) (scan-result-detail r))))
   (define groups (failure-groups results mode))
   (define any? (for/or ([fg (in-list groups)]) (pair? (cadr fg))))
   (when any?
