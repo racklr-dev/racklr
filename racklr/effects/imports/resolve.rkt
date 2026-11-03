@@ -107,6 +107,15 @@
                            rest))
         (and (hash-has-key? mods target) target)])]))
 
+;; Dotted module path a `from src import member` binding denotes in the import
+;; graph: the source module's path with the member appended (`from xml.dom
+;; import pulldom` → "xml.dom.pulldom"). Whether that module actually exists is
+;; decided by the scanned module table, never here.
+(define (from-import-module-path src member)
+  (cond
+    [(string-suffix? src ".") (string-append src member)]
+    [else (string-append src "." member)]))
+
 (define (resolve-exports mods packages)
   ;; mods: (hash path → module-info). Returns (hash path → (hash name → handle)).
   (define exports (make-hash))
@@ -134,35 +143,74 @@
              (for ([b (in-list (import-record-bindings rec))])
                (define local (car b))
                (define full-target (cdr b))
+               ;; The import graph's dotted path for the binding's member:
+               ;; relative sources resolve against the importing module's
+               ;; package first, so `from . import submod` and
+               ;; `from pkg import submod` both name `pkg.submod`. Star imports
+               ;; bind no name.
+               (define member (last-component full-target))
+               (define submodule-path
+                 (cond
+                   [(zero? (relative-dot-count src))
+                    (from-import-module-path src member)]
+                   [target-mod (from-import-module-path target-mod member)]
+                   [else #f]))
                ;; `from pkg import submod`: the target `pkg.submod` is itself a
-               ;; module, so bind the local name to a module handle (the export
-               ;; table has no entry for it unless `pkg/__init__.py` re-exports
-               ;; it). Otherwise fall back to the member-export lookup
-               ;; (`from x import C`, including aliased class names). Star
-               ;; imports bind no name.
+               ;; MODULE in the import graph, so bind the local name to a module
+               ;; handle. The export table has no entry for it unless
+               ;; `pkg/__init__.py` re-exports the name, so the module binding
+               ;; comes first: `from . import checks` binds the submodule even
+               ;; when the package body has an unrelated attribute of that name.
+               ;; Otherwise fall back to the member-export lookup
+               ;; (`from x import C`, including aliased class names).
                (unless (string=? local "*")
                  (define h
-                   (or (and (hash-has-key? mods full-target)
-                            (handle 'module full-target #f))
-                       (let ([member (last-component full-target)])
-                         (and te (hash-ref te member #f)))
-                       ;; The target module is outside the scanned corpus, so
-                       ;; there is no export table for it. Synthesize a handle
-                       ;; for the binding so it stays resolvable: a class handle
-                       ;; for a Capitalized binding (PEP 8 class convention),
-                       ;; which keeps `from django.db.migrations.loader import
-                       ;; MigrationLoader` reachable through imported-class-ref
-                       ;; / imported-class-cap; and an fn handle for a lowercase
-                       ;; binding, which lets a bare call to an external function
-                       ;; (`from django.db.migrations.utils import
-                       ;; get_migration_name_timestamp`) resolve to the module's
-                       ;; effect domain rather than `unknown`. The fn handle is
-                       ;; never a receiver TYPE (imported-class-ref requires kind
-                       ;; 'class), so it only widens effect classification.
-                       (let ([member (last-component full-target)])
-                         (and (not te)
-                              (handle (if (capitalized-name? member) 'class 'fn)
-                                      src member)))))
+                   (or (and submodule-path (hash-has-key? mods submodule-path)
+                            (handle 'module submodule-path #f))
+                       (and te (hash-ref te member #f))
+                       ;; The source module is outside the scanned corpus, so
+                       ;; the import graph cannot say whether the member is a
+                       ;; submodule. Synthesize a handle that stays resolvable:
+                       ;; a class handle for a Capitalized binding (PEP 8 class
+                       ;; convention), which keeps `from
+                       ;; django.db.migrations.loader import MigrationLoader`
+                       ;; reachable through imported-class-ref /
+                       ;; imported-class-cap; and a MODULE handle on the dotted
+                       ;; submodule path (`from xml.dom import pulldom` →
+                       ;; "xml.dom.pulldom") for a lowercase binding, so its
+                       ;; attribute/class calls project through the
+                       ;; library-config / result-type tables exactly like a
+                       ;; scanned module handle. A bare call to an imported
+                       ;; external function (`from
+                       ;; django.db.migrations.utils import
+                       ;; get_migration_name_timestamp`) still resolves to the
+                       ;; module's effect domain: imported-fn-effect accepts
+                       ;; module handles. The module path comes from the import
+                       ;; statement and the effect domain from the DATA tables,
+                       ;; never from a name table in engine code.
+                       (cond
+                         [(not (zero? (relative-dot-count src)))
+                          ;; An unresolvable relative source: keep the legacy
+                          ;; class/fn shape rather than invent an absolute path.
+                          (and (not te)
+                               (handle (if (capitalized-name? member) 'class 'fn)
+                                       src member))]
+                         [te #f]
+                         [(capitalized-name? member) (handle 'class src member)]
+                         ;; A lowercase member whose name repeats its source
+                         ;; module's last component (`from datetime import
+                         ;; datetime`, `from django.apps import apps`) is
+                         ;; ambiguous: it may be the module itself re-exported
+                         ;; (`datetime`) or a same-named submodule
+                         ;; (`django.apps.apps`). Keep the legacy fn handle,
+                         ;; whose path+name candidate list tries BOTH dotted
+                         ;; paths, instead of collapsing to one module path and
+                         ;; losing a resolution.
+                         [(string=? member (last-component src))
+                          (handle 'fn src member)]
+                         [else
+                          (handle 'module
+                                  (from-import-module-path src member) #f)])))
                  (when (and h (not (hash-has-key? e local)))
                    (hash-set! e local h)
                    (set! next-changed #t))))]

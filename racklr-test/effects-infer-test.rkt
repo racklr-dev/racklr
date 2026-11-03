@@ -987,28 +987,44 @@
 (define (test-imported-fn-effect)
   ;; `get_migration_name_timestamp()` — a bare function imported from an
   ;; unscanned db-tagged module — resolves to the module's effect domain (db),
-  ;; not `unknown`. The fn handle is never a receiver TYPE, only an effect.
+  ;; not `unknown`. resolve-exports binds the lowercase external binding as a
+  ;; module handle on the dotted submodule path; a bare call resolves through
+  ;; that path's configured domain prefix. The legacy fn-handle shape
+  ;; (parent path + member name) is still accepted for older import
+  ;; environments.
   (define p (prog (fn "run" (uir-call (v "get_migration_name_timestamp") '()))))
   (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "get_migration_name_timestamp"
+                                  (handle 'module
+                                          "django.db.migrations.utils.get_migration_name_timestamp"
+                                          #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
+                      (cons "app.py" 'run)))
+  (check-equal? (row-names r) '(db))
+  (check-equal? (modality r 'db) 'must)
+  (define env-legacy
     (import-env (hash "app.py" "app")
                 (hash "app" (hash "get_migration_name_timestamp"
                                   (handle 'fn "django.db.migrations.utils"
                                           "get_migration_name_timestamp")))
                 (hash)))
-  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
-                      (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'must))
+  (define r-legacy (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                                #:import-env env-legacy)
+                             (cons "app.py" 'run)))
+  (check-equal? (row-names r-legacy) '(db)))
 
 (define (test-external-singleton-method-domain)
   ;; `router.allow_migrate_model(...)` where `router` is a lowercase external
-  ;; binding (a django.db singleton, fn handle): the method call resolves
-  ;; through the singleton's source module domain (django.db -> db), the same
-  ;; coarse library fallback as a module handle — not `unknown`.
+  ;; binding (`from django.db import router` outside the scanned corpus, a
+  ;; module handle on "django.db.router"): the method call resolves through the
+  ;; binding's source-module domain (django.db -> db), the same coarse library
+  ;; fallback as a scanned module handle — not `unknown`.
   (define p (prog (fn "run" (uir-call (dot (v "router") "allow_migrate_model") '()))))
   (define env
     (import-env (hash "app.py" "app")
-                (hash "app" (hash "router" (handle 'fn "django.db" "router")))
+                (hash "app" (hash "router" (handle 'module "django.db.router" #f)))
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
@@ -2084,9 +2100,9 @@
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-submodule-binding)
-  ;; `from email import generator` synthesizes an fn handle (path "email", name
-  ;; "generator"); its effective module path is "email.generator", so
-  ;; `generator.Generator()` types g and `g.flatten(...)` classifies io.
+  ;; `from email import generator` resolves to a MODULE handle on the dotted
+  ;; submodule path "email.generator", so `generator.Generator()` types g and
+  ;; `g.flatten(...)` classifies io.
   (define app
     (prog (fn "render"
               (uir-block
@@ -2094,7 +2110,7 @@
                      (uir-call (dot (v "g") "flatten") (list (v "msg"))))))))
   (define env
     (import-env (hash "app.py" "app")
-                (hash "app" (hash "generator" (handle 'fn "email" "generator")))
+                (hash "app" (hash "generator" (handle 'module "email.generator" #f)))
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'render)))
@@ -2304,10 +2320,10 @@
   (check-false (row-lookup send-row 'unknown)))
 
 (define (test-projection-submodule-module-function)
-  ;; `from xml.dom import pulldom` is a submodule binding (fn handle path
-  ;; "xml.dom", name "pulldom"): its effective module path is
-  ;; "xml.dom.pulldom", so `pulldom.parse(...)` → DOMEventStream and
-  ;; `stream.getEvent()` classifies io.
+  ;; `from xml.dom import pulldom` is a submodule binding: resolve-exports binds
+  ;; it as a MODULE handle on the dotted path "xml.dom.pulldom", so
+  ;; `pulldom.parse(...)` → DOMEventStream and `stream.getEvent()` classifies
+  ;; io.
   (define app
     (prog (fn "read"
               (uir-block
@@ -2316,7 +2332,7 @@
                      (uir-call (dot (v "stream") "getEvent") '()))))))
   (define env
     (import-env (hash "app.py" "app")
-                (hash "app" (hash "pulldom" (handle 'fn "xml.dom" "pulldom")))
+                (hash "app" (hash "pulldom" (handle 'module "xml.dom.pulldom" #f)))
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'read)))
@@ -2324,11 +2340,13 @@
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-lowercase-imported-class)
-  ;; `from datetime import datetime` synthesizes an fn handle whose path and name
-  ;; are both "datetime" (a lowercase class imported from its own module); the
-  ;; result table must still resolve `datetime.now()` → datetime, so
-  ;; `now.strftime(...)` is pure, not unknown. (Submodule-path normalization
-  ;; must not invent a non-existent "datetime.datetime" module.)
+  ;; `from datetime import datetime` — a lowercase name imported from the
+  ;; module that defines it — is the ambiguous same-name shape, so
+  ;; resolve-exports keeps the legacy fn handle (path "datetime", name
+  ;; "datetime"); its effective module path keeps the source path rather than
+  ;; inventing a non-existent "datetime.datetime" module. The result table must
+  ;; still resolve `datetime.now()` → datetime, so `now.strftime(...)` is pure,
+  ;; not unknown.
   (define app
     (prog (fn "stamp"
               (uir-block

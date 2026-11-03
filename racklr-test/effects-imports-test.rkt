@@ -161,9 +161,9 @@
   ;; module is OUTSIDE the scanned corpus: synthesize a class handle from the
   ;; PEP 8 Capitalized binding so imported-class-ref / imported-class-cap can
   ;; still resolve it through the library config (django.db → db). A lowercase
-  ;; external binding (`connections`) synthesizes an fn handle so a bare call
-  ;; resolves to the module's effect domain — never a receiver TYPE, since
-  ;; imported-class-ref requires kind 'class.
+  ;; external binding (`connections`) is a MODULE handle on the dotted
+  ;; submodule path taken from the import statement, so its attribute/class
+  ;; calls project through the module tables like a scanned module handle.
   (define mods
     (hash "app"
           (harvest-module "app" (prog)
@@ -178,9 +178,64 @@
   (check-equal? (handle-path h) "django.db.migrations.loader")
   (check-equal? (handle-name h) "MigrationLoader")
   (define c (hash-ref e "connections"))
-  (check-equal? (handle-kind c) 'fn)
-  (check-equal? (handle-path c) "django.db")
-  (check-equal? (handle-name c) "connections"))
+  (check-equal? (handle-kind c) 'module)
+  (check-equal? (handle-path c) "django.db.connections")
+  (check-false (handle-name c)))
+
+(define (test-resolve-exports-external-submodule)
+  ;; A submodule from-import whose source package is not scanned
+  ;; (`from xml.dom import pulldom`) resolves to a MODULE handle on the dotted
+  ;; submodule path — not an fn handle. The path comes from the import
+  ;; statement; the effect domain then comes from the DATA rules, not from a
+  ;; name table in engine code. A lowercase binding that repeats its module's
+  ;; last component (`from datetime import datetime`) is ambiguous (the module
+  ;; re-exported, or a same-named submodule), so it keeps the legacy fn handle
+  ;; whose path+name candidate list covers both dotted paths.
+  (define mods
+    (hash "app"
+          (harvest-module "app" (prog)
+                          (list (import-record 'from "xml.dom"
+                                               (list (cons "pulldom" "xml.dom.pulldom")))
+                                (import-record 'from "datetime"
+                                               (list (cons "datetime" "datetime.datetime")))))))
+  (define ex (resolve-exports mods (set "app")))
+  (define e (hash-ref ex "app"))
+  (define p (hash-ref e "pulldom"))
+  (check-equal? (handle-kind p) 'module)
+  (check-equal? (handle-path p) "xml.dom.pulldom")
+  (check-false (handle-name p))
+  (check-equal? (handle-effect-domain (handle-path p) #f "parse") 'io)
+  (define d (hash-ref e "datetime"))
+  (check-equal? (handle-kind d) 'fn)
+  (check-equal? (handle-path d) "datetime")
+  (check-equal? (handle-name d) "datetime"))
+
+(define (test-resolve-exports-scanned-submodule)
+  ;; `from pkg import submod` / `from . import submod` where the target IS a
+  ;; scanned module: the import graph resolves the dotted submodule path
+  ;; (relative sources against the importing module's package), so the binding
+  ;; is a module handle. The module binding wins over an unrelated attribute
+  ;; the package body happens to define under the same name.
+  (define pkg-body
+    ;; `sub = Thing()` — a class-valued package global under the submodule name.
+    (prog (uir-set! (uir-var (uir-symbol "sub"))
+                    (uir-call (uir-var (uir-symbol "Thing")) '()))))
+  (define mods
+    (hash "pkg" (harvest-module "pkg" pkg-body '())
+          "pkg.sub" (harvest-module "pkg.sub" (prog) '())
+          "pkg.mod"
+          (harvest-module "pkg.mod" (prog)
+                          (list (import-record 'from "." (list (cons "sub" ".sub")))))
+          "app"
+          (harvest-module "app" (prog)
+                          (list (import-record 'from "pkg" (list (cons "sub" "pkg.sub")))))))
+  (define ex (resolve-exports mods (set "pkg")))
+  (define rel (hash-ref (hash-ref ex "pkg.mod") "sub"))
+  (check-equal? (handle-kind rel) 'module)
+  (check-equal? (handle-path rel) "pkg.sub")
+  (define abs (hash-ref (hash-ref ex "app") "sub"))
+  (check-equal? (handle-kind abs) 'module)
+  (check-equal? (handle-path abs) "pkg.sub"))
 
 (define (test-path-to-module-path)
   (define root (string->path "/r/django"))
@@ -327,6 +382,8 @@
   (test-resolve-exports-import-class)
   (test-resolve-exports-transitive)
   (test-resolve-exports-external-class)
+  (test-resolve-exports-external-submodule)
+  (test-resolve-exports-scanned-submodule)
   (test-path-to-module-path)
   (test-module-effect-tag)
   (test-effect-tag-config)
