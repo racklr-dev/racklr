@@ -7,7 +7,7 @@
 ;; ── Load the JavaScript parser ──────────────────────────────────────
 
 (define-values (js-parse js-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/javascript-cleaned/JavaScriptParser.g4"))
+  (gen-and-load "../grammars/javascript/JavaScriptParser.g4"))
 
 ;; ── Tokenizer Tests ──────────────────────────────────────────────────
 
@@ -176,6 +176,29 @@
 (check-reject js-parse "var")
 (check-reject js-parse "@#$%")
 (check-reject js-parse "var x = ")
+
+;; ── Issue #122: real-world constructs from express/axios ────────────
+;; The cleaned grammar is generated parser-only (no semantic predicates), so
+;; each construct is expressed with ordered alternatives instead. These are
+;; the gaps the corpus found: class members, optional calls, logical
+;; assignment, nested template literals and private/import-meta names.
+
+(for ([src (in-list
+            (list "class A { m() {} }"
+                  "class A { x = 1; static y = 2; static { init(); } }"
+                  "class A { constructor() { super(); } get x() { return 1; } }"
+                  "a?.();"
+                  "a.b?.().c;"
+                  "a?.b?.c;"
+                  "a ||= b; a &&= c;"
+                  "const o = `x${`y${z}`}`;"
+                  "const u = import.meta.url;"
+                  "if (#x in obj) f();"
+                  "for (const { a } of items) { g(a); }"
+                  "for (const [k, v] of entries) { g(k, v); }"
+                  "const { a, b: c, d = 1, ...rest } = o;"
+                  "const [x, , y = 2, ...z] = xs;"))])
+  (check-true (and (js-parse src) #t) (format "parses ~s" src)))
 
 ;; Clean up temp files
 (cleanup)

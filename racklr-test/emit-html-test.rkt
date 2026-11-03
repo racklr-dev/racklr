@@ -11,7 +11,7 @@
 ;; ── Load the TypeScript parser ──────────────────────────────────────
 
 (define-values (ts-parse ts-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── Test helpers ────────────────────────────────────────────────────
 

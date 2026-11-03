@@ -8,7 +8,8 @@
 
 (require racklr/tree
          racklr/uir
-         "helpers.rkt")
+         "helpers.rkt"
+         "pattern.rkt")
 
 (provide lower-expression-sequence
          lower-single-expression
@@ -55,7 +56,17 @@
         [(= (length kids) 1)
          (lower-expr-atom (first kids) tk-type tk-value)]
          [(= (length kids) 2)
-          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
+          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Hashtag))
+                 ;; Private-name expression: `#field` (the left operand of a
+                 ;; `#field in obj` brand check).
+                 (define names (rule-elements node 'identifierName))
+                 (define target (and (pair? names)
+                                     (find-kid (car names) 'identifier)))
+                 (if target
+                     (uir-call (uir-symbol "private-name")
+                               (list (uir-symbol (tk-value (first (kids-of target))))))
+                     (uir-null))]
+                [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Await))
                  ;; Await expression: await + expr
                  (uir-await (lower-single-expression (second kids) tk-type tk-value))]
                 [(unary-prefix? (first kids))
@@ -81,7 +92,16 @@
                     (uir-call callee (lower-arguments args-node tk-type tk-value))
                     (uir-null))])]
          [(= (length kids) 3)
-          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'OpenParen)
+          (cond [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Import)
+                      (tok? (second kids) tk-type) (eq? (tk-type (second kids)) 'Dot))
+                 ;; import.meta holder expression.
+                 (define meta (find-kid (third kids) 'identifier))
+                 (uir-call (uir-symbol "dot")
+                           (list (uir-symbol "import")
+                                 (uir-symbol (if meta
+                                                 (tk-value (first (kids-of meta)))
+                                                 "meta"))))]
+                [(and (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'OpenParen)
                       (tok? (third kids) tk-type) (eq? (tk-type (third kids)) 'CloseParen))
                  ;; Parenthesized expression: ( expressionSequence )
                  (uir-paren (lower-expression-sequence (second kids) tk-type tk-value))]
@@ -100,18 +120,31 @@
                                 (lower-arguments args-node tk-type tk-value)
                                 '()))])]
                [else
-                ;; Binary infix: left + op + right
                 (define left (lower-single-expression (first kids) tk-type tk-value))
                 (define op-elt (second kids))
-                (define right (lower-single-expression (third kids) tk-type tk-value))
                 (define op-tok
                   (cond [(cst-node? op-elt) (first (kids-of op-elt))]
                         [(tok? op-elt tk-type) op-elt]
                         [else #f]))
-                (if (and op-tok (tok? op-tok tk-type))
-                    (uir-call (uir-symbol (tk-value op-tok))
-                              (list left right))
-                    (uir-null))])]
+                (cond
+                  ;; Optional call a?.(): the third child is an argument list,
+                  ;; not an expression. Keep it as a first-class optional call
+                  ;; so the emitter renders `a?.(...)` and re-lowering is stable.
+                  [(and op-tok (tok? op-tok tk-type) (eq? (tk-type op-tok) 'QuestionMarkDot)
+                        (cst-node? (third kids)) (eq? (tag-of (third kids)) 'arguments))
+                   (uir-call (uir-symbol "optcall")
+                             (cons left (lower-arguments (third kids) tk-type tk-value)))]
+                  [else
+                   (define right (lower-single-expression (third kids) tk-type tk-value))
+                   (if (and op-tok (tok? op-tok tk-type))
+                       (uir-call (uir-symbol (tk-value op-tok))
+                                 (list left right))
+                       (uir-null))])])]
+        [(and (= (length kids) 4)
+              (tok? (first kids) tk-type) (eq? (tk-type (first kids)) 'Import))
+         (define arg (find-kid node 'singleExpression))
+         (uir-call (uir-symbol "dynamic-import")
+                   (list (if arg (lower-single-expression arg tk-type tk-value) (uir-null))))]
         [(= (length kids) 5)
          (cond [(and (tok? (second kids) tk-type) (eq? (tk-type (second kids)) 'QuestionMark))
                 ;; Ternary: test ? consequent : alternate
@@ -138,7 +171,8 @@
   (define class-name
     (if ident-node
         (uir-symbol (tk-value (first (kids-of ident-node))))
-        (uir-symbol "?")))
+        ;; Anonymous class expression: the emitter omits an empty name.
+        (uir-symbol "")))
   (define tail (find-kid node 'classTail))
   (define super (uir-null))
   (when tail
@@ -230,46 +264,13 @@
   (define ident (or (find-kid node 'identifier)
                     (let ([in (find-kid node 'identifierName)])
                       (and in (find-kid in 'identifier)))))
-  (if ident
-      (tk-value (first (kids-of ident)))
-      "?"))
-
-;; A StringLiteral token's value keeps its quotes; a lowered string (and a
-;; string-literal property name) keeps the unquoted text.
-(define (string-literal-text raw)
-  (define len (string-length raw))
-  (if (and (>= len 2)
-           (let ([first (string-ref raw 0)]
-                 [last (string-ref raw (sub1 len))])
-             (and (char=? first last)
-                  (or (char=? first #\") (char=? first #\')))))
-      (substring raw 1 (sub1 len))
-      raw))
-
-;; The first token under node: identifier, keyword, string, numeric, etc.
-(define (first-token-leaf node tk-type)
   (cond
-    [(tok? node tk-type) node]
-    [(cst-node? node)
-     (for/first ([k (in-list (kids-of node))]
-                 #:when (or (tok? k tk-type) (cst-node? k)))
-       (first-token-leaf k tk-type))]
-    [(pair? node)
-     (for/first ([k (in-list node)]
-                 #:when (or (tok? k tk-type) (cst-node? k)))
-       (first-token-leaf k tk-type))]
-    [else #f]))
-
-;; Text of a non-computed propertyName — identifierName, StringLiteral, or
-;; numericLiteral. The UIR keeps the key text; emit-javascript quotes it when
-;; the text is not a valid JS identifier (e.g. 'accent-1', 28, '5xl').
-(define (lower-property-name node tk-type tk-value)
-  (define t (first-token-leaf node tk-type))
-  (define raw (and t (tk-value t)))
-  (cond
-    [(not raw) "?"]
-    [(eq? (tk-type t) 'StringLiteral) (string-literal-text raw)]
-    [else raw]))
+    [ident (tk-value (first (kids-of ident)))]
+    ;; A keyword or reserved word used as a property name (`p.catch`,
+    ;; `promise.finally`, `x.new`) has no identifier child; its token text is
+    ;; the property name. Falling back to a `?` placeholder lost the name.
+    [(first-token-leaf node tk-type) => tk-value]
+    [else "?"]))
 
 (define (lower-getter-setter-name node tk-type tk-value)
   (define cen (find-kid node (quote classElementName)))
@@ -476,30 +477,15 @@
                               params))))))
   (define fpl (find-kid node (quote formalParameterList)))
   (when fpl
-    (let loop ([ks (kids-of fpl)])
-      (cond [(null? ks) (void)]
-            [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote formalParameterArg)))
-             (extract-param (car ks))
-             (loop (cdr ks))]
-            [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote lastFormalParameterArg)))
-             (extract-rest-param (car ks))
-             (loop (cdr ks))]
-            [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) (quote group)))
-             (for ([g (kids-of (car ks))] #:when (cst-node? g))
-               (cond [(eq? (tag-of g) (quote formalParameterArg))
-                      (extract-param g)]
-                     [(eq? (tag-of g) (quote lastFormalParameterArg))
-                      (extract-rest-param g)]))
-             (loop (cdr ks))]
-            [(pair? (car ks))
-             (for ([g (car ks)] #:when (cst-node? g))
-               (when (eq? (tag-of g) (quote formalParameterArg))
-                 (extract-param g))
-               (when (eq? (tag-of g) (quote lastFormalParameterArg))
-                 (extract-rest-param g)))
-             (loop (cdr ks))]
-            [else (loop (cdr ks))])))
+    (for ([k (in-list (rule-elements fpl (quote formalParameterArg)))])
+      (extract-param k))
+    (for ([k (in-list (rule-elements fpl (quote lastFormalParameterArg)))])
+      (extract-rest-param k)))
   (define body-node (find-kid node (quote functionBody)))
   (when body-node
     (set! body ((fn-body-lowerer) body-node tk-type tk-value)))
   (uir-call (uir-symbol "function") (list (uir-list (reverse params)) body)))
+
+;; Pattern defaults/computed keys lower through this module's expression
+;; lowering; the hook breaks the expr <-> pattern module cycle.
+(set-pattern-expression-lowerer! lower-single-expression)

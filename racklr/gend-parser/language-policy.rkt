@@ -35,6 +35,8 @@
          language-policy-template-mode-name
          language-policy-rule-post-process
          language-policy-entry-rule-names
+         language-policy-lexer-helper-source
+         language-policy-lexer-rule-guard
          language-policy-by-name
          default-language-policy
          koka-layout-policy)
@@ -47,7 +49,9 @@
    newline-token-name
    template-mode-name
    rule-post-process
-   entry-rule-names)
+   entry-rule-names
+   lexer-helper-source
+   lexer-rule-guard)
   #:transparent)
 
 ;; Lexer-rule post-processing for ANTLR template-literal style grammars
@@ -56,47 +60,50 @@
 ;; The generic engine only calls this hook; the rule names and the emitted
 ;; bookkeeping live here.
 (define (template-rule-post-process raw-name inner-body token-expr)
+  ;; Template-literal bookkeeping. `template-depth` counts open backticks;
+  ;; `brace-depths` is a stack of brace depths, one frame per open `${ ... }`
+  ;; expression. A scalar counter cannot represent nested templates: the inner
+  ;; `${` would reset it and the outer `}` would then be miscounted, leaving
+  ;; the scanner stuck in template mode (nested `` `a${`b${c}`}` `` failed to
+  ;; tokenize). Each `${` pushes frame 1, `{` increments the top frame, and a
+  ;; `}` that closes a frame to 0 pops both the frame and the lexical mode.
+  (define close-body
+    (string-append
+     "(let* ([_bd (unbox brace-depths)]"
+     "       [_top (and (pair? _bd) (car _bd))])"
+     "  (if _top"
+     "      (let ([_rest (if (= _top 1) (cdr _bd) (cons (- _top 1) (cdr _bd)))])"
+     "        (set-box! brace-depths _rest)"
+     "        (if (= _top 1)"
+     "            (let ([next-mode (if (null? mstack) 'default (car mstack))]"
+     "                  [next-mstack (if (null? mstack) '() (cdr mstack))])"
+     "              (define sl (string-length v))"
+     "              (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
+     "              (loop np l (+ c sl) (+ o sl) (cons tk tks) next-mode next-mstack pending))"
+     "            (let ()"
+     "              (define sl (string-length v))"
+     "              (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
+     "              (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))"
+     "      (let ()"
+     "        (define sl (string-length v))"
+     "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
+     "        (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))"))
   (cond
     [(string=? raw-name "BackTick")
      (string-append "(set-box! template-depth (+ (unbox template-depth) 1)) " inner-body)]
     [(string=? raw-name "BackTickInside")
      (string-append "(set-box! template-depth (- (unbox template-depth) 1)) " inner-body)]
     [(string=? raw-name "TemplateStringStartExpression")
-     (string-append "(set-box! brace-depth 1) " inner-body)]
+     (string-append "(set-box! brace-depths (cons 1 (unbox brace-depths))) " inner-body)]
     [(string=? raw-name "OpenBrace")
-     (string-append "(when (> (unbox template-depth) 0) (set-box! brace-depth (+ (unbox brace-depth) 1))) " inner-body)]
-    [(string=? raw-name "CloseBrace")
      (string-append
-      "(let ([new-bd (if (> (unbox template-depth) 0)"
-      "                  (- (unbox brace-depth) 1)"
-      "                  (unbox brace-depth))])"
-      "  (set-box! brace-depth new-bd)"
-      "  (if (and (> (unbox template-depth) 0) (= new-bd 0))"
-      "      (let ([next-mode (if (null? mstack) 'default (car mstack))]"
-      "            [next-mstack (if (null? mstack) '() (cdr mstack))])"
-      "        (define sl (string-length v))"
-      "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-      "        (loop np l (+ c sl) (+ o sl) (cons tk tks) next-mode next-mstack pending))"
-      "      (let ()"
-      "        (define sl (string-length v))"
-      "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-      "        (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))")]
-    [(string=? raw-name "TemplateCloseBrace")
-     (string-append
-      "(let ([new-bd (if (> (unbox template-depth) 0)"
-      "                  (- (unbox brace-depth) 1)"
-      "                  (unbox brace-depth))])"
-      "  (set-box! brace-depth new-bd)"
-      "  (if (and (> (unbox template-depth) 0) (= new-bd 0))"
-      "      (let ([next-mode (if (null? mstack) 'default (car mstack))]"
-      "            [next-mstack (if (null? mstack) '() (cdr mstack))])"
-      "        (define sl (string-length v))"
-      "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-      "        (loop np l (+ c sl) (+ o sl) (cons tk tks) next-mode next-mstack pending))"
-      "      (let ()"
-      "        (define sl (string-length v))"
-      "        (define tk (token " token-expr " v (pos l c o) (pos l (+ c sl) (+ o sl))))"
-      "        (loop np l (+ c sl) (+ o sl) (cons tk tks) mode mstack pending))))")]
+      "(when (> (unbox template-depth) 0)"
+      "  (when (pair? (unbox brace-depths))"
+      "    (set-box! brace-depths"
+      "              (cons (+ (car (unbox brace-depths)) 1) (cdr (unbox brace-depths)))))) "
+      inner-body)]
+    [(string=? raw-name "CloseBrace") close-body]
+    [(string=? raw-name "TemplateCloseBrace") close-body]
     [else #f]))
 
 ;; The layout (INDENT/DEDENT) token post-pass source the generated lexer embeds
@@ -281,6 +288,42 @@
 KOKA-LAYOUT-SRC
   )
 
+;; ── JavaScript/TypeScript regex-vs-division lexer guard ────────────
+;; A JavaScript lexer cannot decide between a regular-expression literal and a
+;; division operator from the character alone: `total ? loaded / total : x`
+;; used to lex from the first `/` to the next one as a regex literal, which
+;; broke ordinary arithmetic in real source. The guard the generator installs
+;; for `RegularExpressionLiteral` rejects that match when the previously
+;; emitted token can end an expression (identifier, literal, `)`, `]`, template
+;; close, postfix `++`/`--`), so maximal munch falls through to `Divide`.
+(define js-regex-lexer-helper-source
+  "
+(define js-regex-operand-end-tokens
+  (for/hash ([s (in-list
+                 '(Identifier This Super NullLiteral BooleanLiteral StringLiteral
+                   RegularExpressionLiteral DecimalLiteral HexIntegerLiteral
+                   OctalIntegerLiteral OctalIntegerLiteral2 BinaryIntegerLiteral
+                   BigDecimalIntegerLiteral BigHexIntegerLiteral
+                   BigOctalIntegerLiteral BigBinaryIntegerLiteral
+                   CloseParen CloseBracket BackTick PlusPlus MinusMinus))])
+    (values s #t)))
+
+(define (js-regex-allowed? tks)
+  (let ([prev (and (pair? tks) (car tks))])
+    (or (not prev)
+        (not (hash-ref js-regex-operand-end-tokens (token-type prev) #f)))))
+
+(define (js-regex-candidate? i p)
+  (and (< p (string-length i)) (char=? (string-ref i p) #\\/)))
+")
+
+(define (js-lexer-rule-guard raw-name)
+  ;; The guard is evaluated before the rule's matcher at every position, so it
+  ;; starts with a one-character test; the previous-token check only runs where
+  ;; a regular expression could actually start.
+  (and (string=? raw-name "RegularExpressionLiteral")
+       "(and (js-regex-candidate? i p) (js-regex-allowed? tks))"))
+
 (define koka-layout-policy
   (language-policy
    'koka
@@ -291,7 +334,9 @@ KOKA-LAYOUT-SRC
    "NEWLINE"
    #f
    (lambda (raw-name inner-body token-expr) #f)
-   '("file")))
+   '("file")
+   ""
+   (lambda (raw-name) #f)))
 
 ;; Resolve a policy named by a grammar's `options { layout = <name>; }`.
 ;; The generic generator and loader stay host-neutral; the name->policy map is
@@ -313,7 +358,9 @@ KOKA-LAYOUT-SRC
    "NEWLINE"
    "TEMPLATE"
    template-rule-post-process
-   '("program")))
+   '("program")
+   js-regex-lexer-helper-source
+   js-lexer-rule-guard))
 
 (module+ main
   (displayln "racklr/gend-parser/language-policy loaded."))

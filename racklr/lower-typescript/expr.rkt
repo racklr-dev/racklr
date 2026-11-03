@@ -81,6 +81,26 @@
                         (uir-call (uir-symbol op)
                                   (list (lower-single-expression left-kid tk-type tk-value)
                                         (lower-single-expression rhs tk-type tk-value)))]
+                         ;; Keyword operators (`instanceof`, `in`, `of`) arrive
+                         ;; as identifierName(reservedWord(keyword)) nodes rather
+                         ;; than bare tokens, so the token test above misses
+                         ;; them and the binary expression lowered to null.
+                         [(let* ([op-node (and (cst-node? right-kid)
+                                               (eq? (tag-of right-kid) 'singleExpression)
+                                               (pair? (kids-of right-kid))
+                                               (first (kids-of right-kid)))]
+                                 [op-tok (and op-node (cst-node? op-node)
+                                              (first-token-leaf op-node tk-type))])
+                            (and op-tok
+                                 (memq (tk-type op-tok) '(Instanceof In))
+                                 (= (length (kids-of right-kid)) 2)
+                                 (cst-node? (second (kids-of right-kid)))))
+                          (define op-node (first (kids-of right-kid)))
+                          (define op-tok (first-token-leaf op-node tk-type))
+                          (define rhs (second (kids-of right-kid)))
+                          (uir-call (uir-symbol (tk-value op-tok))
+                                    (list (lower-single-expression left-kid tk-type tk-value)
+                                          (lower-single-expression rhs tk-type tk-value)))]
                          [else
                           ;; Function call: callee + arguments
                           (define callee-raw (lower-single-expression (first kids) tk-type tk-value))

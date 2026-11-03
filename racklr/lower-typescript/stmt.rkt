@@ -131,6 +131,22 @@
                                 (lower-single-expression expr-node tk-type tk-value)))))
           (uir-null))]
 
+    ;; `export { a, b }` can arrive as an expressionStatement whose expression
+    ;; is an object literal: the generated parser's ordered choice prefers the
+    ;; longer expressionStatement parse over the block alternative, and the
+    ;; display then looks exactly like an object literal. Lower the display to
+    ;; the export alias record the emitter expects (`export { data }`, not the
+    ;; invalid object-literal-with-colon form).
+    [(and es
+          (let* ([es-seq (find-kid es 'expressionSequence)]
+                 [se (and es-seq (find-kid es-seq 'singleExpression))])
+            (and se (find-kid se 'objectLiteral))))
+     (let* ([es-seq (find-kid es 'expressionSequence)]
+            [se (and es-seq (find-kid es-seq 'singleExpression))]
+            [obj (and se (find-kid se 'objectLiteral))])
+       (uir-call (uir-symbol "export")
+                 (list (lower-object-literal obj tk-type tk-value))))]
+
     ;; export const/let/var/function/class declaration
     [else
      (define lowered (lower-statement inner-stmt tk-type tk-value))
@@ -234,6 +250,13 @@
       (lower-expression-sequence es tk-type tk-value)))
 
 (define (lower-var-stmt node tk-type tk-value)
+  ;; `declare const x: T;` is an ambient declaration with no runtime form;
+  ;; emitting `const x;` would not be valid JavaScript. Record the erasure.
+  (if (has-token? node tk-type 'Declare)
+      (lower-erased-type-decl node tk-type tk-value)
+      (lower-var-stmt/impl node tk-type tk-value)))
+
+(define (lower-var-stmt/impl node tk-type tk-value)
   (define vdl (find-kid node 'variableDeclarationList))
   (unless vdl (uir-null))
   (define vm (find-kid node 'varModifier))
@@ -405,6 +428,14 @@
      (make-sym ident))))
 
 (define (lower-fn-decl node tk-type tk-value)
+  (define kids (kids-of node))
+  ;; `declare function f(...): T;` is an ambient signature. Erase it instead of
+  ;; emitting a stub body that would misrepresent the declaration.
+  (if (has-token? node tk-type 'Declare)
+      (lower-erased-type-decl node tk-type tk-value)
+      (lower-fn-decl/impl node tk-type tk-value)))
+
+(define (lower-fn-decl/impl node tk-type tk-value)
   (define kids (kids-of node))
   ;; Detect async/generator: check all tokens
   (define is-async (for/or ([k kids]) (and (tok? k tk-type) (eq? (tk-type k) 'Async))))
@@ -608,15 +639,24 @@
             (uir-null)))
       (uir-null)))
 
+(define (as-statement-block stmt)
+  ;; A statement-position branch must be a block so the JS emitter renders an
+  ;; `if/else` statement. With expression branches it emits a ternary, which
+  ;; turns `if (c) return x;` into the invalid `c ? return x : null`.
+  (cond [(uir-null? stmt) stmt]
+        [(uir-block? stmt) stmt]
+        [else (uir-block (list stmt))]))
+
 (define (lower-if-stmt node tk-type tk-value)
   (define kids (kids-of node))
   (define test (lower-expression-sequence (third kids) tk-type tk-value))
-  (define consequent (lower-statement (fifth kids) tk-type tk-value))
+  (define consequent (as-statement-block (lower-statement (fifth kids) tk-type tk-value)))
   (define group (find-kid node 'group))
   (define alternate
-    (if group
-        (lower-statement (second (kids-of group)) tk-type tk-value)
-        (uir-null)))
+    (as-statement-block
+     (if group
+         (lower-statement (second (kids-of group)) tk-type tk-value)
+         (uir-null))))
   (uir-if test consequent alternate))
 
 (define (lower-throw-stmt node tk-type tk-value)
@@ -649,6 +689,13 @@
   (uir-call (uir-symbol "try") (list try-body catch-var catch-body finally-body)))
 
 (define (lower-class-decl node tk-type tk-value)
+  ;; `declare class C { ... }` is ambient; erase it rather than emit an empty
+  ;; class body that would claim a runtime class exists.
+  (if (has-token? node tk-type 'Declare)
+      (lower-erased-type-decl node tk-type tk-value)
+      (lower-class-decl/impl node tk-type tk-value)))
+
+(define (lower-class-decl/impl node tk-type tk-value)
   (define ident-node (find-kid node 'identifier))
   (define class-name
     (if ident-node
@@ -726,47 +773,119 @@
                     (extract-name g)]))]))
   (reverse params))
 
+(define (tree-first-token node tk-type)
+  ;; First token under a CST subtree, depth first.
+  (cond [(tok? node tk-type) node]
+        [(cst-node? node)
+         (for/first ([k (kids-of node)] #:when (or (tok? k tk-type) (cst-node? k)))
+           (tree-first-token k tk-type))]
+        [(pair? node)
+         (for/first ([k (in-list node)] #:when (or (tok? k tk-type) (cst-node? k)))
+           (tree-first-token k tk-type))]
+        [else #f]))
+
+(define (string-literal-unquoted raw)
+  (define len (string-length raw))
+  (if (and (>= len 2)
+           (let ([first (string-ref raw 0)]
+                 [last (string-ref raw (sub1 len))])
+             (and (char=? first last)
+                  (or (char=? first #\") (char=? first #\')))))
+      (substring raw 1 (sub1 len))
+      raw))
+
+(define (property-name-text pn tk-type tk-value)
+  ;; `propertyName` → identifierName | StringLiteral | numericLiteral |
+  ;; '[' singleExpression ']'. Computed names are recovered as their canonical
+  ;; source spelling so the emitter can print `[expr]` verbatim.
+  (define first-tok (tree-first-token pn tk-type))
+  (cond
+    [(not first-tok) "?"]
+    [(eq? (tk-type first-tok) 'OpenBracket)
+     (cst-source-text pn tk-type tk-value)]
+    [(eq? (tk-type first-tok) 'StringLiteral)
+     (string-literal-unquoted (tk-value first-tok))]
+    [else (tk-value first-tok)]))
+
+(define (class-element-name node tk-type tk-value)
+  (define pn (or (find-descendant node 'propertyName)
+                 (let ([cen (find-descendant node 'classElementName)])
+                   (and cen (find-descendant cen 'propertyName)))))
+  (if pn
+      (property-name-text pn tk-type tk-value)
+      (let ([ctor (find-descendant node 'constructorDeclaration)])
+        (if ctor
+            "constructor"
+            "?"))))
+
+(define (class-element-static? node tk-type)
+  (has-token? node tk-type 'Static))
+
+(define (class-element-method? node)
+  (or (find-descendant node 'callSignature)
+      (find-descendant node 'getAccessor)
+      (find-descendant node 'setAccessor)))
+
 (define (lower-class-element node tk-type tk-value)
-  ;; classElement → propertyMemberDeclaration
-  (define pmd (find-kid node 'propertyMemberDeclaration))
-  (unless pmd (uir-null))
-  ;; Method name
-  (define pname-node (find-kid pmd 'propertyName))
-  (define method-name
-    (if pname-node
-        (let ([in (find-kid pname-node 'identifierName)])
-          (if in
-              (let ([ident (find-kid in 'identifier)])
-                (if ident
-                    (uir-symbol (tk-value (first (kids-of ident))))
-                    (uir-symbol "?")))
-              (uir-symbol "?")))
-        (uir-symbol "?")))
-  ;; Parameters from callSignature
-  (define cs (find-kid pmd 'callSignature))
-  (define params
-    (if cs
-        (let ([fpl (or (find-kid cs 'formalParameterList)
-                       (find-kid cs 'parameterList))])
-          (if fpl
-              (extract-param-list fpl tk-type tk-value)
-              '()))
-        '()))
-  ;; Body from group → group → functionBody → sourceElements
-  (define outer-group (find-kid pmd 'group))
-  (define body (uir-null))
-  (when outer-group
-    (define inner-group (find-kid outer-group 'group))
-    (when inner-group
-      (define fb (find-kid inner-group 'functionBody))
-      (when fb
-        (define se (find-kid fb 'sourceElements))
-        (when se
-          (set! body (lower-source-elements se tk-type tk-value))))))
-  ;; Visibility: check propertyMemberBase for static/private/public tokens  
-  (define pmb (find-kid pmd 'propertyMemberBase))
-  (define visibility 'public)
-  (uir-method method-name params body visibility))
+  ;; classElement alternatives: constructorDeclaration |
+  ;; decoratorList? propertyMemberDeclaration | indexMemberDeclaration |
+  ;; statement. Earlier code assumed every element wrapped a
+  ;; propertyMemberDeclaration and crashed with `cst-node-children ... #f` on
+  ;; constructors, getters/setters, index signatures and static blocks.
+  (define ctor (find-descendant node 'constructorDeclaration))
+  (define pmd (find-descendant node 'propertyMemberDeclaration))
+  (cond
+    [ctor (lower-class-constructor ctor tk-type tk-value)]
+    [pmd (lower-class-member pmd tk-type tk-value)]
+    [(find-descendant node 'indexMemberDeclaration) (uir-null)]
+    [else
+     ;; A bare `statement` class element (e.g. a static block): lower its body.
+     (let ([stmt (find-descendant node 'statement)])
+       (if stmt (lower-statement stmt tk-type tk-value) (uir-null)))]))
+
+(define (lower-class-constructor node tk-type tk-value)
+  (define fpl (find-descendant node 'formalParameterList))
+  (define params (if fpl (extract-param-list fpl tk-type tk-value) '()))
+  (define fb (find-descendant node 'functionBody))
+  (define body (if fb (lower-fn-body fb tk-type tk-value) (uir-block '())))
+  (uir-method (uir-symbol "constructor") params body 'public))
+
+(define (lower-class-member pmd tk-type tk-value)
+  (define name (class-element-name pmd tk-type tk-value))
+  (define getter? (and (find-descendant pmd 'getAccessor) #t))
+  (define setter? (and (find-descendant pmd 'setAccessor) #t))
+  (define method? (class-element-method? pmd))
+  (define modifiers
+    (string-append
+     (if (class-element-static? pmd tk-type) "static " "")
+     (if (and (has-token? pmd tk-type 'Async) method?) "async " "")
+     (cond [getter? "get "] [setter? "set "] [else ""])))
+  (cond
+    ;; Field declaration: no runtime contribution in the UIR class model
+    ;; (the JS emitter renders methods only; fields round-trip as members of
+    ;; the class being absent rather than as invalid syntax).
+    [(not method?) (uir-null)]
+    [else
+     (define cs (find-descendant pmd 'callSignature))
+     (define getter-name (if getter?
+                             (let ([cen (find-descendant pmd 'classElementName)])
+                               (if cen (class-element-name cen tk-type tk-value) name))
+                             name))
+     (define setter-name (if setter?
+                             (let ([cen (find-descendant pmd 'classElementName)])
+                               (if cen (class-element-name cen tk-type tk-value) name))
+                             name))
+     (define effective-name
+       (cond [getter? getter-name] [setter? setter-name] [else name]))
+     (define fpl
+       (cond [cs (or (find-descendant cs 'formalParameterList)
+                     (find-descendant cs 'parameterList))]
+             [else (find-descendant pmd 'formalParameterList)]))
+     (define params (if fpl (extract-param-list fpl tk-type tk-value) '()))
+     (define fb (find-descendant pmd 'functionBody))
+     (define body (if fb (lower-fn-body fb tk-type tk-value) (uir-block '())))
+     (uir-method (uir-symbol (string-append modifiers effective-name))
+                 params body 'public)]))
 
 (define (lower-switch-stmt node tk-type tk-value)
   (define kids (kids-of node))
@@ -1590,6 +1709,11 @@
   ;; namespaceDeclaration -> 'namespace' namespaceName '{' statementList? '}'
   ;; namespaceName -> identifier ('.' identifier)*
   ;; statementList child is a LIST of statements
+  (if (has-token? node tk-type 'Declare)
+      (lower-erased-type-decl node tk-type tk-value)
+      (lower-namespace-decl/impl node tk-type tk-value)))
+
+(define (lower-namespace-decl/impl node tk-type tk-value)
   (define ns-name-node (find-kid node 'namespaceName))
   (define name
     (if ns-name-node
