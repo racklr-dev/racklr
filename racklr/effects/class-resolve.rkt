@@ -282,20 +282,16 @@
                      [t (and table (hash-ref table (symbol->string attr) #f))])
                 (and t (string->symbol t)))))))
 
-;; Projected return class of METHOD `attr` on `owner` (or the nearest class in
-;; its MRO that defines it): a `@cached_property` / `@property` read is projected
-;; to the class its body returns, so a subclass method reading a property
-;; inherited from a base class resolves too.
-(define (mro-property-return-type comp owner attr return-types class-defs comp-supers)
-  (define start (resolve-class-component owner comp class-defs))
-  (define seen (make-hash))
-  (let loop ([c start] [cls owner])
-    (cond
-      [(not (and c cls)) #f]
-      [(hash-has-key? seen (cons c cls)) #f]
-      [else
-       (hash-set! seen (cons c cls) #t)
-       (or (hash-ref return-types (cons c (qualified-name-symbol cls attr)) #f)
-           (for/or ([sr (in-list (hash-ref comp-supers (cons c cls) '()))])
-             (let ([c2 (car sr)] [s (cdr sr)])
-               (and c2 s (loop c2 s)))))])))
+;; Projected return class of PROPERTY `attr` on `owner`: a `@property` /
+;; `@cached_property` read is projected to the class the property body returns,
+;; so a subclass method reading a property inherited from a base class resolves
+;; too. The dispatch is most-derived first, exactly like #119's call-result
+;; projection: a subclass override that does not project fails closed instead of
+;; inheriting the superclass projection (an unprojected override is never
+;; shadowed by a base-class return). Only the class that most-derived defines
+;; `attr` is consulted; inheriting a projection is sound only when no nearer
+;; class overrides it, which is what `mro-method-keys` ordering already encodes.
+(define (mro-property-return-type comp owner attr return-types methods
+                                   class-defs comp-supers)
+  (define keys (mro-method-keys comp owner attr methods class-defs comp-supers))
+  (and (pair? keys) (hash-ref return-types (car keys) #f)))

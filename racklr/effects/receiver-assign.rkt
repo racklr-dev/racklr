@@ -32,7 +32,12 @@
 ;; Record the class of an assignment target. `value-class` projects a value
 ;; expression to its class; `self-name?` identifies the host's implicit
 ;; receiver name; `set-local!` / `set-self-attr!` update the caller's env.
-(define (apply-assignments! body value-class self-name? set-local! set-self-attr!)
+;; `annotation-class` (optional) projects a written type annotation to a
+;; tracked receiver class: a PEP 526 target (`self.attr: KnownClass = value`,
+;; lowered to `uir-ann-set!`) reads its declared type when the initializer
+;; does not project one, the same fall-through a parameter annotation gets.
+(define (apply-assignments! body value-class self-name? set-local! set-self-attr!
+                            [annotation-class #f])
   (define (record! lhs cls)
     (when cls
       (define attr (and (member-access-callee? lhs) (member-access-field lhs)))
@@ -52,5 +57,14 @@
              (λ (n)
                (cond
                  [(uir-set!? n) (record! (uir-set!-name n) (value-class (uir-set!-value n)))]
+                 ;; `lhs: T = value` (Python PEP 526 / Koka typed let): the
+                 ;; initializer is the most-derived projection when it resolves,
+                 ;; and the declared type is the declared-class fall-back.
+                 [(uir-ann-set!? n)
+                  (record! (uir-ann-set!-lhs n)
+                           (or (and (uir-ann-set!-value n)
+                                    (value-class (uir-ann-set!-value n)))
+                               (and annotation-class
+                                    (annotation-class (uir-ann-set!-type n)))))]
                  [(assignment-call n) (void)]
                  [else (void)]))))
