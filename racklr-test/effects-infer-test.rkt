@@ -2463,6 +2463,61 @@
   (check-equal? (row-names r) '(db))
   (check-false (row-lookup r 'unknown)))
 
+(define (test-kw-spread-synthetic-pure)
+  ;; `**expr` lowers to `(call (symbol "kw-spread") (list expr))` (argument and
+  ;; dict-unpack encodings). It is a language construct, not a runtime-dispatched
+  ;; call, so it must not add `unknown` to the enclosing row.
+  (define p (prog (fn "f" (uir-call (sym "kw-spread") (list (v "options"))))))
+  (check-equal? (hash-ref (infer-effects p) 'f) (empty-row)))
+
+(define (test-projection-module-receiver-class-ref)
+  ;; `self._lib = redis` tracks the receiver's MODULE; `self._lib.DriverInfo`
+  ;; then projects through the receiver-modules token table to the module's
+  ;; class-ref DATA entry (redis → DriverInfo), so `.add_upstream_driver` reads
+  ;; the DriverInfo method table (pure) instead of staying `unknown`.
+  (define p
+    (prog (py-class
+           "Client"
+           (list (py-method "__init__"
+                            (uir-set! (uir-get (v "self") (sym "_lib"))
+                                      (v "redis")))
+                 (py-method
+                  "driver"
+                  (uir-call
+                   (dot (uir-call (dot (uir-get (v "self") (sym "_lib"))
+                                       "DriverInfo")
+                                  '())
+                        "add_upstream_driver")
+                   (list (uir-string "django") (uir-string "1"))))))))
+  (define rows (infer-effects-all (list (cons "redis.py" p))))
+  (define r (hash-ref rows (cons "redis.py" 'Client.driver)))
+  (check-equal? (row-names r) '())
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-projection-module-receiver-client-methods)
+  ;; The memcache/redis handle chain: `self._lib = redis` (module receiver),
+  ;; `self._client = self._lib.Redis` (module-qualified class value), a call
+  ;; through it, and the client/pipeline method calls. Every method lands on
+  ;; `cache` (the module-domain token), and none is `unknown`.
+  (define init
+    (uir-block
+     (list (uir-set! (uir-get (v "self") (sym "_lib")) (v "redis"))
+           (uir-set! (uir-get (v "self") (sym "_client"))
+                     (uir-get (uir-get (v "self") (sym "_lib")) (sym "Redis"))))))
+  (define fetch
+    (uir-block
+     (list (uir-set! (v "client") (uir-call (dot (v "self") "_client") '()))
+           (uir-set! (v "pipeline") (uir-call (dot (v "client") "pipeline") '()))
+           (uir-call (dot (v "pipeline") "mset") (list (uir-string "k")))
+           (uir-call (dot (v "client") "flushdb") '()))))
+  (define p (prog (py-class "Client"
+                            (list (py-method "__init__" init)
+                                  (py-method "fetch" fetch)))))
+  (define rows (infer-effects-all (list (cons "redis.py" p))))
+  (define r (hash-ref rows (cons "redis.py" 'Client.fetch)))
+  (check-equal? (row-names r) '(cache))
+  (check-false (row-lookup r 'unknown)))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -2635,6 +2690,9 @@
   (test-projection-with-as-binding)
   (test-projection-param-default-receiver)
   (test-projection-param-module-union)
+  (test-kw-spread-synthetic-pure)
+  (test-projection-module-receiver-class-ref)
+  (test-projection-module-receiver-client-methods)
   (test-projection-property-mro)
   (test-projection-submodule-module-function)
   (test-projection-lowercase-imported-class)

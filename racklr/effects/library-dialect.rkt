@@ -57,9 +57,15 @@
     ;; structurally (`shape.rkt:super-call?`). It is a construct encoding, not
     ;; a runtime-dispatched function, so it is dialect data here.
     "super"
-    ;; Python structural calls and comprehensions
+    ;; Python structural calls and comprehensions. `kw-spread` is the `**expr`
+    ;; argument/dict-unpack encoding (lower-python/expr.rkt): a language
+    ;; construct that materializes a mapping, not a runtime-dispatched call, so
+    ;; it is pure like the other synthetic callees. Without it the argument
+    ;; encoding of every `f(..., **options)` counts as an `unknown` call site
+    ;; (`self._class(...)`, `super().__init__(..., **kwargs)`).
     "not" "tuple" "set" "list" "assert" "raise" "del" "global" "nonlocal"
     "list-comp" "dict-comp" "set-comp" "gen-comp" "gen-exp" "kwarg"
+    "kw-spread"
     ;; Clojure special forms / data constructors
     "quote" "syntax-quote" "unquote" "unquote-splicing" "deref" "var"
     "vector" "hash-set" "fn*" "with-meta" "namespace" "host-expr")
