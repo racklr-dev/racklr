@@ -62,13 +62,13 @@
 (define py-mod-path (*last-module-path*))  ; capture before later loads overwrite it
 
 (define-values (js-parse js-tokenize js-tok-type js-tok-value)
-  (gen-and-load "../grammars-v4/javascript/javascript-cleaned/JavaScriptParser.g4"))
+  (gen-and-load "../grammars/javascript/JavaScriptParser.g4"))
 
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (jsx-parse jsx-tokenize jsx-tok-type jsx-tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 (define-values (clj-parse clj-tokenize clj-tok-type clj-tok-value)
   (gen-and-load "../grammars-v4/clojure/Clojure.g4"))

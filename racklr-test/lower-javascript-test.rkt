@@ -11,7 +11,7 @@
 ;; ── Load the JavaScript parser ──────────────────────────────────────
 
 (define-values (js-parse js-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/javascript-cleaned/JavaScriptParser.g4"))
+  (gen-and-load "../grammars/javascript/JavaScriptParser.g4"))
 
 ;; ── Test helper ─────────────────────────────────────────────────────
 
@@ -559,6 +559,48 @@
   (check-true (and emitted #t) "B112: tailwind.config.js lowers")
   (check-false (string-contains? emitted "?:") "B112: no placeholder keys survive")
   (check-true (and (js-parse emitted) #t) "B112: emitted tailwind config re-parses"))
+
+;; ── Issue #122: statement-if, repetition parameters and destructuring ──
+;; A statement-if must emit as `if (...) { ... }`: the emitter distinguishes a
+;; statement-if from an expression ternary by block branches, so emitting
+;; `test ? return x : null` was invalid JavaScript.
+(let-values ([(uir emitted) (check-js "function f(value) { if (!value) return null; if (value.bad) throw value.bad; }")])
+  (check-true (string-contains? emitted "if (! value) { return null; }"))
+  (check-true (string-contains? emitted "if (value.bad) { throw value.bad; }"))
+  (check-false (string-contains? emitted "? return")))
+
+;; Parameters after the first live in a repetition group; they were dropped.
+(let-values ([(uir emitted) (check-js "run(function (req, res, next) { next(); });")])
+  (check-true (string-contains? emitted "function(req, res, next)")))
+
+;; A reserved word used as a property name keeps its name (`p.catch`).
+(let-values ([(uir emitted) (check-js "promise.catch(onError).finally(onDone);")])
+  (check-true (string-contains? emitted "promise.catch(onError).finally(onDone)")))
+
+;; Destructuring declarations keep their binding structure instead of a `?`
+;; placeholder, and re-lower to the same structural UIR after emission.
+(define (check-destructuring src anchor)
+  (define-values (uir emitted) (check-js src))
+  (check-true (string-contains? emitted anchor) (format "~s keeps ~s" src anchor))
+  (check-true (and (js-parse emitted) #t) (format "~s re-parses" src))
+  (check-equal? (uir->sexp (lower-program (js-parse emitted) tok-type tok-value))
+                (uir->sexp uir)
+                (format "~s round-trips structurally" src)))
+
+(check-destructuring "const { a, b: c, d = 1, ...rest } = o;"
+                     "const {a, b: c, d = 1, ...rest} = o;")
+(check-destructuring "const [x, , y = 2, ...z] = xs;" "const [x, , y = 2, ...z] = xs;")
+(check-destructuring "const { outer: { inner } } = o;" "const {outer: {inner}} = o;")
+(check-destructuring "for (const [k, v] of entries) { g(k, v); }"
+                     "for (const [k, v] of entries)")
+(check-destructuring "for (const { name } of users) { g(name); }"
+                     "for (const {name} of users)")
+
+;; Optional call and nullish coalescing keep a first-class encoding.
+(let-values ([(uir emitted) (check-js "a?.(); const n = x ?? y; const m = a?.b;")])
+  (check-true (string-contains? emitted "a?.()"))
+  (check-true (string-contains? emitted "x ?? y"))
+  (check-true (string-contains? emitted "a ?. b")))
 
 (cleanup)
 (displayln "All JavaScript lowering tests passed.")

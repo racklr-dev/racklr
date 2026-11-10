@@ -18,7 +18,8 @@ Racklr is a parser generator and universal intermediate representation (UIR) too
 ## Architecture
 
 ```
-grammars-v4/*.g4          ← ANTLR4 grammar files (vendor)
+grammars/<lang>/*.g4      ← tracked ANTLR4 grammars (authored / hardened)
+grammars-v4/*.g4          ← vendored ANTLR4 grammars (unmodified vendor copy)
         │
         ▼
   g4-lex.rkt              ← Tokenizes .g4 grammar files into token streams
@@ -232,6 +233,7 @@ racket modern-python-test.rkt        # modern Python: walrus, positional-only, t
 racket python-multiline-strings-test.rkt # multi-line triple-quoted strings: lexing, positions, emit
 racket lower-python-params-test.rkt  # Python parameter star markers: *, *args, **kwargs
 racket lower-javascript-test.rkt     # JavaScript lowering + emit
+racket js-real-world-test.rkt        # real-world JavaScript constructs (classes, optional calls, destructuring)
 racket gen-koka-test.rkt             # Koka 3.x grammar, layout post-pass, lexer, parse
 racket lower-koka-test.rkt           # Koka lowering + emit round-trip per construct
 racket effects-koka-annot-test.rkt   # Koka typed effect-row annotations
@@ -301,6 +303,28 @@ grouped failure messages. The latest run (koka-lang/koka 3.3.0 dev, 1144 `.kk`
 files) and its before/after taxonomy are recorded in
 `docs/koka-real-world-battery.md`.
 
+### JavaScript/TypeScript real-world corpus measurement
+
+`tools/js-ts-corpus.rkt` is the JS/TS slice of the capability battery: for every
+`.js`/`.mjs`, `.ts`, `.tsx` and `.json` file under a corpus root it runs the
+real front end (`tokenize` -> `parse` -> `lower` -> `emit` -> re-parse) and
+classifies the first stage that blocks a clean round trip (`ok`,
+`tokenize-error`, `parse-fail`, `lower-error`, `fallback`, `emit-error`,
+`emit-empty`, `reparse-fail`, `timeout`). TypeScript/TSX emit JavaScript, so
+their re-parse runs the JavaScript parser. The parsers are generated from the
+tracked `grammars/javascript/`, `grammars/typescript/` and `grammars/jsx/`
+grammars, so a clean checkout needs no vendored tree:
+
+```bash
+racket tools/js-ts-corpus.rkt /path/to/express /path/to/axios   # full round trip
+racket tools/js-ts-corpus.rkt /path/to/axios --parse-only
+racket tools/js-ts-corpus.rkt /path/to/axios --json /tmp/js-ts.json --timeout-ms 60000
+```
+
+It exits 0 only when every file in the selected mode succeeds, and prints
+per-language counts plus grouped failure messages. The express/axios run and
+its before/after taxonomy are recorded in `docs/js-ts-real-world-battery.md`.
+
 ### Real host-code bridge sample
 
 `fastapi/` vendors the backend of the official FastAPI
@@ -324,7 +348,10 @@ The harness is `tools/bridge-python.rkt`, the tracked-grammar counterpart of
 - Racket 9.3
 - No external Racket packages required
 - [Jolt](https://github.com/jolt-lang/jolt) (Clojure runtime) for the Clojure effects round-trip test; the suite skips its Jolt checks if the binary is not on `PATH`
-- ANTLR4 grammar files from [grammars-v4](https://github.com/antlr/grammars-v4) (vendored in `grammars-v4/`)
+- ANTLR4 grammar files: authored/hardened grammars are tracked under `grammars/<lang>/`
+  (including the JavaScript, TypeScript and JSX front ends); pristine
+  [grammars-v4](https://github.com/antlr/grammars-v4) grammars are vendored in the
+  untracked `grammars-v4/` tree for the front ends that still develop against it
 
 ## Setup
 

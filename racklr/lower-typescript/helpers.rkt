@@ -4,7 +4,8 @@
          racklr/tree)
 
 (provide tok? cst-kids tag-of kids-of find-kid find-list find-node-or-list
-         extract-var-kind extract-identifier-name cst-source-text)
+         extract-var-kind extract-identifier-name cst-source-text
+         has-token? find-descendant)
 
 ;; ── CST-walking helpers for TypeScript lowering ───────────────────────
 
@@ -23,6 +24,19 @@
 
 (define (find-list n)
   (for/or ([k (kids-of n)] #:when (pair? k)) k))
+
+;; Does this CST node directly hold a token of type `tag`? Used to detect
+;; ambient `declare` declarations, whose token is a direct child of the
+;; declaration node (functionDeclaration/classDeclaration/variableStatement).
+(define (has-token? node tk-type tag)
+  (for/or ([k (kids-of node)]) (and (tok? k tk-type) (eq? (tk-type k) tag))))
+
+(define (find-descendant node tag)
+  ;; Depth-first first descendant (including `node`) whose tag is `tag`.
+  (cond [(not (cst-node? node)) #f]
+        [(eq? (tag-of node) tag) node]
+        [else (for/or ([k (kids-of node)])
+                (and (cst-node? k) (find-descendant k tag)))]))
 
 (define (find-node-or-list n)
   (for/or ([k (kids-of n)] #:when (or (cst-node? k) (pair? k))) k))

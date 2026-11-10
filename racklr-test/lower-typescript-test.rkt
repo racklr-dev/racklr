@@ -12,7 +12,7 @@
 ;; ── Load the TypeScript parser ──────────────────────────────────────
 
 (define-values (ts-parse ts-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── Test helper ─────────────────────────────────────────────────────
 
@@ -320,6 +320,39 @@
   (check-true (and cst #t) "B112: remark-html.d.ts parses after preprocessing")
   (check-true (and uir #t) "B112: remark-html.d.ts lowers")
   (check-true (string? (emit-javascript uir)) "B112: remark-html.d.ts emits"))
+
+;; ── Issue #122: real-world TypeScript lowering from axios ───────────
+;; Ambient declarations erase instead of emitting invalid JS.
+(let-values ([(uir emitted) (check-ts "declare const value: number;\ndeclare function f(x: number): void;")])
+  (check-true (string? emitted) "ambient declare lowers")
+  ;; Ambient declarations are replaced by the documented erased-type marker
+  ;; comment, not by executable `declare` JavaScript.
+  (check-true (string-contains? emitted "erased TypeScript type declaration")
+              "ambient declare is erased to the marker")
+  (check-false (regexp-match? #rx"(^|\n)declare " emitted)
+               "ambient declare emits no executable declaration"))
+
+;; A statement-if keeps if/else form (not `cond ? return ... : null`).
+(let-values ([(uir emitted) (check-ts "function f(x: number): number { if (x) { return 1; } else { return 2; } }")])
+  (check-true (string-contains? emitted "if (x) { return 1; }")
+              "statement-if emits as if")
+  (check-false (string-contains? emitted "? return") "statement-if does not emit a ternary"))
+
+;; `instanceof` / `in` are infix, not pseudo-calls.
+(let-values ([(uir emitted) (check-ts "const ok = a instanceof B && k in o;")])
+  (check-true (string-contains? emitted "a instanceof B") "instanceof is infix")
+  (check-true (string-contains? emitted "k in o") "in is infix"))
+
+;; Class members beyond plain property methods lower without crashing.
+(let-values ([(uir emitted) (check-ts "class C { constructor() { this.x = 1; } get x(): number { return 1; } }")])
+  (check-true (string? emitted) "class with accessors lowers"))
+
+;; Named export keeps its name (was emitted as `export { data: data }`).
+(let-values ([(uir emitted) (check-ts "export { data };")])
+  (check-true (string-contains? emitted "export { data }")
+              "named export re-emits as an export")
+  (check-false (string-contains? emitted "data: data")
+               "named export does not become an object literal"))
 
 ;; ── Clean up temp files ─────────────────────────────────────────────
 
