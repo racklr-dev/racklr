@@ -16,10 +16,12 @@
          "row.rkt"
          "combinators.rkt"
          "fixpoint.rkt"
-         "subtyping.rkt")
+         "subtyping.rkt"
+         "holes.rkt")
 
 (provide (all-from-out "provenance.rkt"
                        "row.rkt"
                        "combinators.rkt"
                        "fixpoint.rkt"
-                       "subtyping.rkt"))
+                       "subtyping.rkt"
+                       "holes.rkt"))
