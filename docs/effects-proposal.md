@@ -516,7 +516,10 @@ run the inference fixpoint on, and row subtyping with handler interpretation
 (the bridge checker's capability table generalized to rows). Property tests in
 `racklr-test/effects-algebra-property-test.rkt` cover the algebra laws, fixpoint
 monotonicity, and the subtyping laws. Remaining for the phase: effect
-polymorphism (row holes) and the Pass-4 contract check over the new relation.
+polymorphism (row holes), the Pass-4 contract check over the new relation, and
+the kernel-leaf split (ROADMAP.md) — a machine-checked kernel of the algebra
+laws, subtyping, and a certificate checker, with inference as an untrusted
+producer.
 
 **Phase 2 — annotation extraction (planned).**
 Recognize `@effects(...)` / `withEffects(...)` / JSDoc `@effects` in the front
@@ -594,6 +597,7 @@ The fixture is emitted to all target languages. Each target's test verifies:
 3. **Client-side state mutation granularity.** Should `state-mutation` be tracked at the component level, the hook level, or the setter level?
 4. **Runtime guard overhead.** `__withEffects` adds a function call per event invocation. Should the emitter support a sampled validation mode for high-frequency events?
 5. **Cross-language consistency.** The Jolt validator is the single source of truth for runtime enforcement, but static inference in racklr and runtime tracking in the target language's effect library may diverge. How is this divergence detected?
+6. **Kernel-leaf verification.** Can the effect algebra split into a small machine-checked kernel (laws, subtyping, certificate checker) with inference untrusted, without re-embedding inference in the kernel? See the kernel-leaf section of ROADMAP.md for the line budget and falsification criteria.
 
 ---
 

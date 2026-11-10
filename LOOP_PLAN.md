@@ -176,6 +176,15 @@ state.
     `self.m()` leaves (drg-c128); PR #80 is the real-context unknown census
     that aims the next receiver-type levers.
 
+- **P1.6 — Kernel-leaf verification of the effect algebra: PROPOSED.** The
+  grand vision now includes a machine-checked kernel leaf for the effect
+  algebra (see the kernel-leaf section of ROADMAP.md): split the algebra into
+  a small trusted kernel (laws, subtype relation, certificate checker) with
+  inference as an untrusted producer, so the gate decides by proof rather than
+  by convention. Not started. Depends on P1.5 (algebra landed) and P0.3
+  (zero-unknown bar); the test plan, line budget, and falsification criteria
+  live in ROADMAP.md.
+
 ## Phase 1 work landed
 
 - **P1.5 — Effect algebra + property tests: DONE (verified)**
@@ -467,3 +476,15 @@ unknown-elimination obligation; Phase 5 stays red until its submodule PRs merge
 and the `effervesce` pointer bumps. Also open, outside the phase increments:
 #76 (TS/TSX subscript lowering so emitted JS re-parses) and #78 (keyword-only
 and rest-arity parameter markers in Python `def` lowering).
+
+## Kernel-leaf verification (proposed)
+
+The grand vision now includes a machine-checked kernel leaf for the effect
+algebra (ROADMAP.md). Current state: P1.5 landed the standalone algebra
+(`racklr/effects/algebra/`) with property tests; the kernel-leaf split —
+trusted laws/subtyping/certificate checker versus untrusted inference — is
+proposed, not started. The test plan, line budget, and falsification criteria
+are in the kernel-leaf section of ROADMAP.md. This does not change the P0.3
+long pole: the kernel is a new checker for the same algebra, and the
+zero-unknown bar is the corpus evidence the kernel-certificate path must
+reproduce unchanged.
