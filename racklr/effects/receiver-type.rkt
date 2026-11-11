@@ -30,6 +30,7 @@
   infer-receiver-types
   receiver-class-of
   constructor-class
+  imported-fn-result-type
   call-result-type
   value-class-of
   return-class-of
@@ -49,11 +50,21 @@
 
 ;; A pure stdlib/builtin value constructor name (`Path`, `md5`, `dict`): pure to
 ;; construct, and therefore also a usable receiver type for a call result.
+;; The pure-bare-NAMES table lists BOTH value-constructor types (`Path`, `md5`,
+;; `Decimal`, `BytesIO`) and pure FUNCTIONS (`get_resolver`, `get_runner`,
+;; `force_str`). A function's result is a DIFFERENT class, so its own name must
+;; never become the receiver type (`r = get_resolver(...)` then `r.resolve`
+;; would look up "get_resolver".resolve and stay unknown). A name is a
+;; constructor TYPE only when it is pure AND names a receiver type: it has a
+;; method table (stdlib-type-methods-data) or is a builtin type root. An
+;; effectful receiver name (`fetch`, `open`) is absent from the pure table, so
+;; it still classifies by its effect domain, not as a pure constructor.
 (define (pure-stdlib-type? n [tokens default-effect-tokens])
   (and n
        (let ([s (symbol->string n)])
-         (or (set-member? (effect-tokens-pure-stdlib-bare-names tokens) s)
-             (set-member? (effect-tokens-builtin-type-roots tokens) s)))))
+         (and (set-member? (effect-tokens-pure-stdlib-bare-names tokens) s)
+              (or (set-member? (effect-tokens-builtin-type-roots tokens) s)
+                  (hash-has-key? (effect-tokens-stdlib-type-methods tokens) s))))))
 
 ;; A receiver value is a MODULE (not a class) when its name names an external
 ;; module in the receiver-modules token table (pylibmc / pymemcache / memcache /
@@ -162,6 +173,27 @@
                               (equal? (symbol->string rtn) (handle-name h))))
                      rtn))))))
 
+;; Result TYPE of a BARE imported FUNCTION call (`get_resolver(...)`,
+;; `salted_hmac(...)`): the callee is a bare name bound in `comp`'s namespace
+;; to an fn handle — synthesized for an external `from mod import fn` (a
+;; lowercase binding outside the scanned corpus), or harvested for a scanned
+;; corpus function. The module's result-type table maps the function name to
+;; its result class, mirroring imported-module-result-type's member-access
+;; path for `mod.fn(...)`. The fn handle is never a class, so a bare
+;; `SomeClass(...)` constructor is unaffected (imported-class-ref handles
+;; class handles).
+(define (imported-fn-result-type name comp import-env tokens)
+  (and import-env comp name
+       (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+              [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+              [h (and e (hash-ref e (symbol->string name) #f))])
+         (and (handle? h) (eq? (handle-kind h) 'fn)
+              (handle-path h) (handle-name h)
+              (let* ([table (hash-ref (effect-tokens-module-result-types tokens)
+                                      (handle-path h) #f)]
+                     [t (and table (hash-ref table (handle-name h) #f))])
+                (and t (string->symbol t)))))))
+
 ;; Module path of an imported module/fn singleton binding (`connections` from
 ;; `from django.db import connections`): the export resolves to a module or fn
 ;; handle whose path is the source module. A subscript into that singleton
@@ -195,6 +227,8 @@
              nm))
       (let ([nm (callee-name callee)])
         (and nm comp import-env (imported-class-ref nm comp import-env)))
+      (let ([nm (callee-name callee)])
+        (and nm comp import-env (imported-fn-result-type nm comp import-env tokens)))
       (imported-module-class-ref callee comp import-env tokens)
       (imported-module-result-type callee comp import-env tokens)
       (method-result-type callee

@@ -135,7 +135,8 @@
                               "parse_request" 'io "send_error" 'io
                               "get_environ" 'pure "get_app" 'pure)
    "ServerHandler" (hash "__init__" 'pure "cleanup_headers" 'io "get_stdin" 'pure
-                         "send_headers" 'io "finish_response" 'io "close" 'io)
+                         "send_headers" 'io "finish_response" 'io "close" 'io
+                         "run" 'io)
    ;; builtin `object` base: every class without another base inherits these
    ;; protocol dunders, so `super().__init__` on `object` is pure.
    "object" (hash "__init__" 'pure "__new__" 'pure "__str__" 'pure "__repr__" 'pure
@@ -398,7 +399,23 @@
    "deque" (hash "append" 'pure "appendleft" 'pure "pop" 'pure "popleft" 'pure
                   "extend" 'pure "extendleft" 'pure "clear" 'pure "copy" 'pure
                   "count" 'pure "index" 'pure "remove" 'pure "reverse" 'pure
-                  "rotate" 'pure)))
+                  "rotate" 'pure)
+   ;; django.urls.resolvers.URLResolver (external): resolve() matches the
+   ;; request path against the in-memory URL patterns.
+   "URLResolver" (hash "resolve" 'pure)
+   ;; django.core.mail.backends.base.BaseEmailBackend (external): the email
+   ;; backend returned by get_connection; send_messages carries the email
+   ;; domain.
+   "BaseEmailBackend" (hash "send_messages" 'email "open" 'email "close" 'email)
+   ;; PIL.ImageFile.Parser (external): the streaming image parser fed in
+   ;; get_image_dimensions; feed reads the in-memory chunk buffer.
+   "Parser" (hash "feed" 'pure)
+   ;; django.test.runner.DiscoverRunner (external): add_arguments wires the
+   ;; argparse surface (pure); run_tests executes the suite — building and
+   ;; tearing down test databases (db) — and orchestrates the run (process).
+   "DiscoverRunner" (hash "add_arguments" 'pure "run_tests" 'process
+                          "setup_databases" 'db "teardown_databases" 'db
+                          "build_suite" 'pure "run_checks" 'db)))
 
 ;; module-path -> (function-name -> result-type-name) for stdlib/framework
 ;; functions whose RESULT is a receiver the next call can flow through
@@ -434,7 +451,23 @@
    "socket" (hash "socket" "socket" "create_connection" "socket")
    "wsgiref.simple_server" (hash "make_server" "WSGIServer")
    "xml.dom.pulldom" (hash "parse" "DOMEventStream")
-   "xml.dom.minidom" (hash "parse" "Document" "parseString" "Document")))
+   "xml.dom.minidom" (hash "parse" "Document" "parseString" "Document")
+   ;; django.urls.get_resolver returns the URL resolver the request path is
+   ;; matched against (resolve() reads the in-memory URL patterns).
+   "django.urls" (hash "get_resolver" "URLResolver")
+   ;; django.db.migrations.state.ProjectState.from_apps is a classmethod
+   ;; constructor: it builds the migration state for the loaded apps.
+   "django.db.migrations.state" (hash "from_apps" "ProjectState")
+   ;; django.core.mail.get_connection returns the email backend (its
+   ;; send_messages carries the email domain).
+   "django.core.mail" (hash "get_connection" "BaseEmailBackend")
+   ;; django.test.utils.get_runner returns the DiscoverRunner class the test
+   ;; command instantiates (add_arguments is pure; run_tests executes the
+   ;; suite, which sets up and tears down test databases).
+   "django.test.utils" (hash "get_runner" "DiscoverRunner")
+   ;; django.utils.crypto.salted_hmac returns an hmac object (digest/hexdigest
+   ;; are pure in-memory crypto).
+   "django.utils.crypto" (hash "salted_hmac" "hmac")))
 
 ;; module-path -> (attribute-name -> receiver-TYPE-name) for module-qualified
 ;; CLASS references (`smtplib.SMTP`, `ssl.SSLContext`, `concurrent.futures.
@@ -462,7 +495,13 @@
    "xml.dom.pulldom" (hash "DOMEventStream" "DOMEventStream")
    "xml.dom.minidom" (hash "Document" "Document")
    "redis" (hash "Redis" "Redis" "ConnectionPool" "ConnectionPool"
-                 "DriverInfo" "DriverInfo")))
+                 "DriverInfo" "DriverInfo")
+   ;; django.db.models.Expression (SQL expression the DB backend's
+   ;; converters operate on; get_db_converters is pure).
+   "django.db.models" (hash "Expression" "Expression")
+   ;; PIL.ImageFile.Parser: the streaming image parser get_image_dimensions
+   ;; feeds image chunks into (feed reads the in-memory buffer).
+   "PIL.ImageFile" (hash "Parser" "Parser")))
 
 ;; receiver-TYPE -> call -> result-TYPE for CALLS that preserve the receiver
 ;; type: a binary operator (`po_path = Path(dirpath) / f` lowers to
@@ -494,7 +533,22 @@
                                 "with_suffix" "PureWindowsPath"
                                 "with_name" "PureWindowsPath"
                                 "relative_to" "PureWindowsPath"
-                                "parent" "PureWindowsPath")))
+                                "parent" "PureWindowsPath")
+        ;; email.message.Message.get_charset returns the message's charset
+        ;; object; the result flows through Charset's method table
+        ;; (get_output_charset / body_encode / header_encode).
+        "Message" (hash "get_charset" "Charset")
+        ;; django.db.migrations.executor.MigrationExecutor: migrate() and
+        ;; _create_project_state() return the in-memory ProjectState the next
+        ;; call reads (clone / clear_delayed_apps_cache).
+        "MigrationExecutor" (hash "migrate" "ProjectState"
+                                  "_create_project_state" "ProjectState")
+        ;; django.db.backends.base.base.BaseDatabaseWrapper.schema_editor()
+        ;; returns the DDL editor (create_model carries the db domain).
+        "BaseDatabaseWrapper" (hash "schema_editor" "BaseDatabaseSchemaEditor")
+        ;; django.template.Engine.from_string/get_template return a Template
+        ;; whose render() serializes the in-memory template.
+        "Engine" (hash "from_string" "Template" "get_template" "Template")))
 
 ;; Declared param signatures for external-entry-point parameters the corpus call
 ;; chain could not type: a parameter supplied by a caller OUTSIDE the scanned
@@ -577,7 +631,10 @@
    (cons "django.core.management.base" 'BaseCommand.create_parser) 'ArgumentParser
    (cons "django.core.mail.message" 'EmailMessage.message) 'Message
    (cons "django.core.serializers.python" 'Deserializer._get_model_from_node) 'Model
-   (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model))
+   (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model
+   ;; get_cookie_signer returns a TimestampSigner (a corpus class in signing.py);
+   ;; its unsign() calls the in-memory signer (crypto is pure).
+   (cons "django.core.signing" 'get_cookie_signer) 'TimestampSigner))
 
 ;; ELEMENT TYPE(S) of a module FUNCTION used as an iterable in a for-loop / with
 ;; (`for dirpath, dirnames, filenames in os.walk(...)`, `with os.scandir(p) as
