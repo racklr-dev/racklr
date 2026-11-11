@@ -25,7 +25,8 @@
 
 (require racklr/uir
          (only-in racklr/effects/contract effect-name-symbol)
-         "row.rkt")
+         "row.rkt"
+         (only-in "combinators.rkt" join))
 
 (provide
   hole-prefix
@@ -37,7 +38,8 @@
   row-holes
   row-holes-open?
   instantiate-row-hole
-  close-row-hole)
+  close-row-hole
+  row-holes->unknown)
 
 ;; The one-character prefix that marks a hole name. Concrete domain names
 ;; (llm/db/network/cache/io/process/time/email) never start with it.
@@ -88,21 +90,25 @@
   (define hole-key (hole-symbol id))
   (define matched? (memq id (row-holes r)))
   (define hole-provs (row-provenance r hole-key))
-  (define remaining
-    (for/list ([e (in-list (uir-effect-row-entries (algebra-row->uir r)))]
-               #:unless (and (hole-entry? e) (eq? (hole-entry-id e) id)))
-      e))
-  (define entries
-    (uir-effect-row
-     (append remaining
-             (if matched? (uir-effect-row-entries (algebra-row->uir concrete)) '()))))
-  (define prov-table (hash-remove (algebra-row-provenance r) hole-key))
-  (define prov-table*
-    (if matched?
-        (for/fold ([t prov-table]) ([(n p) (in-hash (algebra-row-provenance concrete))])
-          (hash-set t n (append hole-provs p)))
-        prov-table))
-  (make-algebra-row entries prov-table*))
+  ;; The row with the hole removed.
+  (define remaining-row
+    (make-algebra-row
+     (uir-effect-row
+      (for/list ([e (in-list (uir-effect-row-entries (algebra-row->uir r)))]
+                 #:unless (and (hole-entry? e) (eq? (hole-entry-id e) id)))
+        e))
+     (hash-remove (algebra-row-provenance r) hole-key)))
+  (if (not matched?)
+      remaining-row
+      ;; Join concrete into the remaining row (join merges same-name entries,
+      ;; so a row that already carries `unknown` never gains a second one), with
+      ;; the hole's own evidence attached to every effect concrete introduces.
+      (join
+       remaining-row
+       (make-algebra-row
+        (algebra-row->uir concrete)
+        (for/hash ([(n p) (in-hash (algebra-row-provenance concrete))])
+          (values n (append hole-provs p)))))))
 
 ;; Close a hole: a handler (or an instantiation that resolves it to nothing)
 ;; has discharged it, so it leaves the row without introducing effects.
@@ -113,3 +119,29 @@
                #:unless (and (hole-entry? e) (eq? (hole-entry-id e) id)))
       e))
    (hash-remove (algebra-row-provenance r) (hole-symbol id))))
+
+;; Materialize a row for the graph/contract checker: every open hole becomes a
+;; tracked `unknown` entry (the honest deferral), and the holes' own evidence
+;; is carried under `unknown` so the grounding invariant holds at the boundary.
+;; Instantiated/closed holes are already gone. This is the only hole->concrete
+;; transition that may run; inference must call it before write-back.
+(define (row-holes->unknown r)
+  (define entries (uir-effect-row-entries (algebra-row->uir r)))
+  (define hole-entries (filter hole-entry? entries))
+  (define concrete (filter (λ (e) (not (hole-entry? e))) entries))
+  (define hole-prov
+    (append-map (λ (e) (row-provenance r (effect-name-symbol e))) hole-entries))
+  (define has-unknown?
+    (for/or ([e (in-list concrete)]) (eq? (effect-name-symbol e) 'unknown)))
+  (define entries*
+    (if (and (pair? hole-entries) (not has-unknown?))
+        (cons (uir-effect-entry (uir-symbol "unknown") 'unknown '() #f #f) concrete)
+        concrete))
+  (define prov-table
+    (for/fold ([t (algebra-row-provenance r)]) ([e (in-list hole-entries)])
+      (hash-remove t (effect-name-symbol e))))
+  (define prov-table*
+    (if (pair? hole-prov)
+        (hash-update prov-table 'unknown (λ (l) (append hole-prov l)) '())
+        prov-table))
+  (make-algebra-row (uir-effect-row entries*) prov-table*))

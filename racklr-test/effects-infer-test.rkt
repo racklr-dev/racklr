@@ -5,6 +5,7 @@
          racklr/effects/contract
          racklr/effects/imports
          racklr/effects/infer
+         racklr/effects/whole-program
          racklr/effects/library-tokens
          racklr/effects/pure-roots
          racklr/effects/lexicon
@@ -142,6 +143,27 @@
   (define r (hash-ref (infer-effects p) 'k))
   (check-equal? (modality r 'unknown) 'unknown)
   (check-equal? (row-names r) '(unknown)))
+
+(define (test-row-hole-instantiation)
+  ;; A callback param is a row hole: k(cb) is polymorphic, and a caller that
+  ;; passes a concrete callback instantiates the hole, so k's whole-program
+  ;; summary is the callback's effects — not `unknown`.
+  (define p (prog
+             (fn "handler" (uir-call (dot (v "db") "fetch") '()))
+             (fn "k" (uir-call (v "cb") (list (uir-number "1")))
+                 #:params (list (uir-typed-param (sym "cb") #f #f #f)))
+             (fn "main" (uir-call (v "k") (list (v "handler"))))))
+  (define rows (infer-effects-all (list (cons "app.py" p))))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'handler))) '(db))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'k))) '(db))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'main))) '(db))
+  ;; Without a concrete caller, the hole stays open and materializes as the
+  ;; honest `unknown` (the polymorphic form never leaks a ?-entry).
+  (define solo (infer-effects-all
+                (list (cons "solo.py"
+                            (prog (fn "k" (uir-call (v "cb") (list (uir-number "1")))
+                                        #:params (list (uir-typed-param (sym "cb") #f #f #f))))))))
+  (check-equal? (row-names (hash-ref solo (cons "solo.py" 'k))) '(unknown)))
 
 (define (test-nested-fn-does-not-leak)
   ;; A nested function's effects must not leak into the enclosing function

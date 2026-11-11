@@ -169,6 +169,10 @@
   ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))
   (define edges (make-hash))
+  ;; Row-hole wiring: the params each function bare-calls (its holes) and the
+  ;; argument list at every call to a known callee (the substitution sites).
+  (define called-params (make-hash))  ;; k -> (listof param-name-symbol)
+  (define edge-sites (make-hash))     ;; k -> (listof (cons callee-key args))
   ;; Structured provenance: every call-graph edge (with the callee expression
   ;; the classifier saw) and every direct ground. Propagation needs no path
   ;; storage — the fixpoint only moves effects along these edges, so reachability
@@ -199,6 +203,7 @@
                            (first parts)
                            #:file comp)))
     (define callees '())
+    (define call-sites '())
     (define param-names
       (let ([ps (or (hash-ref fn-params k #f) (hash-ref method-params k #f))])
         (and ps
@@ -263,6 +268,7 @@
            (case (car cls)
              [(edge)
               (set! callees (cons (cdr cls) callees))
+              (set! call-sites (cons (cons (cdr cls) (uir-call-args node)) call-sites))
               (when prov
                 (provenance-add-call! prov
                                       (prov-call (function-fq k)
@@ -292,56 +298,60 @@
                                    #:position position)))]
              [(pure) (void)]
              [(unknown)
-              (set! effects (cons 'unknown effects))
-              (when prov
-                (provenance-add-ground! prov
-                                        (make-callee-site (function-fq k) 'unknown callee
-                                                          #:kind 'unresolved
-                                                          #:coverage
-                                                          (unresolved-coverage
-                                                           callee param-names
-                                                           tokens)
-                                                          #:file comp
-                                                          #:position position)))
+              ;; The bare-call-to-parameter shape is the row-hole lever: a
+              ;; callback param stands for "the effects of whatever is passed",
+              ;; so it becomes a hole, instantiated by callers (the edge-sites
+              ;; fixpoint below) instead of `unknown`. The same shape info feeds
+              ;; the census tally, so it is computed up front.
+              (define shape (receiver-shape callee param-names tokens))
+              (define rx
+                (and (member-access-callee? callee) (dotted-root callee)))
+              (define immediate-base
+                (and (uir-get? callee) (var-symbol (uir-get-base callee))))
+              (define bare-name
+                (cond
+                  [(uir-var? callee)
+                   (string->symbol (uir-symbol-name (uir-var-name callee)))]
+                  [(uir-symbol? callee)
+                   (string->symbol (uir-symbol-name callee))]
+                  [else #f]))
+              (define binding-kind
+                (cond
+                  [(eq? shape 'param) 'param]
+                  [(and (eq? shape 'bare-call) bare-name param-names
+                        (memq bare-name param-names))
+                   'param]
+                  [(and (eq? shape 'bare-call) bare-name)
+                   (hash-ref local-kinds bare-name 'unbound)]
+                  [immediate-base (hash-ref local-kinds immediate-base 'unbound)]
+                  [else #f]))
+              (define higher-order?
+                (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
+              (if higher-order?
+                  (begin
+                    (set! effects (cons (list 'hole bare-name site) effects))
+                    (hash-update! called-params k (λ (l) (cons bare-name l)) '())
+                    (when prov
+                      (provenance-add-ground!
+                       prov
+                       (make-callee-site (function-fq k) 'unknown callee
+                                         #:kind 'unresolved
+                                         #:coverage
+                                         (unresolved-coverage callee param-names tokens)
+                                         #:file comp
+                                         #:position position))))
+                  (begin
+                    (set! effects (cons 'unknown effects))
+                    (when prov
+                      (provenance-add-ground!
+                       prov
+                       (make-callee-site (function-fq k) 'unknown callee
+                                         #:kind 'unresolved
+                                         #:coverage
+                                         (unresolved-coverage callee param-names tokens)
+                                         #:file comp
+                                         #:position position)))))
               (when unknown-tally
-                (define shape (receiver-shape callee param-names tokens))
-                ;; Receiver root of a member-access chain (`x` in x.m(),
-                ;; `self` in self.cache.m()) so a site names the object whose
-                ;; type must flow; a bare call has no receiver.
-                (define rx
-                  (and (member-access-callee? callee) (dotted-root callee)))
-                ;; The binding kind refines a `local` receiver and, for a bare
-                ;; call, tells the parameter-callback and function-value levers
-                ;; apart from a genuinely free name. For `bare-call`:
-                ;;   'param    the callee names one of the enclosing
-                ;;             function's parameters (row-hole lever)
-                ;;   'fn       the callee is a local bound from a function
-                ;;             value (function-value-typing lever)
-                ;;   'unbound  a free/global/imported name (lexicon lever)
-                (define immediate-base
-                  (and (uir-get? callee) (var-symbol (uir-get-base callee))))
-                (define bare-name
-                  (cond
-                    [(uir-var? callee)
-                     (string->symbol (uir-symbol-name (uir-var-name callee)))]
-                    [(uir-symbol? callee)
-                     (string->symbol (uir-symbol-name callee))]
-                    [else #f]))
-                (define binding-kind
-                  (cond
-                    [(eq? shape 'param) 'param]
-                    [(and (eq? shape 'bare-call) bare-name param-names
-                          (memq bare-name param-names))
-                     'param]
-                    [(and (eq? shape 'bare-call) bare-name)
-                     (hash-ref local-kinds bare-name 'unbound)]
-                    [immediate-base (hash-ref local-kinds immediate-base 'unbound)]
-                    [else #f]))
-                ;; `higher-order?` marks the callback-parameter lever (row
-                ;; holes); a bare call to a function-valued local is the
-                ;; separate function-value-typing lever.
-                (define higher-order?
-                  (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
                 (set-box! unknown-tally
                           (cons (list (car k) (cdr k)
                                       shape
@@ -353,17 +363,112 @@
                                 (unbox unknown-tally))))]))]
         [else (void)]))
     (walk-body body visit!)
-    (hash-set! direct-rows k (effects->algebra-row effects))
+    ;; Direct row: the plain effect symbols, plus one hole per bare-called
+    ;; param (grounded by the call site that created it).
+    (define direct-row
+      (let ([base (effects->algebra-row (filter (λ (x) (not (pair? x))) effects))])
+        (for/fold ([r base]) ([item (in-list effects)] #:when (pair? item))
+          (define pname (cadr item))
+          (define hsite (caddr item))
+          (alg:join r (alg:row-hole pname (alg:provenance (list hsite) #f
+                                                       (list (symbol->string pname))))))))
+    (hash-set! direct-rows k direct-row)
+    (hash-set! edge-sites k (reverse call-sites))
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
                                                             (string<? (format "~a.~a" (car a) (cdr a))
                                                                       (format "~a.~a" (car b) (cdr b)))))))
 
-  ;; The whole-program fixpoint is the algebra's: iterate `join` (the least
-  ;; upper bound over rows) from the direct rows until the table stops
-  ;; changing. Same operation as the single-file pass, same driver, so the two
-  ;; fixpoints cannot drift apart.
-  (define rows (alg:least-fixpoint direct-rows edges))
+  ;; Row-hole fixpoint. Each node's row is its direct row joined with, for every
+  ;; call site, the callee's row with its holes instantiated by the argument
+  ;; passed there. Instantiation is monotone in the rows, so full sweeps ascend
+  ;; to the least fixed point; holes still open at the end are the honest
+  ;; `unknown` deferral (materialized below), exactly the pre-hole result.
+  (define (param-name-sym p)
+    (cond
+      [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
+      [(uir-typed-param? p)
+       (and (uir-symbol? (uir-typed-param-name p))
+            (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
+      [else #f]))
+  (define (params-of k)
+    (or (hash-ref fn-params k #f) (hash-ref method-params k #f)))
+  (define (param-index ps name)
+    (for/or ([i (in-naturals)] [p (in-list ps)])
+      (and (eq? (param-name-sym p) name) i)))
+  ;; An argument's static shape in caller k's context: a pass-through hole,
+  ;; a known function, a direct-effect row, or the unknown fallback.
+  (define (arg-row k a)
+    (define a-var (and (uir-var? a) (var-symbol a)))
+    (cond
+      [(and a-var (memq a-var (hash-ref called-params k '())))
+       (list 'hole a-var)]
+      [else
+       (define cls (classify-call-all a known methods
+                                      class-defs fn-defs comp-supers self-attr
+                                      (car k) (owner-of-key k) import-env
+                                      (rt-of k) return-types (box 'structural)
+                                      #:lexicon lex))
+       (case (car cls)
+         [(edge) (list 'fn (cdr cls))]
+         [(effect) (list 'row (effects->algebra-row (list (cdr cls))))]
+         [(pure) (list 'row (alg:empty-algebra-row))]
+         [else (list 'row (effects->algebra-row '(unknown)))])]))
+  (define (arg->row k a rows)
+    (define v (arg-row k a))
+    (case (car v)
+      [(hole) (alg:row-hole (cadr v))]
+      [(fn) (hash-ref rows (cadr v) (alg:empty-algebra-row))]
+      [else (cadr v)]))
+  (define (compute-row k rows)
+    (foldl
+     (λ (site acc)
+       (define g (car site))
+       (define args (cdr site))
+       (define g-row (hash-ref rows g (alg:empty-algebra-row)))
+       (define inst
+         (for/fold ([r g-row]) ([p (in-list (hash-ref called-params g '()))])
+           (define idx (param-index (params-of g) p))
+           (define a (and idx (< idx (length args)) (list-ref args idx)))
+           (if a (alg:instantiate-row-hole r p (arg->row k a rows)) r)))
+       (alg:join acc inst))
+     (hash-ref direct-rows k (alg:empty-algebra-row))
+     (hash-ref edge-sites k '())))
+  (define rows (make-hash))
+  (for ([k (in-list all-keys)])
+    (hash-set! rows k (hash-ref direct-rows k (alg:empty-algebra-row))))
+  (let sweep ([i 0])
+    (define changed? #f)
+    (for ([k (in-list all-keys)])
+      (define new (compute-row k rows))
+      (unless (alg:same-row? (hash-ref rows k) new)
+        (set! changed? #t)
+        (hash-set! rows k new)))
+    (when changed?
+      (when (> i 400) (error 'row-holes-fixpoint "no convergence after ~a sweeps" i))
+      (sweep (add1 i))))
   (when rec-box (set-box! rec-box prov))
-  ;; Materialize the algebra rows back to the UIR row contract.
+  ;; Summary: a polymorphic function's own row is the join of its
+  ;; instantiations at every call site; a hole with no resolving site stays
+  ;; open and materializes as the honest `unknown`.
+  (define incoming (make-hash))
+  (for ([(c sites) (in-hash edge-sites)])
+    (for ([site (in-list sites)])
+      (hash-update! incoming (car site) (λ (l) (cons (cons c (cdr site)) l)) '())))
+  (define (summary-row k rows)
+    (define r (hash-ref rows k (alg:empty-algebra-row)))
+    (for/fold ([r r]) ([p (in-list (alg:row-holes r))])
+      (define inst
+        (for/fold ([acc (alg:empty-algebra-row)])
+                  ([in (in-list (hash-ref incoming k '()))])
+          (define c (car in))
+          (define args (cdr in))
+          (define idx (param-index (params-of k) p))
+          (define a (and idx (< idx (length args)) (list-ref args idx)))
+          (alg:join acc (if a (arg->row c a rows) (alg:empty-algebra-row)))))
+      (if (alg:same-row? inst (alg:empty-algebra-row))
+          r
+          (alg:instantiate-row-hole r p inst))))
+  ;; Materialize the algebra rows back to the UIR row contract; holes still
+  ;; open become tracked `unknown` (never a ?-entry in the graph).
   (for/hash ([(k r) (in-hash rows)])
-    (values k (alg:algebra-row->uir r))))
+    (values k (alg:algebra-row->uir (alg:row-holes->unknown (summary-row k rows))))))

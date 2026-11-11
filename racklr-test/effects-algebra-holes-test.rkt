@@ -88,4 +88,22 @@
     (close-row-hole r id)))
 (check-false (row-holes-open? (discharge (join (join h0 h1) (mkdb)))))
 
+;; ── materialization: open holes become tracked unknown ─────────────
+(define open-row (join (join (mkdb) h0) h1))
+(define mat (row-holes->unknown open-row))
+(check-false (row-holes-open? mat))
+(check-not-false (row-lookup mat 'unknown))
+(check-not-false (row-lookup mat 'db))
+(check-true (pair? (row-provenance mat 'unknown))
+            "open-hole evidence is carried under the tracked unknown")
+(check-true (same-row? (mkdb) (row-holes->unknown (mkdb)))
+            "a hole-free row materializes unchanged")
+;; Instantiation merges by name: a row already carrying `unknown` gains no
+;; second unknown entry from the substitution.
+(define unk-row (row-of (ent "unknown" 'unknown)))
+(define merged (instantiate-row-hole (join h0 unk-row) 'h0 unk-row))
+(check-equal? (count (λ (e) (eq? (string->symbol (uir-symbol-name (uir-effect-entry-name e))) 'unknown))
+                     (uir-effect-row-entries (algebra-row->uir merged)))
+              1)
+
 (displayln "effects-algebra-holes-test: all laws hold")
