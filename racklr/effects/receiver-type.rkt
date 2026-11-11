@@ -19,11 +19,13 @@
          racklr/effects/imports
          racklr/effects/library-tokens
          racklr/effects/receiver-assign
+         racklr/effects/receiver-element
          racklr/effects/type-projection
          racklr/effects/lexicon)
 
 (provide
   receiver-types? receiver-types receiver-types-locals receiver-types-self-attrs
+  receiver-types-elem-specs
   receiver-types-merge
   infer-receiver-types
   receiver-class-of
@@ -33,9 +35,13 @@
   return-class-of
   bare-class-value)
 
-(struct receiver-types (locals self-attrs) #:transparent)
+(struct receiver-types (locals self-attrs elem-specs) #:transparent)
 ;; locals:     hash name-symbol → class-name-symbol
 ;; self-attrs: hash attr-symbol → class-name-symbol (on self / cls)
+;; elem-specs: hash name-symbol → element-spec: a class symbol (the element
+;;             class of an iterable the name is bound to) or a list of class
+;;             symbols (a tuple the loop destructures, e.g. os.walk yields
+;;             (str list list)).
 
 (define (self-or-cls-var? v [tokens default-effect-tokens])
   (and (or (uir-var? v) (uir-symbol? v))
@@ -332,15 +338,25 @@
                               #:methods [methods #f]
                               #:fn-defs [fn-defs #f]
                               #:known [known #f]
-                              #:comp-supers [comp-supers #f])
+                              #:comp-supers [comp-supers #f]
+                              #:element-types [element-types #f]
+                              #:param-element-specs [param-element-specs (hash)])
   (define locals (make-hash))
   (define self-attrs (hash-copy base-attrs))
+  (define elem-specs (make-hash))   ;; var -> element-spec (symbol | list)
+  ;; A declared param ELEMENT type (`for message in messages` where `messages`
+  ;; is an external entry-point param): the element class seeds the loop
+  ;; variable exactly as a for-loop's elem-spec would, so `message.message()`
+  ;; resolves through the element class's method table.
+  (for ([(nm espec) (in-hash param-element-specs)])
+    (hash-set! elem-specs nm espec)
+    (when (symbol? espec) (hash-set! locals nm espec)))
   (define (value-class value)
     (or (and (uir-call? value) return-types methods fn-defs known comp-supers
              (corpus-call-return-type (uir-call-callee value) comp class-defs owner
                                       methods fn-defs known comp-supers return-types
                                       tokens))
-        (value-class-of value (receiver-types locals self-attrs)
+        (value-class-of value (receiver-types locals self-attrs elem-specs)
                         class-defs tokens import-env comp owner)))
   ;; Seed parameter types: from the annotation (`def f(x: QuerySet)`) when there
   ;; is one, else from the parameter's DEFAULT VALUE (`def run(server_cls =
@@ -371,31 +387,81 @@
                               tname)
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
+  ;; Element spec of an iterable value, for alias tracking (`entries =
+  ;; os.scandir(path)` then `for entry in entries`).
+  (define (elem-spec-of value)
+    (iterable-element-spec value (receiver-types locals self-attrs elem-specs)
+                           tokens import-env comp
+                           (λ (v) (value-class-of v (receiver-types locals self-attrs elem-specs)
+                                                  class-defs tokens import-env comp owner))
+                           #:class-defs class-defs
+                           #:methods methods
+                           #:fn-defs fn-defs
+                           #:known known
+                           #:comp-supers comp-supers
+                           #:owner owner
+                           #:element-types element-types
+                           #:elem-spec-lookup (λ (nm) (hash-ref elem-specs nm #f))))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
   ;; caller supplies the value projection, host implicit-receiver name test and
   ;; env setters.
   (apply-assignments! body value-class
                       (λ (n) (tokens-self-name? tokens n))
                       (λ (nm cls) (hash-set! locals nm cls))
-                      (λ (attr cls) (hash-set! self-attrs attr cls)))
+                      (λ (attr cls) (hash-set! self-attrs attr cls))
+                      #:elem-spec-of elem-spec-of
+                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec)))
   ;; `with ctx() as name:` binds the context manager's RESULT type: track the
   ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
-  ;; later `executor.submit(...)` resolves instead of staying `unknown`.
+  ;; later `executor.submit(...)` resolves instead of staying `unknown`. Its
+  ;; element spec is tracked too (`with os.scandir(p) as entries`).
   (define (process-with! n)
     (for ([item (in-list (uir-with-items n))])
       (when (and (pair? item) (pair? (cdr item)))
         (define target (second item))
-        (define nm (cond
-                     [(uir-var? target)
-                      (string->symbol (uir-symbol-name (uir-var-name target)))]
-                     [(uir-symbol? target)
-                      (string->symbol (uir-symbol-name target))]
-                     [else #f]))
+        (define nm (bare-name-symbol target))
         (when nm
           (define cls (value-class (first item)))
-          (when cls (hash-set! locals nm cls))))))
-  (walk-body body (λ (n) (when (uir-with? n) (process-with! n))))
-  (receiver-types locals self-attrs))
+          (when cls (hash-set! locals nm cls))
+          (define espec (elem-spec-of (first item)))
+          (when espec (hash-set! elem-specs nm espec))))))
+  ;; `for v in ITER:` binds v to ITER's element class (single) or the
+  ;; destructuring tuple spec (list). A list spec is stored only in elem-specs
+  ;; (a tuple has no method table); a single spec is ALSO a locals class so
+  ;; `v.m()` resolves through receiver-class-of.
+  (define (process-for! n)
+    (define espec (elem-spec-of (uir-for-each-iterable n)))
+    (define vnm (bare-name-symbol (uir-for-each-var n)))
+    (when (and vnm espec)
+      (hash-set! elem-specs vnm espec)
+      (when (symbol? espec) (hash-set! locals vnm espec))))
+  ;; A comprehension `(call "<type>-comp" (list result loop-var iter filter))`
+  ;; binds loop-var (a var, or a uir-list for tuple destructuring) over iter
+  ;; exactly like a for-loop, so the comp var's element methods resolve.
+  (define (process-comp! n)
+    (and (uir-call? n)
+         (let ([callee (uir-call-callee n)])
+           (and (uir-symbol? callee)
+                (set-member? (tokens-comprehension-callees tokens)
+                             (uir-symbol-name callee))
+                (let ([args (uir-call-args n)])
+                  (and (>= (length args) 3)
+                       (let* ([lv (second args)]
+                              [iter (third args)]
+                              [espec (elem-spec-of iter)]
+                              [vars (if (uir-list? lv) (uir-list-items lv) (list lv))])
+                         (when espec
+                           (for ([v (in-list vars)])
+                             (define vnm (bare-name-symbol v))
+                             (when vnm
+                               (hash-set! elem-specs vnm espec)
+                               (when (symbol? espec)
+                                 (hash-set! locals vnm espec))))))))))))
+  (walk-body body (λ (n)
+                    (when (uir-with? n) (process-with! n))
+                    (when (uir-for-each? n) (process-for! n))
+                    (process-comp! n)))
+  (receiver-types locals self-attrs elem-specs))
 
 ;; Overlay `overlay`'s entries onto `base` (overlay wins on a key collision).
 (define (hash-overlay base overlay)
@@ -403,10 +469,12 @@
   (for ([(k v) (in-hash overlay)]) (hash-set! out k v))
   out)
 
-;; Merge two receiver-type environments; `overlay`'s locals and self-attrs win.
-;; Used to layer a function's own receiver tracking over its class's inherited
-;; self-attributes (collected across fields, __init__ and all methods).
+;; Merge two receiver-type environments; `overlay`'s locals, self-attrs and
+;; elem-specs win. Used to layer a function's own receiver tracking over its
+;; class's inherited self-attributes (collected across fields, __init__ and all
+;; methods).
 (define (receiver-types-merge base overlay)
   (receiver-types
    (hash-overlay (receiver-types-locals base) (receiver-types-locals overlay))
-   (hash-overlay (receiver-types-self-attrs base) (receiver-types-self-attrs overlay))))
+   (hash-overlay (receiver-types-self-attrs base) (receiver-types-self-attrs overlay))
+   (hash-overlay (receiver-types-elem-specs base) (receiver-types-elem-specs overlay))))

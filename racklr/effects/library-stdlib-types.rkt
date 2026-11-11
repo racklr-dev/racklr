@@ -18,8 +18,13 @@
          stdlib-module-result-types-data
          stdlib-module-class-refs-data
          stdlib-type-result-projections-data
+         stdlib-module-element-types-data
+         stdlib-method-element-types-data
+         class-attr-element-types-data
          declared-param-types
-         declared-return-types)
+         declared-return-types
+         declared-element-types
+         declared-param-element-types)
 
 (define stdlib-type-methods-data
   (hash
@@ -573,3 +578,103 @@
    (cons "django.core.mail.message" 'EmailMessage.message) 'Message
    (cons "django.core.serializers.python" 'Deserializer._get_model_from_node) 'Model
    (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model))
+
+;; ELEMENT TYPE(S) of a module FUNCTION used as an iterable in a for-loop / with
+;; (`for dirpath, dirnames, filenames in os.walk(...)`, `with os.scandir(p) as
+;; entries`). The function's module resolves through the import graph (like
+;; imported-module-result-type); the value is the element class, or a LIST of
+;; element classes for a tuple-yielding generator the loop destructures. This
+;; is receiver-TYPE data, kept here — never in engine code.
+(define stdlib-module-element-types-data
+  (hash
+   ;; os.walk yields 3-tuples (dirpath, dirnames, filenames): str, list, list.
+   "os" (hash "walk" '(str list list)
+               ;; os.scandir yields DirEntry values.
+               "scandir" 'DirEntry)
+   ;; django.db.connections is the ConnectionHandler singleton; a subscript
+   ;; connections[database] yields the BaseDatabaseWrapper for that alias
+   ;; (schema_editor/cursor carry the db domain).
+   "django.db" (hash "connections" 'BaseDatabaseWrapper)))
+
+;; ELEMENT TYPE of a METHOD call on a tracked stdlib/framework receiver, used
+;; when the method's result is ITERATED (`for c in response.cookies.values()`):
+;; (receiver-class . method) -> element class. The iterable mirror of
+;; stdlib-method-result-types-data; a call classified through this table still
+;; projects its receiver class, never a name-only guess.
+(define stdlib-method-element-types-data
+  (hash
+   ;; http.cookies.SimpleCookie is a dict subclass whose values() yields
+   ;; Morsel instances (each cookie's value).
+   "SimpleCookie" (hash "values" "Morsel" "items" "Morsel")))
+
+;; ELEMENT TYPE of an ATTRIBUTE on a tracked framework class, used when the
+;; attribute is ITERATED (`for operation in migration.operations`) or
+;; subscripted: (class . attr) -> element class. The attribute mirror of
+;; class-attr-types-data (which names the attribute's VALUE class); this names
+;; the class of the container's ELEMENTS. A receiver resolved through this
+;; table still classifies by the element class's own effect domain.
+(define class-attr-element-types-data
+  (hash
+   ;; django.core.management.commands.loaddata.Command.objs_with_deferred_fields
+   ;; is a list of DeserializedObject appended in save_obj(); save_deferred_fields
+   ;; writes deferred fields (db).
+   "Command" (hash "objs_with_deferred_fields" "DeserializedObject")
+   ;; django.db.migrations.migration.Migration.operations / merged_operations
+   ;; are lists of Operation; formatted_description renders each (pure).
+   "Migration" (hash "operations" "Operation" "merged_operations" "Operation")
+   ;; django.db.migrations.graph.MigrationGraph.nodes is a dict of Migration;
+   ;; nodes[key] yields the Migration the loader will write (pure formatting).
+   "django.db.migrations.graph.MigrationGraph" (hash "nodes" "Migration")
+   ;; django.db.migrations.loader.MigrationLoader.applied_migrations is a dict
+   ;; of MigrationRecord namedtuples (whose .applied is a datetime).
+   "MigrationLoader" (hash "applied_migrations" "MigrationRecord")))
+
+;; Declared ELEMENT types for iterable-returning calls whose element class no
+;; corpus assignment can project: keyed (module-path . qualified-name) →
+;; element spec (a class symbol — often a module-qualified marker so an
+;; external framework class resolves to its module's effect domain — or a list
+;; for tuple destructuring). The qualified-name for a call is the corpus
+;; Class.method / bare function name, or the imported binding's handle name
+;; (`engines.all` for `from django.template import engines` then
+;; `engines.all()`). This is the iterable mirror of declared-return-types.
+(define declared-element-types
+  (hash
+   ;; `for engine in engines.all()` in checks/templates.py: Engine lives in
+   ;; django.template (pure rendering).
+   (cons "django.template" 'engines.all) 'django.template.engine.Engine
+   ;; `for model in apps.get_models()` in checks/model_checks.py: the model
+   ;; class lives in django.db (db).
+   (cons "django.apps" 'apps.get_models) 'django.db.models.base.Model
+   ;; `for conn in connections.all()` in runserver.py: DatabaseWrapper lives
+   ;; in django.db (db).
+   (cons "django.db" 'connections.all) 'django.db.backends.base.base.BaseDatabaseWrapper
+   ;; `for future in concurrent.futures.as_completed(futures)`:
+   ;; concurrent.futures.Future (result() waits on the worker -> process).
+   (cons "concurrent" 'as_completed) 'Future
+   ;; `for field_node in getChildrenByTagName(node, "field")`: xml.dom Node
+   ;; (getAttribute/expandNode are pure in-memory DOM reads).
+   (cons "django.core.serializers.xml_serializer" 'getChildrenByTagName) 'Node))
+
+;; Declared ELEMENT types for a PARAMETER (or local) that is iterated in a
+;; for-loop whose element class no corpus assignment can project: keyed
+;; (module-path . qualified-name) → ((param-name . element-class) ...) — the
+;; iterable-param mirror of declared-param-types. A `for message in messages`
+;; loop where `messages` is an external entry-point param
+;; (`EmailBackend.send_messages`, `Command.format_json`, `Command.create_table`)
+;; has no corpus call site to type the iterable, so the loop variable's element
+;; class is seeded from this table instead. Call-chain evidence WINS: a param
+;; whose element type the fixpoint already projects is never overwritten.
+(define declared-param-element-types
+  (hash
+   ;; EmailBackend.send_messages iterates the messages it will redirect;
+   ;; message.message() builds the stdlib Message (already declared return).
+   (cons "django.core.mail.backends.locmem" 'EmailBackend.send_messages)
+   (list (cons 'messages 'EmailMessage))
+   ;; Command.format_json iterates the resolved URL patterns; _asdict() is the
+   ;; namedtuple->dict projection (pure).
+   (cons "django.core.management.commands.listurls" 'Command.format_json)
+   (list (cons 'url_patterns 'RegexURLPattern))
+   ;; Command.create_table iterates the model fields; f.db_type() renders the
+   ;; SQL column type (pure formatting).
+   (cons "django.core.management.commands.createcachetable" 'Command.create_table)
+   (list (cons 'fields 'Field))))

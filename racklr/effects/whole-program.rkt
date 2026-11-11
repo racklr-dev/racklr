@@ -146,6 +146,7 @@
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define return-types (type-relations-return tr))
+  (define elem-specs (type-relations-elem-specs tr))
 
   (define known (make-hash))
   (for ([(k _) (in-hash fns)]) (hash-set! known k #t))
@@ -164,7 +165,8 @@
     (define owner (owner-of-key k))
     (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
     (receiver-types (hash-ref assign k (hash))
-                    (or (and class-env (receiver-types-self-attrs class-env)) (hash))))
+                    (or (and class-env (receiver-types-self-attrs class-env)) (hash))
+                    (hash-ref elem-specs k (hash))))
 
   ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))

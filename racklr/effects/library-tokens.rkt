@@ -38,6 +38,9 @@
   effect-tokens-pure-method-names
   effect-tokens-module-result-types effect-tokens-receiver-modules
   effect-tokens-module-class-refs effect-tokens-type-result-projections
+  effect-tokens-module-element-types
+  effect-tokens-stdlib-method-element-types
+  effect-tokens-class-attr-element-types
   effect-tokens-pure-native-builtin-names
   effect-tokens-dialect
   default-effect-tokens)
@@ -64,6 +67,7 @@
    string-method-names pure-method-names
    module-result-types receiver-modules
    module-class-refs type-result-projections
+   module-element-types stdlib-method-element-types class-attr-element-types
    ;; Host-NATIVE pure procedures (the compiler's own Racket front end, from
    ;; library-racket-tokens.rkt). A dedicated table: it must never feed the
    ;; Python/JS value-constructor table receiver typing reads, so a Racket
@@ -281,6 +285,10 @@
    ;; ── receiver-type → call → result-type for type-preserving projections
    ;; (pathlib's `/` and `with_suffix` keep the path type).
    stdlib-type-result-projections-data
+   ;; ── iterable element types: module fn / receiver method / class attr ──
+   stdlib-module-element-types-data
+   stdlib-method-element-types-data
+   class-attr-element-types-data
    ;; ── host-NATIVE pure procedures (the Racket corpus front end) ──
    racket-pure-builtins
    ;; ── host naming / encoding conventions ──

@@ -23,7 +23,9 @@
          mro-method-keys
          method-callee-keys
          bare-function-key
+         module-function-key
          corpus-call-return-type
+         call-element-spec
          imported-module-class-ref
          imported-binding-module-path
          member-access-fields
@@ -219,6 +221,69 @@
                            [(eq? kt t) (loop (cdr mks) t)]
                            [else #f])]))))))))
 
+
+;; `(component . func)` key for a module-qualified corpus function call
+;; (`mail.get_connection(...)`, `timezone.now()`): the root resolves through
+;; the current file's import namespace to a module handle, and `func` is a bare
+;; function defined in that module. Returns the known corpus fn key, or #f.
+;; This is the RESULT-half mirror of `imported-fn-effect`'s effect half: a
+;; corpus module's function call must project its declared/derived return type
+;; through the same call chain, instead of only resolving unscanned imports.
+(define (module-function-key root func comp import-env fn-defs known)
+  (and import-env comp root func
+       (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+              [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+              [h (and e (hash-ref e (symbol->string root) #f))])
+         (and (handle? h) (eq? (handle-kind h) 'module) (handle-path h)
+              (let* ([target-mod (handle-path h)]
+                     [defs (remove-duplicates (hash-ref fn-defs func '()))])
+                (for/or ([c (in-list defs)])
+                  (define cm (hash-ref (import-env-comp-modpath import-env) c #f))
+                  (and cm (equal? cm target-mod)
+                       (let ([k (cons c func)])
+                         (and (hash-has-key? known k) k)))))))))
+
+;; (module-path . qualified-name) candidate keys an iterable call's callee
+;; could declare an element type under: corpus method keys (Class.method),
+;; corpus bare/module-qualified function keys, and the imported-handle key
+;; (root.func for a singleton binding like `engines.all`, or bare func for a
+;; module handle like `concurrent.futures.as_completed`).
+(define (callee-element-keys callee comp owner class-defs methods fn-defs known comp-supers import-env)
+  (define out '())
+  (define (add! modpath qn) (when (and modpath qn) (set! out (cons (cons modpath qn) out))))
+  (for ([k (in-list (method-callee-keys callee comp owner methods class-defs comp-supers))])
+    (add! (and import-env (hash-ref (import-env-comp-modpath import-env) (car k) #f)) (cdr k)))
+  (define nm (callee-name callee))
+  (let ([bk (and nm (bare-function-key nm comp fn-defs known))])
+    (add! (and bk import-env (hash-ref (import-env-comp-modpath import-env) (car bk) #f)) nm))
+  (when (and (member-access-callee? callee) (dotted-root callee) (effect-op-of-callee callee))
+    (let ([mk (module-function-key (dotted-root callee) (effect-op-of-callee callee) comp import-env fn-defs known)])
+      (when mk
+        (add! (and import-env (hash-ref (import-env-comp-modpath import-env) (car mk) #f))
+              (cdr mk)))))
+  (when import-env
+    (let* ([root (dotted-root callee)]
+           [func (and (member-access-callee? callee) (effect-op-of-callee callee))]
+           [modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+           [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+           [h (and e root (hash-ref e (symbol->string root) #f))])
+      (when (and h (handle-path h))
+        (add! (handle-path h)
+              (if (handle-name h)
+                  (if func (string->symbol (format "~a.~a" (handle-name h) func))
+                      (string->symbol (handle-name h)))
+                  func)))))
+  (reverse out))
+
+;; ELEMENT SPEC of an iterable call, from the declared element-types lexicon
+;; (library-config DATA): the first (module-path . qualified-name) key with an
+;; entry. A symbol = single element class (possibly a module-qualified marker,
+;; so an external framework class resolves to its module's domain); a list =
+;; tuple-destructuring spec. #f = no declared element type.
+(define (call-element-spec callee comp owner class-defs methods fn-defs known comp-supers import-env element-types)
+  (and element-types
+       (for/or ([k (in-list (callee-element-keys callee comp owner class-defs methods fn-defs known comp-supers import-env))])
+         (hash-ref element-types k #f))))
 
 ;; ── imported receiver-TYPE projection ────────────────────────────────
 

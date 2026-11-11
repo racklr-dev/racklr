@@ -154,6 +154,10 @@
     (hash)
     ;; type-preserving call projections: none for the JS host yet
     (hash)
+    ;; iterable element types: none for the JS host yet
+    (hash)
+    (hash)
+    (hash)
     ;; native pure procedures: none for the JS host (its pure names are the
     ;; whole-module / receiver-type tables above)
     (set)

@@ -33,14 +33,16 @@
 (provide type-relations? type-relations
          type-relations-assign type-relations-self-attr
          type-relations-param type-relations-return
+         type-relations-elem-specs
          set-type-relations-assign! set-type-relations-self-attr!
          set-type-relations-param! set-type-relations-return!
+         set-type-relations-elem-specs!
          materialize-type-relations
          close-type-relations!
          class-attr-env
          seed-params)
 
-(struct type-relations (assign self-attr param return) #:transparent #:mutable)
+(struct type-relations (assign self-attr param return elem-specs) #:transparent #:mutable)
 
 (define (key<? a b)
   (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
@@ -185,7 +187,7 @@
         (define c2 (car sr))
         (define s (cdr sr))
         (when (and c2 s) (loop c2 s)))))
-  (receiver-types (hash) acc))
+  (receiver-types (hash) acc (hash)))
 
 ;; Syntax-visible seed: the self-attr relation from class fields + method
 ;; bodies. assign/param/return are empty until the join runs.
@@ -194,6 +196,7 @@
   (type-relations (make-hash)
                   (class-self-attrs comp-programs class-defs import-env (hash)
                                     #:tokens tokens)
+                  (make-hash)
                   (make-hash)
                   (make-hash)))
 
@@ -214,6 +217,8 @@
                                #:fn-parents [fn-parents (hash)]
                                #:declared-params [declared-params #f]
                                #:declared-returns [declared-returns #f]
+                               #:element-types [element-types #f]
+                               #:param-element-types [param-element-types #f]
                                #:tokens [tokens default-effect-tokens])
   ;; Declared tables default to the library-stdlib-types DATA, the same way the
   ;; reference architecture did; an explicit #:declared-* arg (a caller-injected
@@ -221,10 +226,13 @@
   ;; editing the engine.
   (define declared-params* (or declared-params declared-param-types))
   (define declared-returns* (or declared-returns declared-return-types))
+  (define element-types* (or element-types declared-element-types))
+  (define param-element-types* (or param-element-types declared-param-element-types))
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define param (type-relations-param tr))
   (define return (type-relations-return tr))
+  (define elem-specs (type-relations-elem-specs tr))
 
   (define all-keys (sort (append (hash-keys fns) (hash-keys methods)) key<?))
   (define known (make-hash))
@@ -242,12 +250,14 @@
     (if (hash-has-key? fns k) (hash-ref fn-params k '()) (hash-ref method-params k '())))
 
   ;; Full per-key receiver env: locals from the assign relation, self-attrs from
-  ;; the class's MRO-closed self-attr relation.
+  ;; the class's MRO-closed self-attr relation, elem-specs from the closed
+  ;; per-key elem-spec relation.
   (define (rt-of k)
     (define owner (owner-of k))
     (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
     (receiver-types (hash-ref assign k (hash))
-                    (or (and class-env (receiver-types-self-attrs class-env)) (hash))))
+                    (or (and class-env (receiver-types-self-attrs class-env)) (hash))
+                    (hash-ref elem-specs k (hash))))
 
   (define (rebuild-self-attrs!)
     (set! self-attr (class-self-attrs comp-programs class-defs import-env param
@@ -261,6 +271,16 @@
       (define owner (owner-of k))
       (define class-env (and owner (class-attr-env comp owner self-attr class-defs comp-supers)))
       (define base-attrs (or (and class-env (receiver-types-self-attrs class-env)) (hash)))
+      ;; Declared param ELEMENT types for this key (an external entry-point
+      ;; param/local iterated in a for-loop): param-name -> element class.
+      (define param-element-specs
+        (let* ([modpath (and import-env
+                             (hash-ref (import-env-comp-modpath import-env) comp #f))]
+               [entry (and modpath param-element-types*
+                           (hash-ref param-element-types* (cons modpath (cdr k)) #f))])
+          (if entry
+              (for/hash ([pd (in-list entry)]) (values (car pd) (cdr pd)))
+              (hash))))
       (define rt (infer-receiver-types (body-of k) class-defs base-attrs import-env comp
                                        (seed-params (params-of k) k param) owner
                                        #:tokens tokens
@@ -268,9 +288,13 @@
                                        #:methods methods
                                        #:fn-defs fn-defs
                                        #:known known
-                                       #:comp-supers comp-supers))
-      (hash-set! assign k (receiver-types-locals rt)))
-    (set-type-relations-assign! tr assign))
+                                       #:comp-supers comp-supers
+                                       #:element-types element-types*
+                                       #:param-element-specs param-element-specs))
+      (hash-set! assign k (receiver-types-locals rt))
+      (hash-set! elem-specs k (receiver-types-elem-specs rt)))
+    (set-type-relations-assign! tr assign)
+    (set-type-relations-elem-specs! tr elem-specs))
 
   (define (collect-params!)
     (define cands (make-hash))   ;; (cons key idx) -> (listof class-symbol)
@@ -420,6 +444,7 @@
     (define prev-self-attr (hash-copy self-attr))
     (define prev-param (hash-copy param))
     (define prev-return (hash-copy return))
+    (define prev-elem-specs (hash-copy elem-specs))
     (rebuild-self-attrs!)
     (rebuild-assign!)
     (set! param (collect-params!))
@@ -433,7 +458,8 @@
       [(and (equal? prev-assign assign)
             (equal? prev-self-attr self-attr)
             (equal? prev-param param)
-            (equal? prev-return return))
+            (equal? prev-return return)
+            (equal? prev-elem-specs elem-specs))
        tr]
       [(>= round 100)
        (eprintf "type-relations: join did not converge in ~a rounds\n" round)

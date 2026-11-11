@@ -32,25 +32,36 @@
 ;; Record the class of an assignment target. `value-class` projects a value
 ;; expression to its class; `self-name?` identifies the host's implicit
 ;; receiver name; `set-local!` / `set-self-attr!` update the caller's env.
-(define (apply-assignments! body value-class self-name? set-local! set-self-attr!)
-  (define (record! lhs cls)
+;; `elem-spec-of` (optional) projects a value to its iterable ELEMENT spec, and
+;; `set-local-elem!` records it for the target name (`entries = os.scandir(p)`
+;; so a later `for entry in entries` types the loop var).
+(define (apply-assignments! body value-class self-name? set-local! set-self-attr!
+                            #:elem-spec-of [elem-spec-of #f]
+                            #:set-local-elem! [set-local-elem! (λ (nm espec) (void))])
+  (define (record! lhs value)
+    (define cls (value-class value))
     (when cls
       (define attr (and (member-access-callee? lhs) (member-access-field lhs)))
       (cond
         [(and attr (self-name? (bare-name-symbol (member-access-base lhs))))
          (set-self-attr! attr cls)]
         [(target-name-symbol lhs) => (λ (nm) (set-local! nm cls))]
-        [else (void)])))
+        [else (void)]))
+    (when elem-spec-of
+      (define lhsnm (target-name-symbol lhs))
+      (when lhsnm
+        (define espec (elem-spec-of value))
+        (when espec (set-local-elem! lhsnm espec)))))
   ;; `(call "=" (list target value))`: the JS/TS assignment encoding.
   (define (assignment-call n)
     (and (uir-call? n)
          (uir-symbol? (uir-call-callee n))
          (eq? (string->symbol (uir-symbol-name (uir-call-callee n))) '=)
          (= (length (uir-call-args n)) 2)
-         (record! (first (uir-call-args n)) (value-class (second (uir-call-args n))))))
+         (record! (first (uir-call-args n)) (second (uir-call-args n)))))
   (walk-body body
              (λ (n)
                (cond
-                 [(uir-set!? n) (record! (uir-set!-name n) (value-class (uir-set!-value n)))]
+                 [(uir-set!? n) (record! (uir-set!-name n) (uir-set!-value n))]
                  [(assignment-call n) (void)]
                  [else (void)]))))
