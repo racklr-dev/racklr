@@ -181,7 +181,8 @@ state.
   algebra (see the kernel-leaf section of ROADMAP.md): split the algebra into
   a small trusted kernel (laws, subtype relation, certificate checker) with
   inference as an untrusted producer, so the gate decides by proof rather than
-  by convention. Not started. Depends on P1.5 (algebra landed) and P0.3
+  by convention. Not started. Its Phase-1 prerequisites — P1.5 (algebra),
+  row holes, and the Pass-4 contract check — are landed; it is gated on P0.3
   (zero-unknown bar); the test plan, line budget, and falsification criteria
   live in ROADMAP.md.
 
@@ -206,10 +207,26 @@ state.
     with `effect-subtype?` for declared rows carrying `must-not`, and adds
     `declared-prohibited-effects` so a contract check can never read a
     prohibition as "no statement".
-  - Still open for Phase 1: effect polymorphism (row holes) and the Pass-4
-    contract check over the new relation (`docs/effects-proposal.md` §11). The
-    row holes are exactly what P0.3's higher-order `bare-call` / `self-method`
-    unknowns need.
+  - Phase 1 tail landed 2026-11: effect polymorphism (row holes) and the Pass-4
+    contract check over the new relation.
+    - `racklr/effects/algebra/holes.rkt`: provenance-carrying row holes as
+      ?-prefixed entries (`row-hole`/`row-holes`/`instantiate-row-hole`/
+      `close-row-hole`/`row-holes->unknown`); instantiation joins by name and
+      grounds the concrete effects with the hole's evidence; open holes
+      materialize as tracked `unknown`, never a ?-entry.
+    - `whole-program.rkt`: a bare call to a parameter is a hole; the fixpoint
+      instantiates each hole with the argument's row at every call site, and a
+      polymorphic function's summary is the join of its instantiations.
+    - `effervesce/check/bridge.rkt`: the Pass-4 contract check now runs through
+      `row-uninterpreted-effects/interpretation` (the new subtyping relation)
+      instead of the flat capability->effect-name table.
+    - Measured (django/django/core): baseline unchanged (`sha256:be9db70a…`,
+      unknown 231 fns / 64 files, exit 3). The 15 higher-order sites are
+      framework callbacks (`send`/`receive`/`start_response`/`on_bind`/`Model`/
+      `child_cls`) whose concrete callers live outside the core probe, so there
+      is nothing in this corpus to instantiate yet — the mechanism is proven by
+      tests, and the numeric win is on an application corpus, not this probe.
+    - Still open for Phase 1: the kernel-leaf split (P1.6), gated on P0.3.
 
 ## Phase 2 work landed
 
