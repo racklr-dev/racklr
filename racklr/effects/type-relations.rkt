@@ -26,6 +26,8 @@
          racklr/effects/shape
          racklr/effects/receiver-type
          racklr/effects/library-tokens
+         racklr/effects/library-stdlib-types
+         racklr/effects/imports
          racklr/effects/lexicon)
 
 (provide type-relations? type-relations
@@ -94,6 +96,42 @@
                         (uir-typed-param-default p)
                         (uir-typed-param-kind p))]
       [else p])))
+
+;; Declared param signatures (library DATA) fill external-entry-point params
+;; the corpus call chain could not type: a parameter supplied by a caller
+;; OUTSIDE the scanned tree (WSGI/ASGI server, test client, mail backend,
+;; database layer) has no in-corpus call site to project it. The table is keyed
+;; (module-path . qualified-name) -> ((param-name . class-name) ...); this maps
+;; it onto the (cons key idx) param relation and OVERLAYS it only where
+;; call-site collection left the param untyped (call-chain evidence wins —
+;; never overwritten by a declared fallback).
+(define (seed-declared-params param all-keys params-of import-env declared-params)
+  (define (param-name p)
+    (cond
+      [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
+      [(uir-typed-param? p)
+       (and (uir-symbol? (uir-typed-param-name p))
+            (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
+      [else #f]))
+  (define out (hash-copy param))
+  (for ([k (in-list all-keys)])
+    (define modpath (and import-env
+                         (hash-ref (import-env-comp-modpath import-env) (car k) #f)))
+    (define entry (and modpath declared-params
+                       (hash-ref declared-params (cons modpath (cdr k)) #f)))
+    (when entry
+      (define ps (params-of k))
+      (define names (for/list ([p (in-list ps)]) (param-name p)))
+      (for ([pd (in-list entry)])
+        ;; for/or finds the first non-#f index; for/first would silently keep
+        ;; the first iteration's value (see collect-params!'s note).
+        (define idx (for/or ([i (in-naturals)] [n (in-list names)]
+                             #:when (eq? n (car pd)))
+                      i))
+        (define kk (cons k idx))
+        (when (and idx (not (hash-has-key? out kk)))
+          (hash-set! out kk (cdr pd))))))
+  out)
 
 ;; Self-attribute assignments collected across every class: class-level field
 ;; initializers first, then `self.attr = KnownClass(...)` from every method
@@ -174,7 +212,15 @@
                                #:fn-defs fn-defs
                                #:comp-supers comp-supers
                                #:fn-parents [fn-parents (hash)]
+                               #:declared-params [declared-params #f]
+                               #:declared-returns [declared-returns #f]
                                #:tokens [tokens default-effect-tokens])
+  ;; Declared tables default to the library-stdlib-types DATA, the same way the
+  ;; reference architecture did; an explicit #:declared-* arg (a caller-injected
+  ;; lexicon) overrides it, so a non-Python host supplies its own instead of
+  ;; editing the engine.
+  (define declared-params* (or declared-params declared-param-types))
+  (define declared-returns* (or declared-returns declared-return-types))
   (define assign (type-relations-assign tr))
   (define self-attr (type-relations-self-attr tr))
   (define param (type-relations-param tr))
@@ -351,13 +397,22 @@
         (when c (hash-set! out kk c))))
     out)
 
+  ;; Declared return type for a corpus function whose body projects no class:
+  ;; keyed (module-path . qualified-name) -> class-name. Body projection wins
+  ;; (`(or r dr)`), so a declared entry never overwrites real evidence.
+  (define (declared-return-of k)
+    (define modpath (and import-env
+                         (hash-ref (import-env-comp-modpath import-env) (car k) #f)))
+    (and modpath declared-returns*
+         (hash-ref declared-returns* (cons modpath (cdr k)) #f)))
+
   (define (collect-returns!)
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
-      (hash-set! return k
-                 (return-class-of (body-of k) (rt-of k) class-defs
-                                  tokens import-env comp owner)))
+      (define r (return-class-of (body-of k) (rt-of k) class-defs
+                                 tokens import-env comp owner))
+      (hash-set! return k (or r (declared-return-of k))))
     (set-type-relations-return! tr return))
 
   (let loop ([round 0])
@@ -368,6 +423,9 @@
     (rebuild-self-attrs!)
     (rebuild-assign!)
     (set! param (collect-params!))
+    ;; Declared fallback fills only call-chain gaps (call-chain evidence wins).
+    (set! param (seed-declared-params param all-keys params-of import-env
+                                     declared-params*))
     (set-type-relations-param! tr param)
     (collect-returns!)
     (set! return (type-relations-return tr))

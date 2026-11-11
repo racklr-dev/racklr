@@ -17,7 +17,9 @@
 (provide stdlib-type-methods-data
          stdlib-module-result-types-data
          stdlib-module-class-refs-data
-         stdlib-type-result-projections-data)
+         stdlib-type-result-projections-data
+         declared-param-types
+         declared-return-types)
 
 (define stdlib-type-methods-data
   (hash
@@ -99,6 +101,7 @@
    "HelpFormatter" (hash "__init__" 'pure "add_arguments" 'pure "add_usage" 'pure
                          "format_help" 'pure "format_usage" 'pure)
    "ArgumentParser" (hash "__init__" 'pure "add_argument" 'pure "add_subparsers" 'pure
+                         "add_mutually_exclusive_group" 'pure "add_argument_group" 'pure
                           "parse_args" 'pure "parse_known_args" 'pure
                           "format_help" 'pure "format_usage" 'pure
                           "print_help" 'io "print_usage" 'io "error" 'io "exit" 'process)
@@ -267,7 +270,130 @@
                  "keys" 'cache "ttl" 'cache "setex" 'cache "hset" 'cache
                  "hget" 'cache "publish" 'cache "eval" 'cache)
    "ConnectionPool" (hash "from_url" 'pure "disconnect" 'io "reset" 'io)
-   "DriverInfo" (hash "add_upstream_driver" 'pure)))
+   "DriverInfo" (hash "add_upstream_driver" 'pure)
+   ;; django.http.request.HttpRequest methods inherited by WSGIRequest
+   ;; (_mark_post_parse_error sets an in-memory flag; pure)
+   "HttpRequest" (hash "_mark_post_parse_error" 'pure "_mark_post_parse_error_flag" 'pure
+                       "get_host" 'pure "get_port" 'pure "get_full_path" 'pure
+                       "get_full_path_info" 'pure "build_absolute_uri" 'pure
+                       "get_signed_cookie" 'pure "is_secure" 'pure "is_ajax" 'pure
+                       "get_raw_uri" 'pure "get_content_type" 'pure
+                       "_get_scheme" 'pure "_get_raw_host" 'pure)
+   ;; ── external framework / stdlib classes typed by declared param/return
+   ;; tables (django/django/core scans their use sites, not their bodies) ──
+   ;; datetime.timedelta (pure value: field reads and arithmetic are pure)
+   "timedelta" (hash "total_seconds" 'pure "days" 'pure "seconds" 'pure
+                     "microseconds" 'pure)
+   ;; float/int methods (pure numeric predicates)
+   "int" (hash "is_integer" 'pure "as_integer_ratio" 'pure "bit_length" 'pure
+                "to_bytes" 'pure "from_bytes" 'pure "real" 'pure "imag" 'pure
+                "conjugate" 'pure "numerator" 'pure "denominator" 'pure)
+   "float" (hash "is_integer" 'pure "as_integer_ratio" 'pure "hex" 'pure "fromhex" 'pure
+                  "is_finite" 'pure "conjugate" 'pure)
+   ;; argparse.Namespace (parsed options object; in-memory reads)
+   "Namespace" (hash "_get_kwargs" 'pure "__getattr__" 'pure "__contains__" 'pure)
+   ;; django.http.HttpResponse (response body already built in memory; render
+   ;; serializes it, close releases streaming resources -> io)
+   "HttpResponse" (hash "render" 'pure "content" 'pure "status_code" 'pure
+                        "reason_phrase" 'pure "set_cookie" 'pure "delete_cookie" 'pure
+                        "get" 'pure "items" 'pure "has_header" 'pure
+                        "serialize" 'pure "serialize_headers" 'pure "make_bytes" 'pure
+                        "close" 'io "write" 'io "writelines" 'io "flush" 'io
+                        "tell" 'io "read" 'io)
+   ;; email.charset.Charset (pure charset name/codec lookups)
+   "Charset" (hash "get_output_charset" 'pure "body_encode" 'pure "header_encode" 'pure
+                    "header_encode_lines" 'pure "get_body_encoding" 'pure)
+   ;; email.message.Message (stdlib): pure in-memory header/body reads
+   "Message" (hash "get_charset" 'pure "as_bytes" 'pure "as_string" 'pure
+                    "get" 'pure "get_all" 'pure "items" 'pure "keys" 'pure
+                    "values" 'pure "get_content_type" 'pure "get_content_maintype" 'pure
+                    "get_content_subtype" 'pure "get_filename" 'pure
+                    "get_param" 'pure "get_params" 'pure "is_multipart" 'pure
+                    "walk" 'pure "attach" 'pure "set_charset" 'pure)
+   ;; xml.dom Node / Element (in-memory DOM reads/mutation are pure; the
+   ;; file/network read happened when the document was parsed)
+   "Node" (hash "getAttribute" 'pure "hasAttribute" 'pure "setAttribute" 'pure
+                 "removeAttribute" 'pure "getAttributeNode" 'pure "nodeName" 'pure
+                 "nodeValue" 'pure "childNodes" 'pure "firstChild" 'pure
+                 "lastChild" 'pure "parentNode" 'pure "appendChild" 'pure
+                 "removeChild" 'pure "getElementsByTagName" 'pure
+                 "getElementsByTagNameNS" 'pure "expandNode" 'pure
+                 "toxml" 'pure "toprettyxml" 'pure)
+   ;; django.db.models.Field (external to django/django/core): reading a field's
+   ;; value from an in-memory model instance / formatting it is pure.
+   "Field" (hash "value_from_object" 'pure "value_to_string" 'pure "attname" 'pure
+                "db_type" 'pure "get_internal_type" 'pure "formfield" 'pure
+                "name" 'pure "get_attname" 'pure "get_attname_column" 'pure)
+   ;; django.db.migrations.operations.Operation (external): describe() renders
+   ;; an in-memory human-readable summary of the operation.
+   "Operation" (hash "describe" 'pure "migration_name_fragment" 'pure "reduce" 'pure
+                  "formatted_description" 'pure "state_forwards" 'pure "state_backwards" 'pure
+                  "database_forwards" 'pure "database_backwards" 'pure
+                  "references_model" 'pure "references_field" 'pure
+                  "allow_migrate_model" 'pure "elidable" 'pure)
+   ;; django.db.migrations.migration.Migration (external): suggest_name renders
+   ;; a name from the operations; pure string formatting.
+   "Migration" (hash "suggest_name" 'pure)
+   ;; django.db.models.options.Options: can_migrate consults the DB router
+   ;; (db); get_fields/value_to_string read the in-memory registry (pure).
+   "django.db.models.options.Options" (hash "get_fields" 'pure "can_migrate" 'db
+                                             "value_to_string" 'pure)
+   ;; django.db.migrations.state.ProjectState (external): in-memory migration
+   ;; state mutation (pure).
+   "ProjectState" (hash "clone" 'pure "clear_delayed_apps_cache" 'pure)
+   ;; django.apps.registry.Apps (external): model-registry mutation is the
+   ;; migrate command's model reloading (db domain).
+   "Apps" (hash "unregister_model" 'db "render_multiple" 'db "bulk_update" 'db)
+   ;; django.db.models.expressions.Expression (external): get_db_converters
+   ;; returns field converter functions (pure; DB access happens at the cursor).
+   "Expression" (hash "get_db_converters" 'pure "resolve_expression" 'pure)
+   ;; django.template.Engine / Template: parsing/rendering are in-memory.
+   "Engine" (hash "from_string" 'pure "get_template" 'pure)
+   "Template" (hash "render" 'pure)
+   ;; http.cookies.SimpleCookie / Morsel (in-memory cookie jar; pure).
+   "SimpleCookie" (hash "values" 'pure "items" 'pure "keys" 'pure "get" 'pure
+                         "load" 'pure "output" 'pure)
+   "Morsel" (hash "OutputString" 'pure "set" 'pure "update" 'pure
+                   "key" 'pure "value" 'pure "coded_value" 'pure)
+   ;; django.urls.resolvers.RegexURLPattern (namedtuple): _asdict is pure
+   ;; (in-memory tuple->dict projection).
+   "RegexURLPattern" (hash "_asdict" 'pure)
+   ;; django.db.models.base.Model (external): natural_key/_is_pk_set read the
+   ;; already-loaded instance state in memory.
+   "Model" (hash "natural_key" 'pure "_is_pk_set" 'pure "get_deferred_fields" 'pure
+                 "refresh_from_db" 'db "delete" 'db "save" 'db "clean" 'pure
+                 "full_clean" 'pure "validate_unique" 'db)
+   ;; django.db.backends.base.base.BaseDatabaseWrapper (external): the database
+   ;; connection handle; schema_editor() is the entry to schema DDL.
+   "BaseDatabaseWrapper" (hash "schema_editor" 'db "cursor" 'db "close" 'io
+                               "commit" 'db "rollback" 'db "ensure_connection" 'db
+                               "constraint_checks_disabled" 'db
+                               "check_constraints" 'db "prepare_database" 'db
+                               "check" 'db "ensure_timezone" 'pure)
+   "BaseDatabaseSchemaEditor" (hash "create_model" 'db)
+   "DatabaseValidation" (hash "check" 'db)
+   "DatabaseClient" (hash "runshell" 'process "executable_name" 'pure)
+   ;; decimal.Decimal (stdlib): as_tuple() reads the in-memory triple.
+   "Decimal" (hash "as_tuple" 'pure "as_integer_ratio" 'pure "is_finite" 'pure
+                   "is_nan" 'pure "is_infinite" 'pure "compare" 'pure "copy_abs" 'pure
+                   "copy_negate" 'pure "copy_sign" 'pure "quantize" 'pure
+                   "to_eng_string" 'pure "to_integral" 'pure "normalize" 'pure)
+   ;; os.DirEntry (os.scandir yield): is_dir/is_file/is_symlink/stat touch the
+   ;; filesystem (io); name/path/inode read the fetched entry (pure).
+   "DirEntry" (hash "is_dir" 'io "is_file" 'io "is_symlink" 'io "stat" 'io
+                    "name" 'pure "path" 'pure "inode" 'pure)
+   ;; threading.Lock / RLock (in-process synchronization, no domain effect)
+   "Lock" (hash "acquire" 'pure "release" 'pure "locked" 'pure
+                "__enter__" 'pure "__exit__" 'pure)
+   "RLock" (hash "acquire" 'pure "release" 'pure "locked" 'pure
+                 "__enter__" 'pure "__exit__" 'pure)
+   "Counter" (hash "items" 'pure "update" 'pure "get" 'pure "most_common" 'pure
+                   "elements" 'pure "subtract" 'pure "keys" 'pure "values" 'pure
+                   "copy" 'pure)
+   "deque" (hash "append" 'pure "appendleft" 'pure "pop" 'pure "popleft" 'pure
+                  "extend" 'pure "extendleft" 'pure "clear" 'pure "copy" 'pure
+                  "count" 'pure "index" 'pure "remove" 'pure "reverse" 'pure
+                  "rotate" 'pure)))
 
 ;; module-path -> (function-name -> result-type-name) for stdlib/framework
 ;; functions whose RESULT is a receiver the next call can flow through
@@ -364,3 +490,86 @@
                                 "with_name" "PureWindowsPath"
                                 "relative_to" "PureWindowsPath"
                                 "parent" "PureWindowsPath")))
+
+;; Declared param signatures for external-entry-point parameters the corpus call
+;; chain could not type: a parameter supplied by a caller OUTSIDE the scanned
+;; tree (WSGI/ASGI server, test client, mail backend, database layer) has no
+;; in-corpus call site to project it. Keyed (module-path . qualified-name) ->
+;; ((param-name . class-name) ...). class-name is a corpus class, an external
+;; framework class (resolved through stdlib-type-methods-data above), or a
+;; stdlib value type. Call-chain evidence WINS: seeding overlays only gaps.
+(define declared-param-types
+  (hash
+   (cons "django.core.handlers.exception" 'response_for_exception)
+   ;; HttpRequest (not the WSGIRequest subclass) so request._mark_post_parse_error
+   ;; resolves through the external parent's stdlib method table; WSGIRequest
+   ;; is a corpus class whose inherited HttpRequest methods are outside the scan.
+   (list (cons 'request 'HttpRequest))
+   (cons "django.core.serializers.xml_serializer" 'm2m_convert)
+   (list (cons 'n 'Node))
+   (cons "django.core.files.storage.filesystem" 'FileSystemStorage._save)
+   (list (cons 'content 'File))
+   (cons "django.core.serializers.python" 'Serializer._value_from_field)
+   (list (cons 'field 'Field))
+   (cons "django.core.mail.backends.filebased" 'EmailBackend.write_message)
+   (list (cons 'message 'EmailMessage))
+   (cons "django.core.management.commands.migrate" 'Command.sync_apps)
+   (list (cons 'connection 'BaseDatabaseWrapper))
+   (cons "django.core.management.commands.migrate" 'Command.describe_operation)
+   (list (cons 'operation 'Operation))
+   (cons "django.core.mail.message" 'EmailMessage._add_bodies)
+   (list (cons 'msg 'EmailMessage))
+   (cons "django.core.paginator" 'BasePaginator._validate_number)
+   (list (cons 'number 'float))
+   (cons "django.core.signing" 'TimestampSigner.unsign)
+   (list (cons 'max_age 'timedelta))
+   (cons "django.core.serializers.base" 'Serializer._resolve_natural_key)
+   (list (cons 'obj 'Model))
+   (cons "django.core.validators" 'DecimalValidator.__call__)
+   (list (cons 'value 'Decimal))
+   (cons "django.core.serializers.xml_serializer" 'Deserializer._handle_object)
+   (list (cons 'node 'Node))
+   (cons "django.core.mail.backends.smtp" 'EmailBackend._close_connection)
+   (list (cons 'connection 'SMTP))
+   (cons "django.core.mail.backends.smtp" 'EmailBackend._send)
+   (list (cons 'email_message 'EmailMessage))
+   (cons "django.core.mail.backends.console" 'EmailBackend.write_message)
+   (list (cons 'message 'EmailMessage))
+   (cons "django.core.management.commands.showmigrations" 'Command.add_arguments)
+   (list (cons 'parser 'ArgumentParser))
+   (cons "django.core.management.commands.dbshell" 'Command.add_arguments)
+   (list (cons 'parser 'ArgumentParser))
+   (cons "django.core.cache.backends.filebased" 'FileBasedCache._is_expired)
+   (list (cons 'f 'open))
+   (cons "django.core.serializers.xml_serializer" 'Serializer.start_object)
+   (list (cons 'obj 'Model))
+   (cons "django.core.mail.message" 'EmailMultiAlternatives._add_bodies)
+   (list (cons 'msg 'EmailMessage))
+   (cons "django.core.files.storage.memory" 'InMemoryStorage._save)
+   (list (cons 'content 'File))
+   (cons "django.core.serializers.xml_serializer" 'Serializer.handle_field)
+   (list (cons 'field 'Field))
+   (cons "django.core.mail" 'send_mass_mail)
+   (list (cons 'connection 'BaseEmailBackend))
+   (cons "django.core.mail.message" 'EmailMessage._add_attachment)
+   (list (cons 'content 'EmailMessage))
+   (cons "django.core.management.commands.loaddata" 'Command.load_label)
+   (list (cons 'fixture 'open))
+   (cons "django.core.validators" 'StepValueValidator.__call__)
+   (list (cons 'value 'Decimal))))
+
+;; Declared return types for corpus functions whose body projects no return
+;; class through the dataflow (a dynamic import_module(...).Command() result,
+;; or a runtime-dependent return): keyed (module-path . qualified-name) ->
+;; class-name. Body/call-chain evidence WINS: a return class the fixpoint
+;; already projects is never overwritten.
+(define declared-return-types
+  (hash
+   (cons "django.core.management" 'load_command_class) 'BaseCommand
+   (cons "django.core.mail" 'get_connection) 'BaseEmailBackend
+   (cons "django.core.handlers.exception" 'get_exception_response) 'HttpResponse
+   (cons "django.core.handlers.exception" 'handle_uncaught_exception) 'HttpResponse
+   (cons "django.core.management.base" 'BaseCommand.create_parser) 'ArgumentParser
+   (cons "django.core.mail.message" 'EmailMessage.message) 'Message
+   (cons "django.core.serializers.python" 'Deserializer._get_model_from_node) 'Model
+   (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model))

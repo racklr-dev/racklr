@@ -355,8 +355,20 @@
       (when pname
         (define ann (uir-typed-param-type p))
         (define def (uir-typed-param-default p))
+        (define tname (and ann (uir-symbol? ann)
+                           (string->symbol (uir-symbol-name ann))))
         (define pcls (or (and ann (bare-class-value ann class-defs
                                                     tokens import-env comp))
+                         ;; A declared or call-chain-collected param typed by an
+                         ;; external framework / stdlib class (SMTP,
+                         ;; ArgumentParser, Decimal, Message, Field, Node,
+                         ;; Model, BaseDatabaseWrapper, ...) resolves through its
+                         ;; stdlib method table: accept any class that has one,
+                         ;; exactly as call-result-type does for results.
+                         (and tname
+                              (hash-has-key? (effect-tokens-stdlib-type-methods tokens)
+                                             (symbol->string tname))
+                              tname)
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
