@@ -146,10 +146,11 @@
 (define (lower-tuple-assign lhs rhs tk-type tk-value)
   (define toks (cst-tokens-deep lhs tk-type tk-value))
   (define has-dot? (for/or ([t toks]) (eq? (first t) 'DOT)))
+  (define has-star? (for/or ([t toks]) (eq? (first t) 'STAR)))
   (define names (for/list ([t toks]
                            #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
                   (second t)))
-  (if (and (not has-dot?) (>= (length names) 2) rhs)
+  (if (and (not has-dot?) (not has-star?) (>= (length names) 2) rhs)
       (let* ([tmp (uir-symbol (symbol->string (gensym 'unpacked)))]
              [rhs-expr (lower-assign-rhs rhs tk-type tk-value)]
              [assigns

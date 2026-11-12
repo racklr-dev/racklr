@@ -50,6 +50,16 @@
     [(eq? tag 'atom_expr) (lower-atom-expr u tk-type tk-value)]
     [(eq? tag 'atom) (lower-atom u tk-type tk-value)]
     [(eq? tag 'name) (lower-name u tk-type tk-value)]
+    [(eq? tag 'testlist_star_expr)
+     ;; Multi-item expression list, e.g. a starred assignment target
+     ;; (`*a, b = c`). The leading star_expr is the spread target; lower it
+     ;; so the spread survives. Plain-name tuple targets are destructured by
+     ;; lower-tuple-assign, which never sees a star.
+     (define star-kid (for/or ([k kids])
+                        (and (eq? (any-tree-tag k) 'star_expr) k)))
+     (if star-kid
+         (uir-spread (lower-expr (first (node-children star-kid)) tk-type tk-value))
+         (uir-symbol (format "?~a" tag)))]
     [(eq? tag 'star_expr)
      ;; star_expr: '*' expr — unpacking target or splat argument
      (if (null? kids)
@@ -618,11 +628,25 @@
                           (for/or ([cc c]) (find cc))]
                          [else #f])))]
             [else #f])))
-  ;; Extract the result expression from the first test sibling
+  ;; Extract the result expression. A list/set/generator comprehension's
+  ;; result is its single element expression; a dict comprehension's result is
+  ;; the KEY:VALUE pair, encoded as (dict-item key value) so the value is
+  ;; preserved (its element type and its construction effect must stay in the
+  ;; UIR — the single source of truth — instead of being dropped by the
+  ;; lowerer).
   (define result-expr
-    (let* ([ts (walk-collection cst tk-type)]
-           [first-test (for/or ([t ts] #:when (eq? (first t) 'test)) (second t))])
-      (if first-test (lower-expr first-test tk-type tk-value) (uir-null))))
+    (cond
+      [(equal? constructor "dict-comp")
+       (let* ([ts (walk-collection cst tk-type)]
+              [tests (filter (λ (t) (eq? (first t) 'test)) ts)]
+              [key-expr (and (pair? tests) (lower-expr (second (car tests)) tk-type tk-value))]
+              [val-expr (and (pair? (cdr tests)) (lower-expr (second (cadr tests)) tk-type tk-value))])
+         (uir-call (uir-symbol "dict-item")
+                   (list (or key-expr (uir-null)) (or val-expr (uir-null)))))]
+      [else
+       (let* ([ts (walk-collection cst tk-type)]
+              [first-test (for/or ([t ts] #:when (eq? (first t) 'test)) (second t))])
+         (if first-test (lower-expr first-test tk-type tk-value) (uir-null)))]))
   (define comp-parts (lower-comp-for comp-for-node tk-type tk-value))
   (uir-call (uir-symbol constructor)
             (list result-expr (car comp-parts) (cadr comp-parts) (caddr comp-parts))))

@@ -176,7 +176,7 @@ state.
     `self.m()` leaves (drg-c128); PR #80 is the real-context unknown census
     that aims the next receiver-type levers.
 
-- **P1.6 — Kernel-leaf verification of the effect algebra: IN PROGRESS (split + machine check landed, transitivity fixed).** The
+- **P1.6 — Kernel-leaf verification of the effect algebra: DONE (verified, P0.3 gate cleared).** The
   grand vision now includes a machine-checked kernel leaf for the effect
   algebra (see the kernel-leaf section of ROADMAP.md): split the algebra into
   a small trusted kernel (laws, subtype relation, certificate checker) with
@@ -226,7 +226,7 @@ state.
       `child_cls`) whose concrete callers live outside the core probe, so there
       is nothing in this corpus to instantiate yet — the mechanism is proven by
       tests, and the numeric win is on an application corpus, not this probe.
-    - Still open for Phase 1: the kernel-leaf split (P1.6), gated on P0.3.
+    - Phase 1 closed out: the kernel-leaf split (P1.6) is done; P0.3 gate cleared (unknown 0 fns / 0 files).
 
 ## Phase 2 work landed
 

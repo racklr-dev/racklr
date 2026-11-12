@@ -89,7 +89,8 @@
                            #:provenance-record [rec-box #f]
                            #:lexicon [lex default-lexicon]
                            #:declared-param-effects [declared-param-effects
-                                                    declared-param-effect-rows])
+                                                    declared-param-effect-rows]
+                           #:known-pure-names [known-pure-names '()])
   (define tokens (lexicon-tokens lex))
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
@@ -158,6 +159,16 @@
   (define known (make-hash))
   (for ([(k _) (in-hash fns)]) (hash-set! known k #t))
   (for ([(k _) (in-hash methods)]) (hash-set! known k #t))
+  ;; Host-injected names (e.g. the compiler's own schema-generated UIR
+  ;; constructors/predicates/accessors, which lower-racket sees only as a
+  ;; macro use): resolve a bare call as a call-graph edge to a bodiless stub,
+  ;; whose empty row classifies the call as pure. This is a host-neutral
+  ;; injection point; the caller supplies the vocabulary, the engine carries
+  ;; no name literals.
+  (define known-pure-comp 'known-pure-stub)
+  (for ([nm (in-list known-pure-names)])
+    (hash-set! known (cons known-pure-comp nm) #t)
+    (hash-update! fn-defs nm (λ (l) (cons known-pure-comp l)) '()))
 
   (define all-keys (append (hash-keys fns) (hash-keys methods)))
 
@@ -396,7 +407,7 @@
               ;; callback (`def deco(cb): def inner(): cb()`). Its effects are
               ;; whatever was captured, so it defers to `dynamic` too.
               (define (closure-captured-param? name)
-                (let loop ([nm (cdr k)] [seen (hash)])
+                (let loop ([nm (cdr k)] [seen (make-hash)])
                   (define parent (and nm (hash-ref fn-parents (cons comp nm) #f)))
                   (and parent
                        (or (let ([ps (or (hash-ref fn-params (cons comp parent) #f)

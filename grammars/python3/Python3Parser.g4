@@ -55,7 +55,7 @@ options {
 single_input
     : NEWLINE
     | simple_stmts
-    | compound_stmt NEWLINE
+    | compound_stmt (NEWLINE | EOF)
     ;
 
 file_input

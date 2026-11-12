@@ -662,7 +662,7 @@
 (let ([cst (py-parse "def f(a, b, /, c=1, *args, **kw):\n    pass\n\n")])
   (define uir (lower-python cst py-tok-type py-tok-value))
   (define params (uir-fn-params uir))
-  (check-equal? (map uir-symbol-name params)
+  (check-equal? (map (lambda (p) (uir-symbol-name (uir-typed-param-name p))) params)
                 '("a" "b" "c" "args" "kw")
                 "positional-only params lower in order, / dropped")
   (check-equal? (uir-number-value (uir-typed-param-default (caddr params)))

@@ -21,6 +21,7 @@
          racklr/uir
          racklr/effects/shape
          racklr/effects/library-tokens
+         racklr/effects/library-dialect
          racklr/effects/effect-roots
          racklr/effects/pure-roots
          racklr/effects/rows)
@@ -87,28 +88,45 @@
 ;; A COMPLETE lexicon: no Python/Django token leaks into a Rust host program.
 (define rust-effect-tokens
   (effect-tokens
-   (set) (set)                                  ; llm-roots db-roots
-   (set "reqwest" "hyper" "tungstenite")         ; network-roots
-   (set)                                         ; network-names
-   (set) (set)                                   ; cache-roots cache-names
-   (set) (set) #f                                ; orm-methods generic-by-name?
-   (set) (set)                                   ; builtin-type-roots module-roots
-   rust-io-builtins                              ; io-builtins
-   rust-path-effects                             ; stdlib-root-effects (exact paths)
-   rust-io-methods                               ; io-methods
-   (set)                                         ; email-methods
-   rust-time-methods                             ; time-methods
+   (hash)                                        ; effect-roots (exact paths below)
+   '()                                           ; effect-root-priority
+   (for/hash ([n (in-set rust-io-builtins)])     ; bare-name-effects (io builtins)
+     (values n 'io))
+   (hash-union                                   ; method-effects (io + time methods)
+    (for/hash ([n (in-set rust-io-methods)]) (values n 'io))
+    (for/hash ([n (in-set rust-time-methods)]) (values n 'time)))
+   (hash)                                        ; unambiguous-method-effects
+   (hash)                                        ; ambiguous-method-effects
+   #f                                            ; ambiguous-method-effects-enabled?
    (hash)                                        ; root-method-effects
+   (set)                                         ; builtin-type-roots
+   (set)                                         ; stdlib-module-roots
+   rust-path-effects                             ; stdlib-root-effects (exact paths)
    (hash)                                        ; stdlib-type-methods
    (set)                                         ; pure-stdlib-roots
    (hash)                                        ; pure-stdlib-methods
-   (set) (set)                                   ; framework-exception declarative
    rust-pure-bare-names                          ; pure-stdlib-bare-names
-   (set) (set)                                   ; gettext pure-config
-   (set) (set) (set)                             ; python-builtins dunders str
-   (set)                                         ; pure-container-methods
-   (hash) (hash)                                 ; module-result-types receiver-modules
-   (set)))                                       ; racket-builtins (host-neutral: none)
+   (set)                                         ; pure-op-names
+   (set)                                         ; pure-constructor-names
+   (set)                                         ; pure-builtin-names
+   (set)                                         ; protocol-method-names
+   (set)                                         ; string-method-names
+   (set)                                         ; pure-method-names
+   (hash)                                        ; module-result-types
+   (hash)                                        ; receiver-modules
+   (hash)                                        ; module-class-refs
+   (hash)                                        ; type-result-projections
+   (hash)                                        ; module-element-types
+   (hash)                                        ; stdlib-method-element-types
+   (hash)                                        ; class-attr-element-types
+   (hash)                                        ; class-attr-types
+   (set)                                         ; dynamic-class-factories
+   (hash)                                        ; dynamic-class-instance-types
+   (set)                                         ; mapping-value-methods
+   (hash)                                        ; mapping-projection-methods
+   (set)                                         ; element-identity-bare-names
+   (set)                                         ; pure-native-builtin-names
+   default-dialect))                             ; dialect
 
 ;; ── Adapter (front-end-owned; no engine edits) ──────────────────────
 
