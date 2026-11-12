@@ -58,6 +58,31 @@
 (define (test-subtype-must)
   (check-true (effect-subtype? (row (ent "llm" 'must)) (row (ent "llm" 'must))))
   (check-false (effect-subtype? (row (ent "llm" 'must)) (row (ent "llm" 'may)))))
+(define (test-subtype-must-budget-ops)
+  ;; A `must` obligation now compares budget and ops exactly like `may`/
+  ;; `unknown`: it is satisfied only by a declared `must` that covers its ops
+  ;; and its budget, not merely by any same-modality entry.
+  (check-true (effect-subtype? (row (ent "llm" 'must #:ops '("query") #:budget 2))
+                               (row (ent "llm" 'must #:ops '("query" "embed") #:budget 5))))
+  (check-false (effect-subtype? (row (ent "llm" 'must #:ops '("query") #:budget 6))
+                                (row (ent "llm" 'must #:ops '("query" "embed") #:budget 5))))
+  (check-false (effect-subtype? (row (ent "llm" 'must #:ops '("write")))
+                                (row (ent "llm" 'must #:ops '("read")))))
+  ;; The non-transitivity counterexample from proof/README.md: the old
+  ;; modality-only `must` check accepted b <= c (budget 5 > 3) and so broke
+  ;; transitivity (a <= b and b <= c, yet not a <= c). With budget and ops
+  ;; compared, b <= c is rejected.
+  (define a (row (ent "db" 'may #:ops '("read") #:budget 0)))
+  (define b (row (ent "db" 'must #:ops '() #:budget 5)))
+  (define c (row (ent "db" 'must #:ops '("write") #:budget 3)))
+  (check-true (effect-subtype? a b))
+  (check-false (effect-subtype? b c))
+  (check-false (effect-subtype? a c))
+  ;; The same chain holds once c covers b's ops and budget; transitivity is
+  ;; then the general law the property test pins.
+  (define c2 (row (ent "db" 'must #:ops '() #:budget 7)))
+  (check-true (effect-subtype? b c2))
+  (check-true (effect-subtype? a c2)))
 (define (test-subtype-must-not-is-unconstrained)
   (check-true (effect-subtype? (row (ent "db" 'must-not)) (row (ent "db" 'may)))))
 (define (test-subtype-unknown-defers)
@@ -92,6 +117,7 @@
   (test-subtype-prohibition)
   (test-subtype-absent-is-prohibition)
   (test-subtype-must)
+  (test-subtype-must-budget-ops)
   (test-subtype-must-not-is-unconstrained)
   (test-subtype-unknown-defers)
   (test-subtype-ops-subset)

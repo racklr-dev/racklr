@@ -6,7 +6,8 @@
 ;;   - absence of an entry is prohibition (must-not by default)
 ;;   - `may` is permission, `must` is obligation, `must-not` is prohibition
 ;;   - union sums budgets, intersection takes the minimum
-;;   - subtyping (≤): every `may` in L is `may` in R, budgets in L ≤ budgets in R
+;;   - subtyping (≤): every `may`/`must` in L is `may`/`must` in R, budgets in
+;;     L ≤ budgets in R, ops in L ⊆ ops in R (empty = all)
 
 (require racklr/uir)
 
@@ -156,7 +157,11 @@
                   (ops-superset? (entry-ops r) (entry-ops e)))
              #t)]
        [(must)
-        (and r (eq? (uir-effect-entry-modality r) 'must))]
+        (and (and r
+                  (eq? (uir-effect-entry-modality r) 'must)
+                  (budget-≤ (uir-effect-entry-budget e) (uir-effect-entry-budget r))
+                  (ops-superset? (entry-ops r) (entry-ops e)))
+             #t)]
        [(must-not) #t]
        [else #f]))
    (uir-effect-row-entries L)))

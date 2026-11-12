@@ -37,3 +37,11 @@ effervesce-out/
 
 # Round-trip loss verification artifact (build output)
 loss-artifacts/
+
+# Coq build artifacts (proof/)
+*.vo
+*.glob
+*.vok
+*.vos
+*.aux
+.lia.cache

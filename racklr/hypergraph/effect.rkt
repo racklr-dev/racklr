@@ -120,13 +120,13 @@
                                        (rest (link-out b)))))))
 
 ;; Entry ≤ entry. `b` may be #f (absent in the super row). Matches
-;; contract.rkt's effect-subtype? exactly, including its two special cases:
-;; a `must-not` entry constrains nothing, and a `must` entry is checked only
-;; for obligation-compatibility (budget/ops are not compared).
+;; contract.rkt's effect-subtype? exactly: a `must-not` entry constrains
+;; nothing; every other modality is checked through the per-slot lattices
+;; (modality, ops, budget, scope), so a `must` obligation compares budget and
+;; ops exactly like `may`/`unknown`.
 (define (effect-entry-leq a b)
   (case (entry-modality a)
     [(must-not) #t]
-    [(must) (and b (eq? (entry-modality b) 'must))]
     [else (and b (slots-leq effect-lattices (rest (link-out a)) (rest (link-out b))))]))
 
 ;; A row is a set of effect hyperedges keyed by name (plain list; order is

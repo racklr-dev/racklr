@@ -17,11 +17,13 @@
          "combinators.rkt"
          "fixpoint.rkt"
          "subtyping.rkt"
-         "holes.rkt")
+         "holes.rkt"
+         "certificate.rkt")
 
 (provide (all-from-out "provenance.rkt"
                        "row.rkt"
                        "combinators.rkt"
                        "fixpoint.rkt"
                        "subtyping.rkt"
-                       "holes.rkt"))
+                       "holes.rkt"
+                       "certificate.rkt"))

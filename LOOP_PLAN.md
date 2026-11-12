@@ -176,12 +176,12 @@ state.
     `self.m()` leaves (drg-c128); PR #80 is the real-context unknown census
     that aims the next receiver-type levers.
 
-- **P1.6 — Kernel-leaf verification of the effect algebra: PROPOSED.** The
+- **P1.6 — Kernel-leaf verification of the effect algebra: IN PROGRESS (split + machine check landed, transitivity fixed).** The
   grand vision now includes a machine-checked kernel leaf for the effect
   algebra (see the kernel-leaf section of ROADMAP.md): split the algebra into
   a small trusted kernel (laws, subtype relation, certificate checker) with
   inference as an untrusted producer, so the gate decides by proof rather than
-  by convention. Not started. Its Phase-1 prerequisites — P1.5 (algebra),
+  by convention. The split is landed: certificate.rkt (kernel checker) + bridge.rkt (claims) + the mutation test + the regression test; the machine check is `proof/EffectAlgebra.v` (122 lemmas, `coqc` exit 0, no axioms), and it drove the `must`-budget/ops transitivity fix in `contract.rkt` + `hypergraph/effect.rkt`. Its Phase-1 prerequisites — P1.5 (algebra),
   row holes, and the Pass-4 contract check — are landed; it is gated on P0.3
   (zero-unknown bar); the test plan, line budget, and falsification criteria
   live in ROADMAP.md.
@@ -494,14 +494,40 @@ and the `effervesce` pointer bumps. Also open, outside the phase increments:
 #76 (TS/TSX subscript lowering so emitted JS re-parses) and #78 (keyword-only
 and rest-arity parameter markers in Python `def` lowering).
 
-## Kernel-leaf verification (proposed)
+## Kernel-leaf verification (split landed, machine check landed, transitivity fixed)
 
 The grand vision now includes a machine-checked kernel leaf for the effect
-algebra (ROADMAP.md). Current state: P1.5 landed the standalone algebra
+algebra (ROADMAP.md). P1.5 landed the standalone algebra
 (`racklr/effects/algebra/`) with property tests; the kernel-leaf split —
 trusted laws/subtyping/certificate checker versus untrusted inference — is
-proposed, not started. The test plan, line budget, and falsification criteria
-are in the kernel-leaf section of ROADMAP.md. This does not change the P0.3
-long pole: the kernel is a new checker for the same algebra, and the
-zero-unknown bar is the corpus evidence the kernel-certificate path must
-reproduce unchanged.
+landed. Roadmap tests 1 (extract), 2 (machine check), 3 (mutation) and
+4 (regression) are pinned. The machine check is `proof/EffectAlgebra.v` (Coq 8.20, `coqc` exit 0,
+no `Admitted`, no axioms): 122 lemmas/theorems, ~1390 lines, a line-by-line
+transliteration of provenance/row/combinators/subtyping/certificate. It proves
+join identity/comm/assoc/idemp, sequence identity/assoc/budgets-sum, choose
+comm/assoc/idemp/budgets-max/must-needs-every-branch, scope split/join-back/
+identity, subtyping reflexivity/transitivity/empty-bottom/join-ub/join-lub,
+fixpoint-step monotonicity, and certificate grounding/coverage soundness.
+
+The machine check surfaced, and the kernel now fixes, a genuine semantic
+finding: `effect-subtype?` was NOT transitive in general, and join was not
+monotone in it, because the `must` branch checked only modality (no budget/
+ops). The fix (one-up-the-Google-researchers) makes `must` compare
+`budget-<=` and `ops-superset?` exactly like `may`/`unknown`, in both
+`contract.rkt` and the generic per-slot algebra `hypergraph/effect.rkt`;
+`proof/README.md` records the counterexample and the now-proven transitivity
+lemmas (`modality_subtype_trans`, `entry_subtype_trans`, `row_subtype_trans`).
+`effects-contract-test.rkt` pins the counterexample rejection, and the
+property test now weakens `must` budgets/ops so transitivity is exercised
+non-vacuously.
+
+Test 4 (the regression test) is `effervesce/check/bridge-regression-test.rkt`:
+the injected producer claims a `db` row for a function whose body is pure
+arithmetic and plants a `db` evidence site so the claim is grounded, and the
+kernel still refuses it — the component declares no `needs`, so the empty
+contract does not interpret `db`. The clean producer is the control: the pure
+function passes with no issues.
+
+This does not change the P0.3 long pole: the kernel is a new checker for the
+same algebra, and the zero-unknown bar is the corpus evidence the
+kernel-certificate path must reproduce unchanged.

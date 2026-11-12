@@ -165,9 +165,8 @@
 ;; ── subtyping ───────────────────────────────────────────────────────
 ;; Weaken a row inside `c`: drop names, reduce budgets, narrow ops, keep the
 ;; modality. The result is a subtype of `c` by construction.
-(define (sub-budget modality budget)
-  (cond [(eq? modality 'must) budget]
-        [(not budget) (if (zero? (random 2)) #f (random 5))]
+(define (sub-budget budget)
+  (cond [(not budget) (if (zero? (random 2)) #f (random 5))]
         [else (random (add1 budget))]))
 (define (sub-ops ops)
   (cond [(null? ops) '()]
@@ -181,8 +180,7 @@
       (define e (row-lookup c n))
       (ent n (uir-effect-entry-modality e)
            #:ops (sub-ops (map uir-symbol-name (uir-effect-entry-ops e)))
-           #:budget (sub-budget (uir-effect-entry-modality e)
-                                (uir-effect-entry-budget e))
+           #:budget (sub-budget (uir-effect-entry-budget e))
            #:scope (and (uir-effect-entry-scope e)
                         (uir-symbol-name (uir-effect-entry-scope e))))))
    (hash)))
