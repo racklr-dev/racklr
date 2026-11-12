@@ -162,6 +162,8 @@
     (hash)
     ;; bare class factories: none for the JS host yet
     (set)
+    ;; dynamic-class factory instance types: none for the JS host yet
+    (hash)
     ;; mapping methods returning a value with a default argument: none for the
     ;; JS host yet (JS Map.get takes no default)
     (set)

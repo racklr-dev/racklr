@@ -293,7 +293,18 @@
       ;; (local/self-attr only) does not walk. A non-call callee cannot recurse
       ;; back into call-result-type through value-class-of's call branch.
       (let ([c (and rt (value-class-of callee rt class-defs tokens import-env comp #f))])
-        (and c (not (dynamic-class-marker? c)) (not (class-union-marker? c)) c))
+        (cond
+          ;; A dynamic-class factory constructed (`get_serializer(f)()`): the
+          ;; factory's declared BASE instance class is the constructed result
+          ;; (which subclass is chosen is runtime-dependent; the base is not).
+          [(and (dynamic-class-marker? c) (uir-call? callee))
+           (let* ([inner (uir-call-callee callee)]
+                  [nm (callee-name inner)])
+             (and nm
+                  (hash-ref (effect-tokens-dynamic-class-instance-types tokens)
+                            (symbol->string nm) #f)))]
+          [(and c (not (dynamic-class-marker? c)) (not (class-union-marker? c))) c]
+          [else #f]))
       (constructor-class callee class-defs tokens)
       ;; A class factory (`import_string`, `type`): the call's RESULT is a
       ;; runtime-dependent class, tracked as the dynamic-class marker so the
@@ -634,6 +645,23 @@
                                       (λ (base)
                                         (value-class-of base (rt-now)
                                                         class-defs tokens import-env comp owner))))
+      ;; A dynamic-class factory constructed (`get_serializer(f)()`): the
+      ;; INNER call's corpus return is the dynamic-class marker (its class is
+      ;; runtime-chosen), so project the constructed instance as the factory's
+      ;; declared base class from the DATA table. value-class-of cannot see
+      ;; this projection (it has no corpus return table), which is why the
+      ;; arm sits here in the wrapper.
+      (and (uir-call? v)
+           (let* ([callee (uir-call-callee v)]
+                  [inner (and (uir-call? callee) (uir-call-callee callee))]
+                  [nm (and inner (callee-name inner))])
+             (and nm
+                  (eq? (corpus-projected-value-class
+                        callee (rt-now) class-defs owner return-types methods
+                        fn-defs known comp-supers tokens import-env comp)
+                       'dynamic-class)
+                  (hash-ref (effect-tokens-dynamic-class-instance-types tokens)
+                            (symbol->string nm) #f))))
         (value-class-of value (rt-now)
                         class-defs tokens import-env comp owner)))
   ;; Seed parameter types: from the annotation (`def f(x: QuerySet)`) when there

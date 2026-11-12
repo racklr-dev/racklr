@@ -43,6 +43,7 @@
   effect-tokens-class-attr-element-types
   effect-tokens-class-attr-types
   effect-tokens-dynamic-class-factories
+  effect-tokens-dynamic-class-instance-types
   effect-tokens-mapping-value-methods
   effect-tokens-pure-native-builtin-names
   effect-tokens-dialect
@@ -88,6 +89,7 @@
    module-element-types stdlib-method-element-types class-attr-element-types
    class-attr-types
    dynamic-class-factories
+   dynamic-class-instance-types
    mapping-value-methods
    ;; Host-NATIVE pure procedures (the compiler's own Racket front end, from
    ;; library-racket-tokens.rkt). A dedicated table: it must never feed the
@@ -319,6 +321,8 @@
    stdlib-class-attr-types-data
    ;; ── bare class factories: a call's RESULT is a runtime-dependent CLASS ──
    dynamic-class-factories-data
+   ;; ── instance class of a dynamic-class factory's construction ──
+   dynamic-class-instance-types-data
    ;; ── mapping methods that return the value and take a default argument ──
    stdlib-mapping-value-methods-data
    ;; ── host-NATIVE pure procedures (the Racket corpus front end) ──

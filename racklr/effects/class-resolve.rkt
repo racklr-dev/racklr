@@ -34,12 +34,27 @@
 ;; Component defining a class named `class-name`, from the point of view of
 ;; `comp` (the file making the reference). A local definition wins; a
 ;; globally-unique definition resolves; anything else is ambiguous → #f.
-(define (resolve-class-component class-name comp class-defs)
+(define (resolve-class-component class-name comp class-defs [import-env #f])
   (define defs (remove-duplicates (hash-ref class-defs class-name '())))
   (cond
     [(null? defs) #f]
     [(member comp defs) comp]
     [(= (length defs) 1) (car defs)]
+    ;; A module-path-qualified class name (`django.core.serializers.base.Serializer`)
+    ;; disambiguates a bare class name that several scanned components define
+    ;; (`Serializer` in base/python/xml/json/jsonl/pyyaml). Resolve the dotted
+    ;; prefix through the module-path index to the defining component, then
+    ;; confirm that component actually defines the class.
+    [(and import-env
+          (let ([s (symbol->string class-name)])
+            (string-contains? s ".")))
+     (let* ([s (symbol->string class-name)]
+            [parts (string-split s ".")]
+            [cls (and (pair? parts) (string->symbol (last parts)))]
+            [modpath (and (pair? parts) (string-join (drop-right parts 1) "."))]
+            [mp->comp (modpath-index import-env)]
+            [c (and modpath mp->comp (hash-ref mp->comp modpath #f))])
+       (and c cls (member c (hash-ref class-defs cls '())) c))]
     [else #f]))
 
 ;; Inverted component→module-path index (dotted module path → component), used

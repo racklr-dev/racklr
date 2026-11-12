@@ -157,7 +157,7 @@
 (define (receiver-effect comp class-name mname class-defs import-env
                          [lex default-lexicon])
   (and import-env
-       (or (let ([c (resolve-class-component class-name comp class-defs)])
+       (or (let ([c (resolve-class-component class-name comp class-defs import-env)])
              (and c
                   (let ([modpath (hash-ref (import-env-comp-modpath import-env) c #f)])
                     (and modpath

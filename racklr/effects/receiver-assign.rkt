@@ -52,12 +52,24 @@
   ;; value of the call for any OTHER use via value-class. A fresh target
   ;; (`msg = message.message()`) has no pre-call type to preserve, so it is
   ;; still typed normally.
+  ;; The single-final-type env cannot hold both a variable's pre- and
+  ;; post-assignment types. When the RHS READS the target through a method
+  ;; call — either directly (`x = x.m(...)`) or nested inside another call
+  ;; (`x = dict(x._get_kwargs(), ...)`) — keep the pre-call type so that
+  ;; inner call classifies through the OLD value; the result type remains
+  ;; reachable via value-class for any other use.
   (define (self-reassign? lhs value)
-    (and (uir-call? value)
-         (member-access-callee? (uir-call-callee value))
-         (let ([bnm (bare-name-symbol (member-access-base (uir-call-callee value)))]
-               [tnm (target-name-symbol lhs)])
-           (and bnm tnm (eq? bnm tnm)))))
+    (define tnm (target-name-symbol lhs))
+    (and tnm
+         (let ([hit? #f])
+           (walk-uir value
+                     (λ (n)
+                       (when (and (uir-call? n)
+                                  (member-access-callee? (uir-call-callee n)))
+                         (define bnm (bare-name-symbol
+                                      (member-access-base (uir-call-callee n))))
+                         (when (and bnm (eq? bnm tnm)) (set! hit? #t)))))
+           hit?)))
   (define (record! lhs value)
     (unless (self-reassign? lhs value)
       (define cls (value-class value))

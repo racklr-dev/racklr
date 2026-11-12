@@ -81,7 +81,7 @@
              ;; runtime-chosen class: the outer `(...)()` is pure construction.
              [(dynamic-class-marker? icls) 'pure]
              [else
-              (let ([c (and icls (resolve-class-component icls comp class-defs))])
+              (let ([c (and icls (resolve-class-component icls comp class-defs import-env))])
                 (and c
                      (for/or ([k (in-list (mro-method-keys c icls '__call__ methods class-defs comp-supers))])
                        (and (hash-has-key? known k) k))))]))))
@@ -237,7 +237,7 @@
                           (cond
                             [(eq? (car nn) 'unknown)
                              (define rc (and rcls mname
-                                             (resolve-class-component rcls comp class-defs)))
+                                             (resolve-class-component rcls comp class-defs import-env)))
                              (define rkey
                                (and rc (for/or ([k (in-list (mro-method-keys rc rcls mname methods
                                                                           class-defs comp-supers))]

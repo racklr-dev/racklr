@@ -23,6 +23,7 @@
          class-attr-element-types-data
          stdlib-class-attr-types-data
          dynamic-class-factories-data
+         dynamic-class-instance-types-data
          stdlib-mapping-value-methods-data
          declared-param-types
          declared-return-types
@@ -578,6 +579,21 @@
 (define dynamic-class-factories-data
   (set "import_string" "type"))
 
+;; INSTANCE class of a dynamic-class factory's construction: when a bare
+;; factory F returns a runtime-chosen CLASS (tracked as the dynamic-class
+;; marker) and the caller immediately constructs it (`get_serializer(f)()`),
+;; the constructed instance's class is the factory's declared BASE class. This
+;; is the concrete projection the dynamic-class marker itself deliberately
+;; does not carry (which subclass is chosen is runtime-dependent; the base
+;; class is static). Keyed by the factory's bare name.
+(define dynamic-class-instance-types-data
+  (hash
+   ;; get_serializer(f) returns a Serializer subclass; get_serializer(f)() is a
+   ;; Serializer instance, so s.serialize resolves through the corpus class.
+   ;; The module-qualified name disambiguates the six scanned classes named
+   ;; `Serializer` to the shared base.
+   "get_serializer" 'django.core.serializers.base.Serializer))
+
 ;; Mapping methods that RETURN the mapping's value and take an optional
 ;; DEFAULT argument: `mapping.get(k, default)` / `mapping.setdefault(k, default)`
 ;; / `mapping.pop(k, default)`. The engine projects such a call's result as the
@@ -756,6 +772,11 @@
    (cons "django.core.handlers.base" 'BaseHandler.get_response) 'HttpResponse
    (cons "django.core.handlers.base" 'BaseHandler.get_response_async) 'HttpResponse
    (cons "django.core.management.base" 'BaseCommand.create_parser) 'ArgumentParser
+   ;; CommandParser.parse_args delegates to ArgumentParser.parse_args via
+   ;; super(); the result is the parsed argparse.Namespace. Its body projects
+   ;; no class (super() through the external ancestor), so declare it here so
+   ;; call_command's `defaults = parser.parse_args(...)` resolves `_get_kwargs`.
+   (cons "django.core.management.base" 'CommandParser.parse_args) 'Namespace
    (cons "django.core.mail.message" 'EmailMessage.message) 'Message
    (cons "django.core.serializers.python" 'Deserializer._get_model_from_node) 'Model
    (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model
