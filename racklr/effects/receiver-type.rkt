@@ -499,7 +499,7 @@
                          (string->number (uir-number-value (uir-get-field value)))))
         (cond
           [(and idx (list? tspec) (>= idx 0) (< idx (length tspec)))
-           (list-ref tspec idx)]
+           (spec-value-class (list-ref tspec idx) tokens)]
           ;; `module.Class` where `module` is a tracked module receiver:
           ;; resolve to the module-qualified class marker (pylibmc.Client),
           ;; whose domain is the module's domain in classify-all.
@@ -757,17 +757,10 @@
       [else #f]))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
   ;; caller supplies the value projection, host implicit-receiver name test and
-  ;; env setters.
-  (apply-assignments! body value-class
-                      (λ (n) (tokens-self-name? tokens n))
-                      (λ (nm cls) (hash-set! locals nm cls))
-                      (λ (attr cls) (hash-set! self-attrs attr cls))
-                      #:elem-spec-of elem-spec-of
-                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec))
-                      #:fn-alias-of fn-alias-of
-                      #:set-local-fn! (λ (nm d) (hash-set! fn-locals nm d))
-                      #:set-self-attr-fn!
-                      (λ (attr d) (hash-set! fn-self-attrs attr d)))
+  ;; env setters. The assignment pass itself is defined after the loop-var
+  ;; seeders below, because the passes interleave in a monotone fixpoint: a
+  ;; destructure's tmp[i] subscript seeds an element spec that a NESTED loop
+  ;; then consumes.
   ;; `with ctx() as name:` binds the context manager's RESULT type: track the
   ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
   ;; later `executor.submit(...)` resolves instead of staying `unknown`. Its
@@ -818,33 +811,60 @@
                   (and (>= (length args) 3)
                        (let* ([lv (second args)]
                               [iter (third args)]
-                              [espec (elem-spec-of iter)]
-                              [vars (if (uir-list? lv) (uir-list-items lv) (list lv))])
-                         (when espec
-                           (for ([v (in-list vars)])
-                             (define vnm (bare-name-symbol v))
-                             (when vnm
-                               (hash-set! elem-specs vnm espec)
-                               (when (symbol? espec)
-                                 (hash-set! locals vnm espec))))))))))))
-  (walk-body body (λ (n)
-                    (when (uir-with? n) (process-with! n))
-                    (when (uir-for-each? n) (process-for! n))
-                    (process-comp! n)))
-  ;; Second assignment pass: loop-temp element specs are now seeded (a tuple
-  ;; destructure loweres to `tmp[1]` subscripts inside the loop body), so a
-  ;; subscript projection that the first pass could not see now resolves.
-  ;; Assignments are monotone and idempotent, so the repeat only fills gaps.
-  (apply-assignments! body value-class
-                      (λ (n) (tokens-self-name? tokens n))
-                      (λ (nm cls) (hash-set! locals nm cls))
-                      (λ (attr cls) (hash-set! self-attrs attr cls))
-                      #:elem-spec-of elem-spec-of
-                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec))
-                      #:fn-alias-of fn-alias-of
-                      #:set-local-fn! (λ (nm d) (hash-set! fn-locals nm d))
-                      #:set-self-attr-fn!
-                      (λ (attr d) (hash-set! fn-self-attrs attr d)))
+                              [espec (elem-spec-of iter)])
+                         (cond
+                           ;; Tuple destructure (`{k: v for k, ml in it}`): seed
+                           ;; each bound var position-wise, exactly like a
+                           ;; for-loop's destructure, so `ml` keeps its ELEMENT
+                           ;; class instead of the whole tuple spec.
+                           [(and (uir-list? lv) (pair? espec) (list? espec))
+                            (for ([v (in-list (uir-list-items lv))]
+                                  [cls (in-list espec)])
+                              (define vnm (bare-name-symbol v))
+                              (when vnm
+                                (hash-set! elem-specs vnm cls)
+                                (when (symbol? cls)
+                                  (hash-set! locals vnm cls))))]
+                           [else
+                            (define vnm (bare-name-symbol lv))
+                            (when (and vnm espec)
+                              (hash-set! elem-specs vnm espec)
+                              (when (symbol? espec)
+                                (hash-set! locals vnm espec)))]))))))))
+  (define (assignment-pass!)
+    (apply-assignments! body value-class
+                        (λ (n) (tokens-self-name? tokens n))
+                        (λ (nm cls) (hash-set! locals nm cls))
+                        (λ (attr cls) (hash-set! self-attrs attr cls))
+                        #:elem-spec-of elem-spec-of
+                        #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec))
+                        #:fn-alias-of fn-alias-of
+                        #:set-local-fn! (λ (nm d) (hash-set! fn-locals nm d))
+                        #:set-self-attr-fn!
+                        (λ (attr d) (hash-set! fn-self-attrs attr d))))
+  (define (loop-pass!)
+    (walk-body body (λ (n)
+                      (when (uir-with? n) (process-with! n))
+                      (when (uir-for-each? n) (process-for! n))
+                      (process-comp! n))))
+  ;; Assignment, loop-var and subscript projections are monotone gap-fills: a
+  ;; destructure's tmp[i] subscript seeds an element spec that a NESTED loop or
+  ;; comprehension then consumes, so the passes must interleave until stable
+  ;; (arbitrarily deep nesting). The bound only guards a logic bug; a stable
+  ;; fixpoint is reached in a handful of rounds for real nesting depths.
+  (let fix ([round 0])
+    (define snapshot (list (hash-copy locals) (hash-copy self-attrs)
+                           (hash-copy elem-specs) (hash-copy fn-locals)
+                           (hash-copy fn-self-attrs)))
+    (assignment-pass!)
+    (loop-pass!)
+    (define changed?
+      (not (and (equal? (list-ref snapshot 0) locals)
+                (equal? (list-ref snapshot 1) self-attrs)
+                (equal? (list-ref snapshot 2) elem-specs)
+                (equal? (list-ref snapshot 3) fn-locals)
+                (equal? (list-ref snapshot 4) fn-self-attrs))))
+    (when (and changed? (< round 64)) (fix (add1 round))))
   (receiver-types locals self-attrs elem-specs globals fn-locals fn-self-attrs))
 
 ;; Overlay `overlay`'s entries onto `base` (overlay wins on a key collision).

@@ -45,6 +45,8 @@
   effect-tokens-dynamic-class-factories
   effect-tokens-dynamic-class-instance-types
   effect-tokens-mapping-value-methods
+  effect-tokens-mapping-projection-methods
+  effect-tokens-element-identity-bare-names
   effect-tokens-pure-native-builtin-names
   effect-tokens-dialect
   default-effect-tokens
@@ -91,6 +93,8 @@
    dynamic-class-factories
    dynamic-class-instance-types
    mapping-value-methods
+   mapping-projection-methods
+   element-identity-bare-names
    ;; Host-NATIVE pure procedures (the compiler's own Racket front end, from
    ;; library-racket-tokens.rkt). A dedicated table: it must never feed the
    ;; Python/JS value-constructor table receiver typing reads, so a Racket
@@ -325,6 +329,9 @@
    dynamic-class-instance-types-data
    ;; ── mapping methods that return the value and take a default argument ──
    stdlib-mapping-value-methods-data
+   stdlib-mapping-projection-methods-data
+   ;; ── bare builtins whose iterated element mirrors their last argument ──
+   stdlib-element-identity-bare-names-data
    ;; ── host-NATIVE pure procedures (the Racket corpus front end) ──
    racket-pure-builtins
    ;; ── host naming / encoding conventions ──

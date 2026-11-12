@@ -60,6 +60,9 @@
     ;; Python structural calls and comprehensions
     "not" "tuple" "set" "list" "assert" "raise" "del" "global" "nonlocal"
     "list-comp" "dict-comp" "set-comp" "gen-comp" "gen-exp" "kwarg"
+    ;; dict-item is the lowerer's key:value pair encoding inside a dict-comp;
+    ;; it is a construct marker, not a runtime-dispatched call.
+    "dict-item"
     ;; Clojure special forms / data constructors
     "quote" "syntax-quote" "unquote" "unquote-splicing" "deref" "var"
     "vector" "hash-set" "fn*" "with-meta" "namespace" "host-expr")

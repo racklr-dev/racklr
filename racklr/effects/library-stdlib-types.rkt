@@ -25,6 +25,8 @@
          dynamic-class-factories-data
          dynamic-class-instance-types-data
          stdlib-mapping-value-methods-data
+         stdlib-mapping-projection-methods-data
+         stdlib-element-identity-bare-names-data
          declared-param-types
          declared-return-types
          declared-element-types
@@ -444,11 +446,13 @@
    ;; state projection are in-memory graph reads.
    "MigrationLoader" (hash "check_consistent_history" 'db
                            "detect_conflicts" 'pure
+                           "get_migration" 'pure
                            "get_migration_by_prefix" 'pure
                            "project_state" 'pure)
    ;; django.db.migrations.graph.MigrationGraph (external): forwards/backwards
    ;; plan walks the in-memory dependency graph (pure).
-   "MigrationGraph" (hash "forwards_plan" 'pure "backwards_plan" 'pure)
+   "MigrationGraph" (hash "forwards_plan" 'pure "backwards_plan" 'pure
+                        "leaf_nodes" 'pure)
    ;; django.db.migrations.recorder.MigrationRecorder (external): applied /
    ;; unapplied migration records are persisted to the DB.
    "MigrationRecorder" (hash "record_unapplied" 'db "record_applied" 'db
@@ -603,6 +607,22 @@
 (define stdlib-mapping-value-methods-data
   (set "get" "setdefault" "pop"))
 
+;; Mapping iteration-projection methods and what each yields when iterated:
+;; `mapping.keys()` yields the KEY class, `.values()` the VALUE class, and
+;; `.items()` a (key . value) pair (JavaScript names the pair `entries`). The
+;; hash VALUES are engine vocabulary ('proj-key / 'proj-value / 'proj-pair);
+;; the KEYS are the host's method names. Engine code reads this through the
+;; tokens; a non-Python host supplies its own.
+(define stdlib-mapping-projection-methods-data
+  (hash "keys" 'proj-key "values" 'proj-value "items" 'proj-pair))
+
+;; Bare builtin names whose ITERATED element type is the element type of their
+;; LAST argument (the iterable): filter(pred, it) yields `it`'s elements,
+;; reversed(it)/sorted(it)/iter(it) likewise. Engine code reads this set
+;; through the tokens; a non-Python host supplies its own.
+(define stdlib-element-identity-bare-names-data
+  (set "filter" "reversed" "sorted" "iter"))
+
 ;; receiver-TYPE -> call -> result-TYPE for CALLS that preserve the receiver
 ;; type: a binary operator (`po_path = Path(dirpath) / f` lowers to
 ;; `(call (symbol "/") (list (call Path ...) (str f)))`) or a value-returning
@@ -643,6 +663,10 @@
         ;; call reads (clone / clear_delayed_apps_cache).
         "MigrationExecutor" (hash "migrate" "ProjectState"
                                   "_create_project_state" "ProjectState")
+        ;; django.db.migrations.loader.MigrationLoader.get_migration reads the
+        ;; in-memory graph and yields the Migration object whose operations the
+        ;; caller then renders (formatted_description, suggest_name).
+        "MigrationLoader" (hash "get_migration" "Migration")
         ;; django.db.backends.base.base.BaseDatabaseWrapper.schema_editor()
         ;; returns the DDL editor (create_model carries the db domain).
         "BaseDatabaseWrapper" (hash "schema_editor" "BaseDatabaseSchemaEditor")
@@ -842,7 +866,7 @@
    "Migration" (hash "operations" "Operation" "merged_operations" "Operation")
    ;; django.db.migrations.graph.MigrationGraph.nodes is a dict of Migration;
    ;; nodes[key] yields the Migration the loader will write (pure formatting).
-   "django.db.migrations.graph.MigrationGraph" (hash "nodes" "Migration")
+   "MigrationGraph" (hash "nodes" "Migration")
    ;; django.db.migrations.loader.MigrationLoader.applied_migrations is a dict
    ;; of MigrationRecord namedtuples (whose .applied is a datetime).
    "MigrationLoader" (hash "applied_migrations" "MigrationRecord")))
@@ -908,6 +932,13 @@
    ;; `for model in apps.get_models()` in checks/model_checks.py: the model
    ;; class lives in django.db (db).
    (cons "django.apps" 'apps.get_models) 'django.db.models.base.Model
+   ;; `for app_config in apps.get_app_configs()` in migrate.sync_apps: the
+   ;; AppConfig instance lives in django.apps.config (a pure registry read;
+   ;; the comprehension only reads its label / models_module attributes).
+   (cons "django.apps" 'apps.get_app_configs) 'django.apps.config.AppConfig
+   ;; `for app_config, model_list in all_models` in migrate.sync_apps:
+   ;; router.get_migratable_models yields the Model classes the router allows.
+   (cons "django.db" 'router.get_migratable_models) 'django.db.models.base.Model
    ;; `for conn in connections.all()` in runserver.py: DatabaseWrapper lives
    ;; in django.db (db).
    (cons "django.db" 'connections.all) 'django.db.backends.base.base.BaseDatabaseWrapper
@@ -940,7 +971,14 @@
    ;; Command.create_table iterates the model fields; f.db_type() renders the
    ;; SQL column type (pure formatting).
    (cons "django.core.management.commands.createcachetable" 'Command.create_table)
-   (list (cons 'fields 'Field))))
+   (list (cons 'fields 'Field))
+   ;; Command.write_migration_files iterates `changes.items()`: changes is a
+   ;; dict of app_label -> list of Migration, so its value-element class is
+   ;; Migration (the list is flattened by the element-class convention — the
+   ;; same way class-attr-element-types names Migration.operations as
+   ;; Operation). The dict element spec is (dict-spec key-class . value-element).
+   (cons "django.core.management.commands.makemigrations" 'Command.write_migration_files)
+   (list (cons 'changes (cons 'dict-spec (cons 'str 'Migration))))))
 
 ;; Declared EFFECT rows for a PARAMETER that a function bare-calls (the
 ;; higher-order row-hole shape): keyed (module-path . qualified-name) ->

@@ -122,9 +122,12 @@
                                               #:lexicon javascript-lexicon)
                            (cons "app.js" 'f)))
   (check-equal? (row-names js-row) '(network))
+  ;; The Python lexicon has no `fetch` receiver type, so the call-result
+  ;; receiver is runtime-dispatched: tracked as `dynamic`, never a name-only
+  ;; guess and never `unknown`.
   (define py-row (hash-ref (infer-effects-all (list (cons "app.js" p)))
                            (cons "app.js" 'f)))
-  (check-not-false (row-lookup py-row 'unknown))
+  (check-equal? (row-names py-row) '(dynamic network))
   ;; A tracked MODULE receiver (`x = fs` -> `x.readFile()`): the lexicon's
   ;; receiver-modules domain table resolves the method through the receiver
   ;; type, not through a name-only fallback.

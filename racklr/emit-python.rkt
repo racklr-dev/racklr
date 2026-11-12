@@ -504,11 +504,25 @@
   (define body-str
     (string-append result-str " for " var-str " in " iter-str
                    (if (uir-null? filter) "" (string-append " if " (emit-expr filter)))))
+  (define (emit-dict-item)
+    ;; A dict-comp's result is (dict-item key value), preserved by the lowerer.
+    (cond
+      [(and (uir-call? result)
+            (uir-symbol? (uir-call-callee result))
+            (equal? (uir-symbol-name (uir-call-callee result)) "dict-item"))
+       (define args (uir-call-args result))
+       (string-append (emit-expr (if (pair? args) (car args) (uir-null)))
+                      ": "
+                      (emit-expr (if (and (pair? args) (pair? (cdr args)))
+                                      (cadr args)
+                                      (uir-null))))]
+      [else result-str]))
   (cond [(equal? callee-name "list-comp") (string-append "[" body-str "]")]
         [(equal? callee-name "set-comp") (string-append "{" body-str "}")]
         [(equal? callee-name "dict-comp")
-         ;; For dict comp, result-expr should be a key:value pair representation
-         (string-append "{" body-str "}")]
+         ;; For dict comp, result-expr is the (dict-item key value) pair.
+         (string-append "{" (emit-dict-item) " for " var-str " in " iter-str
+                        (if (uir-null? filter) "" (string-append " if " (emit-expr filter))) "}")]
         [(equal? callee-name "gen-exp") (string-append "(" body-str ")")]
         [else (string-append "[" body-str "]")]))
 

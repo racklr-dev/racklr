@@ -15,12 +15,16 @@
          racklr/effects/shape
          racklr/effects/class-resolve
          racklr/effects/imports
-         racklr/effects/library-tokens)
+         racklr/effects/library-tokens
+         racklr/effects/lexicon)
 
 (provide imported-module-element-type
          stdlib-method-element-type
          class-attr-element-type
-         iterable-element-spec)
+         iterable-element-spec
+         dict-element-spec dict-element-spec?
+         dict-key-class dict-value-element-class
+         spec-element-class spec-value-class)
 
 ;; ELEMENT TYPE(S) of an imported module FUNCTION used as an iterable
 ;; (`for dirpath, dirnames, filenames in os.walk(...)`, `with os.scandir(p) as
@@ -86,16 +90,48 @@
 ;; classifies as pure construction of SOME class.
 (define class-union-marker 'class-union)
 
+;; A DICT element spec: (dict-spec key-class . value-element-class). The tag
+;; makes it distinguishable from a scalar spec (a symbol) and a tuple spec (a
+;; proper list), so a mapping-projection (`.items()`/`.values()`/`.keys()`)
+;; on the tracked var recovers both positions. The value-element-class follows
+;; the codebase's element-class convention: a container's entry names its
+;; ELEMENT class, so a dict of app_label -> list-of-Migration records
+;; Migration (the list is flattened exactly as class-attr-element-types
+;; flattens Migration.operations to Operation).
+(define (dict-element-spec key-class value-element)
+  (cons 'dict-spec (cons key-class value-element)))
+(define (dict-element-spec? s)
+  (and (pair? s) (not (list? s)) (eq? (car s) 'dict-spec) (pair? (cdr s))))
+(define (dict-key-class s) (and (dict-element-spec? s) (cadr s)))
+(define (dict-value-element-class s) (and (dict-element-spec? s) (cddr s)))
+
+;; Element class of a spec position: a scalar's class, or a dict's KEY class
+;; (iterating a dict directly yields its keys).
+(define (spec-element-class s)
+  (cond [(symbol? s) s]
+        [(dict-element-spec? s) (dict-key-class s)]
+        [else #f]))
+;; VALUE class of a spec position: a scalar's own class, or the host's dict
+;; type name (from dialect DATA) for a dict spec (the container the var
+;; actually holds).
+(define (spec-value-class s tokens)
+  (cond [(symbol? s) s]
+        [(dict-element-spec? s)
+         (define d (tokens-literal-receiver-type tokens 'uir-record))
+         (and d (string->symbol d))]
+        [else #f]))
+
 ;; Merge two element specs (each a class symbol or a list of class symbols)
 ;; across a conditional's branches: same class folds, different classes become
 ;; the class-union marker, and anything else is unprojected (#f).
 (define (merge-elem-specs t e)
   (cond
     [(and (symbol? t) (symbol? e)) (and (eq? t e) t)]
+    [(and (dict-element-spec? t) (dict-element-spec? e)) (and (equal? t e) t)]
     [(and (list? t) (list? e) (= (length t) (length e)))
      (for/list ([a (in-list t)] [b (in-list e)])
        (cond
-         [(eq? a b) a]
+         [(equal? a b) a]
          [(and (symbol? a) (symbol? b)) class-union-marker]
          [else #f]))]
     [else #f]))
@@ -116,6 +152,87 @@
                            #:comp-supers comp-supers #:owner owner
                            #:element-types element-types
                            #:elem-spec-lookup elem-spec-lookup))
+  (define (last-elem l)
+    (if (pair? (cdr l)) (last-elem (cdr l)) (car l)))
+  (define (callee-nm c) (callee-name c))
+  (define (comprehension-callee? c)
+    (define nm (callee-nm c))
+    (and nm (set-member? (tokens-comprehension-callees tokens)
+                         (symbol->string nm))))
+  ;; Spec of ONE comprehension-result position. A tuple position projects
+  ;; position-wise (so a tuple inside a comprehension destructures); any other
+  ;; value uses its iterable element spec when it has one (a list/filter of
+  ;; Model keeps Model), else its value class.
+  (define (position-element-spec v)
+    (cond
+      [(and (uir-call? v) (eq? (callee-nm (uir-call-callee v)) 'tuple))
+       (let ([specs (for/list ([a (in-list (uir-call-args v))])
+                      (position-element-spec a))])
+         (and (pair? specs) (ormap (λ (x) x) specs) specs))]
+      [else
+       (or (iterable-element-spec v rt tokens import-env comp value-class
+                                  #:class-defs class-defs #:methods methods
+                                  #:fn-defs fn-defs #:known known
+                                  #:comp-supers comp-supers #:owner owner
+                                  #:element-types element-types
+                                  #:elem-spec-lookup elem-spec-lookup)
+           (value-class v))]))
+  ;; Element spec of a comprehension RESULT: a list/set/generator element, or
+  ;; a dict's (key . value) spec from the preserved (dict-item key value).
+  (define (comprehension-element-spec c)
+    (define name (callee-nm (uir-call-callee c)))
+    (define args (uir-call-args c))
+    (define result (and (pair? args) (first args)))
+    (cond
+      [(eq? name 'dict-comp)
+       (let* ([item (and (uir-call? result)
+                         (eq? (callee-nm (uir-call-callee result)) 'dict-item)
+                         (uir-call-args result))]
+              [key (and (pair? item) (first item))]
+              [value (and (pair? item) (pair? (cdr item)) (second item))])
+         (dict-element-spec (position-element-spec key)
+                            (position-element-spec value)))]
+      [(memq name '(list-comp set-comp gen-comp gen-exp))
+       (position-element-spec result)]
+      [else #f]))
+  ;; Element spec of a bare builtin call used as an iterable:
+  ;; filter/reversed/sorted/iter mirror their last argument's element;
+  ;; list(...)/set(...)/tuple(...) with one arg keep the arg's element, with
+  ;; several args destructure position-wise.
+  (define (structural-element-spec c)
+    (define nm (callee-nm (uir-call-callee c)))
+    (define args (uir-call-args c))
+    (cond
+      [(and nm (set-member? (tokens-element-identity-bare-names tokens)
+                            (symbol->string nm))
+            (pair? args))
+       (recur (last-elem args))]
+      [(and nm (set-member? (tokens-synthetic-callees tokens) (symbol->string nm))
+            (memq nm '(list set tuple))
+            (pair? args))
+       (if (= (length args) 1)
+           (position-element-spec (first args))
+           (let ([specs (for/list ([a (in-list args)]) (position-element-spec a))])
+             (and (pair? specs) (ormap (λ (x) x) specs) specs)))]
+      [else #f]))
+  ;; Element spec of a mapping projection (`.items()`/`.values()`/`.keys()` in
+  ;; Python) on a var tracked with a dict element spec. The method names and
+  ;; what each yields are DATA; the projection kinds are engine vocabulary.
+  (define (dict-method-element-spec callee)
+    (define mname (get-field-symbol (uir-get-field callee)))
+    (define kind (and mname (hash-ref (tokens-mapping-projection-methods tokens)
+                                      (symbol->string mname) #f)))
+    (and kind
+         (let* ([base (uir-get-base callee)]
+                [bnm (bare-name-symbol base)])
+           (and bnm
+                (let ([espec (elem-spec-lookup bnm)])
+                  (and (dict-element-spec? espec)
+                       (case kind
+                         [(proj-pair) (list (dict-key-class espec)
+                                            (dict-value-element-class espec))]
+                         [(proj-value) (dict-value-element-class espec)]
+                         [(proj-key) (dict-key-class espec)])))))))
   (cond
     ;; A conditional iterable (`(A, b) if c else (C, d)` destructured through
     ;; the lowerer's tmp subscript): project the union of the two branches'
@@ -128,45 +245,64 @@
          (and rt (stdlib-method-element-type (uir-call-callee iter) rt tokens
                                              class-defs import-env comp owner
                                              value-class))
+         (dict-method-element-spec (uir-call-callee iter))
          (call-element-spec (uir-call-callee iter) comp owner class-defs
                             methods fn-defs known comp-supers import-env
                             element-types))]
     [(and (uir-call? iter))
-     (or
-      ;; A tuple literal used as a destructuring assignment value
-      ;; (`open_method, kwargs, file_path = (open, {}, output)`): the element
-      ;; spec is the class of each element (open, dict, str), so the lowerer's
-      ;; tmp[0] projection types open_method as the file-opener `open`.
-      (and rt
-           (let ([c (uir-call-callee iter)])
-             (and (uir-symbol? c)
-                  (eq? (string->symbol (uir-symbol-name c)) 'tuple)
-                  (let ([args (uir-call-args iter)])
-                    ;; `tuple(<if>)` (a bare tuple RHS that is itself a
-                    ;; conditional of tuples) is the same value as `<if>`:
-                    ;; delegate to the conditional's merged spec.
-                    (cond
-                      [(and (= (length args) 1) (uir-if? (first args)))
-                       (recur (first args))]
-                      [else
-                       (let ([classes (for/list ([a (in-list args)])
-                                        (value-class a))])
-                         ;; A tuple element may be an int-valued module attr
-                         ;; (`errno.ENOTDIR`) with no tracked class: keep the
-                         ;; known positions and leave the rest #f, so the
-                         ;; later tmp[0]/tmp[1] projection types only the
-                         ;; positions it can, instead of dropping the whole
-                         ;; destructure. Require at least one known element.
-                         (and (pair? classes) (ormap (λ (x) x) classes) classes))])))))
-      (call-element-spec (uir-call-callee iter) comp owner class-defs
-                         methods fn-defs known comp-supers import-env
-                         element-types))]
+     (or (and (comprehension-callee? (uir-call-callee iter))
+              (comprehension-element-spec iter))
+         (structural-element-spec iter)
+         ;; A tuple literal used as a destructuring assignment value
+         ;; (`open_method, kwargs, file_path = (open, {}, output)`): the element
+         ;; spec is the class of each element (open, dict, str), so the lowerer's
+         ;; tmp[0] projection types open_method as the file-opener `open`.
+         (and rt
+              (let ([c (uir-call-callee iter)])
+                (and (uir-symbol? c)
+                     (eq? (callee-nm c) 'tuple)
+                     (let ([args (uir-call-args iter)])
+                       ;; `tuple(<if>)` (a bare tuple RHS that is itself a
+                       ;; conditional of tuples) is the same value as `<if>`:
+                       ;; delegate to the conditional's merged spec.
+                       (cond
+                         [(and (= (length args) 1) (uir-if? (first args)))
+                          (recur (first args))]
+                         [else
+                          (let ([classes (for/list ([a (in-list args)])
+                                           (value-class a))])
+                            ;; A tuple element may be an int-valued module attr
+                            ;; (`errno.ENOTDIR`) with no tracked class: keep the
+                            ;; known positions and leave the rest #f, so the
+                            ;; later tmp[0]/tmp[1] projection types only the
+                            ;; positions it can, instead of dropping the whole
+                            ;; destructure. Require at least one known element.
+                            (and (pair? classes) (ormap (λ (x) x) classes) classes))])))))
+         (call-element-spec (uir-call-callee iter) comp owner class-defs
+                            methods fn-defs known comp-supers import-env
+                            element-types))]
     [(and rt (uir-var? iter))
      (define nm (string->symbol (uir-symbol-name (uir-var-name iter))))
      (elem-spec-lookup nm)]
     [(and rt (uir-get? iter))
      (define attr (get-field-symbol (uir-get-field iter)))
-     (and attr
-          (let ([rcls (value-class (uir-get-base iter))])
-            (class-attr-element-type rcls attr tokens)))]
+     (cond
+       ;; attribute iteration (`for operation in migration.operations`)
+       [attr
+        (let ([rcls (value-class (uir-get-base iter))])
+          (class-attr-element-type rcls attr tokens))]
+       ;; subscript projection (`tmp[1]` into a tuple-typed local): the
+       ;; position's ELEMENT class, so a destructured container position
+       ;; re-iterates its elements (model_list -> Model) instead of staying
+       ;; unknown.
+       [else
+        (define base-nm
+          (and (uir-var? (uir-get-base iter))
+               (string->symbol (uir-symbol-name
+                                (uir-var-name (uir-get-base iter))))))
+        (define tspec (and base-nm rt (elem-spec-lookup base-nm)))
+        (define idx (and (uir-number? (uir-get-field iter))
+                         (string->number (uir-number-value (uir-get-field iter)))))
+        (and idx (list? tspec) (>= idx 0) (< idx (length tspec))
+             (spec-element-class (list-ref tspec idx)))])]
     [else #f]))

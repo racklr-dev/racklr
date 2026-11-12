@@ -41,7 +41,9 @@
   tokens-wrapper-callees tokens-runtime-primitives tokens-binding-callees
   tokens-method-receiver-offset tokens-init-method-name
   tokens-keyword-arg-callee tokens-annotation-callee
-  tokens-literal-receiver-type)
+  tokens-literal-receiver-type
+  tokens-element-identity-bare-names
+  tokens-mapping-projection-methods)
 
 ;; The dialect travels inside the token tables (effect-tokens), so every
 ;; existing optional `[tokens default-effect-tokens]` parameter is a complete
@@ -89,3 +91,14 @@
 ;; convention), so the engine never carries the type-name literals.
 (define (tokens-literal-receiver-type tokens kind)
   (hash-ref (dialect-literal-receiver-types (tokens-dialect tokens)) kind #f))
+
+;; Bare builtin names whose iterated element type mirrors their LAST argument's
+;; element type (filter/reversed/sorted/iter in Python).
+(define (tokens-element-identity-bare-names tokens)
+  (effect-tokens-element-identity-bare-names tokens))
+
+;; Mapping iteration-projection method name -> what each yields when iterated
+;; ('proj-key / 'proj-value / 'proj-pair). The method names are library DATA;
+;; the projection kinds are engine vocabulary.
+(define (tokens-mapping-projection-methods tokens)
+  (effect-tokens-mapping-projection-methods tokens))

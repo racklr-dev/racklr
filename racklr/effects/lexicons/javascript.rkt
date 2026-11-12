@@ -167,6 +167,12 @@
     ;; mapping methods returning a value with a default argument: none for the
     ;; JS host yet (JS Map.get takes no default)
     (set)
+    ;; mapping iteration-projection methods: JS Map.keys()/values()/entries()
+    ;; yield the key / value / (key . value) pair respectively.
+    (hash "keys" 'proj-key "values" 'proj-value "entries" 'proj-pair)
+    ;; bare builtins whose iterated element mirrors their last argument
+    ;; (filter/reversed/sorted/iter): none for the JS host yet
+    (set)
     ;; native pure procedures: none for the JS host (its pure names are the
     ;; whole-module / receiver-type tables above)
     (set)

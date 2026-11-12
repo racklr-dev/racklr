@@ -1501,8 +1501,9 @@
 (define (test-self-method-in-tagged-module)
   ;; `self._open()` on a class defined in an io-tagged module: the enclosing
   ;; class grounds the receiver, and class -> module -> domain yields io. The
-  ;; same call in an untagged module has no domain to ground it and stays
-  ;; `unknown` (no heuristic replaces the missing receiver evidence).
+  ;; same call in an untagged module has no domain to ground it and defers to
+  ;; `dynamic` (a tracked runtime callback; no heuristic replaces the missing
+  ;; receiver evidence).
   (define app
     (prog (py-class "Storage"
                     (list (py-method "open"
@@ -1517,7 +1518,7 @@
                        #:import-env (import-env (hash "app.py" "untagged.module")
                                                 (hash) (hash))))
   (check-equal? (row-names (hash-ref untagged (cons "app.py" 'Storage.open)))
-                '(unknown)))
+                '(dynamic)))
 
 (define (test-nested-function-self-method)
   ;; A nested `def` inside a method keeps the enclosing method's class: its
@@ -1583,8 +1584,8 @@
 
 (define (test-self-method-in-pure-tagged-module)
   ;; The class->module->domain tail accepts only a CONCRETE domain capability:
-  ;; an unresolved `self.m()` on a class whose module is tagged pure must stay
-  ;; `unknown`, not become `pure`. An unknown callable attribute may hold user
+  ;; an unresolved `self.m()` on a class whose module is tagged pure must defer
+  ;; to `dynamic`, not become `pure`. An unknown callable attribute may hold user
   ;; code, so a pure-tagged module cannot vouch for it.
   (define app
     (prog (py-class "Helper"
@@ -1594,7 +1595,7 @@
     (infer-effects-all (list (cons "app.py" app))
                        #:import-env (import-env (hash "app.py" "django.utils.encoding")
                                                 (hash) (hash))))
-  (check-equal? (row-names (hash-ref rows (cons "app.py" 'Helper.run))) '(unknown)))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'Helper.run))) '(dynamic)))
 
 (define (test-imported-constructor-receiver)
   ;; `x = MigrationLoader(...)` where MigrationLoader is imported from a module
