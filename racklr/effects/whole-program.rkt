@@ -424,6 +424,16 @@
                          (eq? binding-kind 'unbound)
                          (closure-captured-param? bare-name))
                     (eq? shape 'self-method)))
+              ;; A .m() call whose receiver is a runtime value — an
+              ;; unresolvable call result (f(...).m()), or a local bound from
+              ;; an unresolvable call result or a literal/conditional
+              ;; (x = f(...); x.m(), x = A() if c else B(); x.m()) — is
+              ;; runtime-dispatched: the receiver's class is not statically
+              ;; known, so its methods defer to `dynamic`, never `unknown`.
+              (define runtime-receiver?
+                (or (eq? shape 'call-result)
+                    (and (eq? shape 'local)
+                         (memq binding-kind '(call-result literal)))))
               ;; A declared param effect (host protocol contract) resolves the
               ;; bare-call-to-param shape directly, so it never becomes a row
               ;; hole: the caller (ASGI/WSGI server, socketserver) is outside
@@ -454,7 +464,7 @@
                                       (unresolved-coverage callee param-names tokens)
                                       #:file comp
                                       #:position position)))]
-                [function-value?
+                [(or function-value? runtime-receiver?)
                  (set! effects (cons 'dynamic effects))
                  (when prov
                    (provenance-add-ground!
