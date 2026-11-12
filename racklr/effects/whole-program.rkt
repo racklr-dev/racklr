@@ -385,6 +385,15 @@
                   [else #f]))
               (define higher-order?
                 (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
+              ;; A bare-called LOCAL that holds a FUNCTION VALUE (bound from a
+              ;; call result, a function literal, an attribute, or a loop
+              ;; variable) is a runtime-dispatched callback exactly like a
+              ;; bare-called param: its effects are whatever the held function
+              ;; does, which is not statically known. It materializes as the
+              ;; tracked `dynamic` deferral (modality may), never `unknown`.
+              (define function-value?
+                (and (eq? shape 'bare-call)
+                     (memq binding-kind '(fn call-result attr loop-var comp-var))))
               ;; A declared param effect (host protocol contract) resolves the
               ;; bare-call-to-param shape directly, so it never becomes a row
               ;; hole: the caller (ASGI/WSGI server, socketserver) is outside
@@ -410,6 +419,17 @@
                    (provenance-add-ground!
                     prov
                     (make-callee-site (function-fq k) 'unknown callee
+                                      #:kind 'unresolved
+                                      #:coverage
+                                      (unresolved-coverage callee param-names tokens)
+                                      #:file comp
+                                      #:position position)))]
+                [function-value?
+                 (set! effects (cons 'dynamic effects))
+                 (when prov
+                   (provenance-add-ground!
+                    prov
+                    (make-callee-site (function-fq k) 'dynamic callee
                                       #:kind 'unresolved
                                       #:coverage
                                       (unresolved-coverage callee param-names tokens)
