@@ -391,9 +391,39 @@
               ;; bare-called param: its effects are whatever the held function
               ;; does, which is not statically known. It materializes as the
               ;; tracked `dynamic` deferral (modality may), never `unknown`.
+              ;; A bare name that is NOT a param or local of this function but
+              ;; IS a param of an enclosing function: a closure-captured
+              ;; callback (`def deco(cb): def inner(): cb()`). Its effects are
+              ;; whatever was captured, so it defers to `dynamic` too.
+              (define (closure-captured-param? name)
+                (let loop ([nm (cdr k)] [seen (hash)])
+                  (define parent (and nm (hash-ref fn-parents (cons comp nm) #f)))
+                  (and parent
+                       (or (let ([ps (or (hash-ref fn-params (cons comp parent) #f)
+                                         (hash-ref method-params (cons comp parent) #f))])
+                             (and ps
+                                  (for/or ([p (in-list ps)])
+                                    (define pnm
+                                      (cond
+                                        [(uir-symbol? p)
+                                         (string->symbol (uir-symbol-name p))]
+                                        [(uir-typed-param? p)
+                                         (and (uir-symbol? (uir-typed-param-name p))
+                                              (string->symbol
+                                               (uir-symbol-name (uir-typed-param-name p))))]
+                                        [else #f]))
+                                    (eq? pnm name))))
+                           (and (not (hash-has-key? seen parent))
+                                (begin (hash-set! seen parent #t)
+                                       (loop parent seen)))))))
               (define function-value?
-                (and (eq? shape 'bare-call)
-                     (memq binding-kind '(fn call-result attr loop-var comp-var))))
+                (or (and (eq? shape 'bare-call) (uir-call? callee))
+                    (and (eq? shape 'bare-call)
+                         (memq binding-kind '(fn call-result attr loop-var comp-var)))
+                    (and (eq? shape 'bare-call)
+                         (eq? binding-kind 'unbound)
+                         (closure-captured-param? bare-name))
+                    (eq? shape 'self-method)))
               ;; A declared param effect (host protocol contract) resolves the
               ;; bare-call-to-param shape directly, so it never becomes a row
               ;; hole: the caller (ASGI/WSGI server, socketserver) is outside
