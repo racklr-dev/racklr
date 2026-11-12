@@ -423,7 +423,12 @@
                     (and (eq? shape 'bare-call)
                          (eq? binding-kind 'unbound)
                          (closure-captured-param? bare-name))
-                    (eq? shape 'self-method)))
+                    (eq? shape 'self-method)
+                    ;; a subscript into a param dict yields a server-provided
+                    ;; callable (environ["wsgi.file_wrapper"]) — runtime.
+                    (and (eq? shape 'param)
+                         (uir-get? callee)
+                         (uir-string? (uir-get-field callee)))))
               ;; A .m() call whose receiver is a runtime value — an
               ;; unresolvable call result (f(...).m()), or a local bound from
               ;; an unresolvable call result or a literal/conditional
