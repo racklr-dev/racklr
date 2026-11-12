@@ -158,12 +158,38 @@
   (check-equal? (row-names (hash-ref rows (cons "app.py" 'k))) '(db))
   (check-equal? (row-names (hash-ref rows (cons "app.py" 'main))) '(db))
   ;; Without a concrete caller, the hole stays open and materializes as the
-  ;; honest `unknown` (the polymorphic form never leaks a ?-entry).
+  ;; honest `dynamic` deferral (the polymorphic form never leaks a ?-entry).
   (define solo (infer-effects-all
                 (list (cons "solo.py"
                             (prog (fn "k" (uir-call (v "cb") (list (uir-number "1")))
                                         #:params (list (uir-typed-param (sym "cb") #f #f #f))))))))
-  (check-equal? (row-names (hash-ref solo (cons "solo.py" 'k))) '(unknown)))
+  (check-equal? (row-names (hash-ref solo (cons "solo.py" 'k))) '(dynamic)))
+
+(define (test-declared-param-effect-row)
+  ;; A bare-called parameter whose effect is a HOST PROTOCOL contract (an
+  ;; ASGI/WSGI transport callback) resolves through the injected
+  ;; declared-param-effects table instead of staying an open row hole: the
+  ;; caller (the server) is outside the corpus, so nothing would instantiate
+  ;; it. A param ABSENT from the table stays the honest dynamic deferral.
+  (define p (prog (fn "k" (uir-call (v "cb") (list (uir-number "1")))
+                       #:params (list (uir-typed-param (sym "cb") #f #f #f)))))
+  (define env
+    (import-env (hash "app.py" "django.core.handlers.asgi")
+                (hash)
+                (hash)))
+  (define declared (hash (cons "django.core.handlers.asgi" 'k)
+                         (list (cons 'cb 'io))))
+  (define rows
+    (infer-effects-all (list (cons "app.py" p))
+                       #:import-env env
+                       #:declared-param-effects declared))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'k))) '(io))
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'k)) 'io) 'may)
+  ;; Without the declared entry the same shape is the row-hole deferral:
+  ;; the hole has no in-corpus caller, so it materializes as dynamic.
+  (define undeclared
+    (infer-effects-all (list (cons "app.py" p)) #:import-env env))
+  (check-equal? (row-names (hash-ref undeclared (cons "app.py" 'k))) '(dynamic)))
 
 (define (test-nested-fn-does-not-leak)
   ;; A nested function's effects must not leak into the enclosing function
@@ -724,6 +750,26 @@
                   (py-class "B" (list (py-method "m" (uir-call (dot (v "db") "x") '()))))))
   (define rows (infer-effects p))
   (check-equal? (hash-ref rows 'A.run) (empty-row)))
+
+(define (test-module-global-setdefault)
+  ;; A module-global dict (`_caches = {}`) feeds `_caches.setdefault(name, {})`;
+  ;; the mapping-value projection types the result as the default argument's
+  ;; class (dict), so `self._cache = _caches.setdefault(...)` then grounds
+  ;; `self._cache.clear()` as pure instead of `unknown`.
+  (define p (prog
+             (uir-set! (v "_caches") (uir-record '()))
+             (py-class "C"
+                       (list
+                        (py-method "__init__"
+                                   (uir-set! (dot (v "self") "_cache")
+                                             (uir-call (dot (v "_caches") "setdefault")
+                                                       (list (uir-string "x") (uir-record '())))))
+                        (py-method "m"
+                                   (uir-call (dot (dot (v "self") "_cache") "clear") '()))))))
+  (define rows (infer-effects-all (list (cons "app.py" p))))
+  (define r (hash-ref rows (cons "app.py" 'C.m)))
+  (check-false (row-lookup r 'unknown))
+  (check-equal? (row-names r) '()))
 
 (define (test-unqualified-object-method-stays-unknown)
   ;; `obj.m()` where obj is not self/cls/known-class is unresolvable -> unknown.
@@ -2311,6 +2357,280 @@
                       (cons "app.py" 'stamp)))
   (check-false (row-lookup r 'unknown)))
 
+(define (test-stdlib-class-attr-types)
+  ;; An annotated external framework param (BaseDatabaseWrapper, imported as a
+  ;; class handle) crosses an attribute boundary the corpus class-attr graph
+  ;; cannot see: `ops` is the DatabaseOperations sub-handle
+  ;; (stdlib-class-attr-types DATA), so `connection.ops.sql_flush(...)`
+  ;; classifies db through the receiver chain instead of `unknown`.
+  (define p (prog (fn "sql_flush"
+                      (uir-block
+                       (list (uir-call (dot (dot (v "connection") "ops") "sql_flush")
+                                       '())))
+                      #:params (list (uir-typed-param (uir-symbol "connection")
+                                                      (v "BaseDatabaseWrapper") #f #f)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "BaseDatabaseWrapper"
+                                  (handle 'class "django.db.backends.base.base"
+                                          "BaseDatabaseWrapper")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'sql_flush)))
+  (check-equal? (row-names r) '(db)))
+
+(define (test-project-state-apps-attr)
+  ;; ProjectState.apps crosses the external class-attr boundary to the Apps
+  ;; registry (stdlib-class-attr-types DATA); post_migrate_apps.render_multiple
+  ;; is the migrate command's model-reload mutation (db), not unknown.
+  (define p (prog (fn "reload"
+                      (uir-block
+                       (list (uir-call (dot (dot (v "post_migrate_state") "apps")
+                                            "render_multiple")
+                                       '())))
+                      #:params (list (uir-typed-param (uir-symbol "post_migrate_state")
+                                                      (v "ProjectState") #f #f)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "ProjectState"
+                                  (handle 'class "django.db.migrations.state"
+                                          "ProjectState")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'reload)))
+  (check-equal? (row-names r) '(db)))
+
+
+(define (test-module-marker-param-seeding)
+  ;; `connection = connections[database]` types the local as the `django.db`
+  ;; module-path marker; passing it into an unannotated param seeds the callee
+  ;; receiver env with that marker (the dotted-marker param fallback), so
+  ;; `connection.ops.sql_flush(...)` bottoms out at the module's db domain.
+  (define p
+    (prog
+     (fn "run"
+         (uir-block
+          (list (uir-set! (v "connection")
+                          (uir-get (v "connections") (v "alias")))
+                (uir-call (v "sql_flush") (list (v "connection"))))))
+     (fn "sql_flush"
+         (uir-block
+          (list (uir-call (dot (dot (v "connection") "ops") "sql_flush")
+                          '())))
+         #:params (list (uir-typed-param (uir-symbol "connection") #f #f #f)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "connections"
+                                  (handle 'module "django.db" "connections")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'sql_flush)))
+  (check-equal? (row-names r) '(db)))
+
+
+(define (test-for-loop-tuple-destructure)
+  ;; `for dirpath, dirnames, filenames in os.walk(...)` lowers to a temp loop
+  ;; var plus subscript assigns (`dirnames = tmp[1]`). The tuple element spec
+  ;; (str list list) projects the subscript's element class, so
+  ;; `dirnames.remove(...)` resolves through the list method table instead of
+  ;; `unknown` (the os.walk call itself is io).
+  (define p
+    (prog (fn "scan"
+              (uir-for-each (v "tmp")
+                            (uir-call (dot (v "os") "walk") (list (uir-string ".")))
+                            (uir-block
+                             (list (uir-set! (v "dirnames")
+                                             (uir-get (v "tmp") (uir-number "1")))
+                                   (uir-call (dot (v "dirnames") "remove")
+                                             (list (uir-string "x")))))
+                            #f))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "os" (handle 'module "os" "os")))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'scan)))
+  (check-false (row-lookup r 'unknown)))
+
+
+(define (test-qualified-stdlib-class-over-corpus-name)
+  ;; `email.message.EmailMessage(...)` must resolve to the STDLIB MIME Message,
+  ;; not a same-named corpus class: `m.get_charset()` is then pure (the MIME
+  ;; method table), whereas a corpus-class collision would drop to the corpus
+  ;; class's untagged module domain and stay `unknown`.
+  (define p
+    (prog
+     (py-class "EmailMessage" '())
+     (fn "f"
+         (uir-block
+          (list (uir-set! (v "m")
+                          (uir-call (dot (dot (v "email") "message") "EmailMessage")
+                                    '()))
+                (uir-call (dot (v "m") "get_charset") '()))))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "email" (handle 'module "email" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'f)))
+  (check-false (row-lookup r 'unknown))
+  (check-equal? (row-names r) '()))
+
+
+(define (test-param-method-call-return-projection)
+  ;; `msg = message.message()` where `message` is a param typed by the corpus
+  ;; class EmailMessage: the callee's corpus return type projects through the
+  ;; PARAM receiver (`#:receiver-class`), so `msg` is the MIME Message and
+  ;; `msg.get_charset()` resolves pure — not `unknown`.
+  (define p
+    (prog
+     (py-class "EmailMessage"
+               (list (py-method "message"
+                                (uir-return
+                                 (uir-call (dot (dot (v "email") "message") "EmailMessage")
+                                           '())))))
+     (py-class "Backend"
+               (list (uir-method (uir-symbol "write_message")
+                                 (list (uir-typed-param (sym "message")
+                                                        (v "EmailMessage") #f #f))
+                                 (uir-block
+                                  (list (uir-set! (v "msg")
+                                                  (uir-call (dot (v "message") "message")
+                                                            '()))
+                                        (uir-call (dot (v "msg") "get_charset") '())))
+                                 'public)))))
+  (define env
+    (import-env (hash "app.py" "app")
+                (hash "app" (hash "email" (handle 'module "email" #f)))
+                (hash)))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
+                                         #:import-env env)
+                      (cons "app.py" 'Backend.write_message)))
+  (check-false (row-lookup r 'unknown)))
+
+
+(define (test-self-reassign-keeps-pre-call-type)
+  ;; `x = x.m()` dispatches on the PRE-assignment receiver type: the call
+  ;; resolves as an edge to A.m (pure), not `unknown` — re-typing `x` from m's
+  ;; result would make the call miss the corpus edge.
+  (define p
+    (prog
+     (py-class "B" '())
+     (py-class "A"
+               (list (py-method "m"
+                                (uir-return (uir-call (v "B") '())))
+                     (py-method "run"
+                                (uir-block
+                                 (list (uir-set! (v "x") (uir-call (v "A") '()))
+                                       (uir-set! (v "x")
+                                                 (uir-call (dot (v "x") "m") '())))))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)))
+                      (cons "app.py" 'A.run)))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-bound-method-alias-call)
+  ;; A local bound to a bound-method alias (`m = x.m` or `m = getattr(x,
+  ;; "m")`) is a FUNCTION VALUE: calling it bare dispatches as x.m(...) through
+  ;; the alias's receiver class, so A.run-member / A.run-getattr inherit A.m's
+  ;; db edge instead of `unknown`.
+  (define p
+    (prog
+     (py-class "A"
+               (list (py-method "m" (uir-call (dot (v "db") "commit") '()))
+                     (py-method "run-member"
+                                (uir-block
+                                 (list (uir-set! (v "x") (uir-call (v "A") '()))
+                                       (uir-set! (v "m") (dot (v "x") "m"))
+                                       (uir-call (v "m") '()))))
+                     (py-method "run-getattr"
+                                (uir-block
+                                 (list (uir-set! (v "x") (uir-call (v "A") '()))
+                                       (uir-set!
+                                        (v "m")
+                                        (uir-call (v "getattr")
+                                                  (list (v "x") (uir-string "m")
+                                                        (uir-null))))
+                                       (uir-call (v "m") '()))))))))
+  (define rows (infer-effects-all (list (cons "app.py" p))))
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'A.run-member)) 'db) 'may)
+  (check-equal? (modality (hash-ref rows (cons "app.py" 'A.run-getattr)) 'db) 'may))
+
+(define (test-conditional-class-union-constructs-pure)
+  ;; `c = StringIO if is_str else BytesIO` is SOME class (both branches are
+  ;; pure-to-construct class references naming DIFFERENT classes): a bare call
+  ;; through `c` is pure construction, so A.run carries no `unknown`.
+  (define p
+    (prog
+     (py-class "A"
+               (list (py-method
+                      "run"
+                      (uir-block
+                       (list (uir-set! (v "c")
+                                       (uir-if (v "is_str")
+                                               (v "StringIO")
+                                               (v "BytesIO")))
+                             (uir-call (v "c") (list (uir-string "x"))))))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)))
+                      (cons "app.py" 'A.run)))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-paren-wrapped-conditional-fold)
+  ;; `checks = (self.left if c else self.right)` is a PARENTHESIZED
+  ;; conditional: the front ends wrap a conditional expression in a uir-paren
+  ;; node, which must be transparent to typing. Both branches resolve to the
+  ;; same tracked self-attr class (set), so the fold types `checks` as set and
+  ;; `checks.add(x)` classifies pure instead of `unknown`.
+  (define p
+    (prog
+     (py-class "A"
+               (list (py-method
+                      "__init__"
+                      (uir-block
+                       (list (uir-set! (uir-get (v "self") (sym "left"))
+                                       (uir-call (v "set") '()))
+                             (uir-set! (uir-get (v "self") (sym "right"))
+                                       (uir-call (v "set") '())))))
+                     (py-method
+                      "run"
+                      (uir-block
+                       (list (uir-set! (v "checks")
+                                       (uir-paren
+                                        (uir-if (v "c")
+                                                (uir-get (v "self") (sym "left"))
+                                                (uir-get (v "self") (sym "right")))))
+                             (uir-call (dot (v "checks") "add") (list (v "x"))))))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)))
+                      (cons "app.py" 'A.run)))
+  (check-false (row-lookup r 'unknown)))
+
+(define (test-conditional-lambda-alias-collapse)
+  ;; `apply_style = x.COMMAND_HEADER if c else lambda t: t` then a bare call
+  ;; `apply_style("s")`: the lambda branch is a non-collected function value
+  ;; (contributes no effect), so the conditional collapses to the bound-method
+  ;; alias. COMMAND_HEADER is a pure method name, so the call classifies pure
+  ;; instead of `unknown`.
+  (define p
+    (prog
+     (py-class
+      "A"
+      (list (py-method
+             "run"
+             (uir-block
+              (list (uir-set! (v "x") (uir-call (v "A") '()))
+                    (uir-set! (v "apply_style")
+                              (uir-if (v "c")
+                                      (dot (v "x") "COMMAND_HEADER")
+                                      (fn #f (v "t"))))
+                    (uir-call (v "apply_style") (list (uir-string "s"))))))))))
+  (define r (hash-ref (infer-effects-all (list (cons "app.py" p)))
+                      (cons "app.py" 'A.run)))
+  (check-false (row-lookup r 'unknown)))
+
 (module+ main
   (test-empty-program)
   (test-lambda-not-collected)
@@ -2323,6 +2643,8 @@
   (test-direct-cache)
   (test-transitive)
   (test-higher-order-unknown)
+  (test-row-hole-instantiation)
+  (test-declared-param-effect-row)
   (test-nested-fn-does-not-leak)
   (test-recursion-converges)
   (test-httpx-network)
@@ -2397,6 +2719,7 @@
   (test-cls-method-resolution)
   (test-other-class-method-resolution)
   (test-self-method-scoped-to-owner)
+  (test-module-global-setdefault)
   (test-unqualified-object-method-stays-unknown)
   (test-inherited-self-method-resolution)
   (test-multiple-inheritance-mixin-resolution)
@@ -2486,4 +2809,15 @@
   (test-projection-property-mro)
   (test-projection-submodule-module-function)
   (test-projection-lowercase-imported-class)
+  (test-stdlib-class-attr-types)
+  (test-project-state-apps-attr)
+  (test-module-marker-param-seeding)
+  (test-for-loop-tuple-destructure)
+  (test-qualified-stdlib-class-over-corpus-name)
+  (test-param-method-call-return-projection)
+  (test-self-reassign-keeps-pre-call-type)
+  (test-bound-method-alias-call)
+  (test-conditional-class-union-constructs-pure)
+  (test-paren-wrapped-conditional-fold)
+  (test-conditional-lambda-alias-collapse)
   (displayln "All infer tests passed."))

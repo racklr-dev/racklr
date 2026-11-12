@@ -21,10 +21,14 @@
          stdlib-module-element-types-data
          stdlib-method-element-types-data
          class-attr-element-types-data
+         stdlib-class-attr-types-data
+         dynamic-class-factories-data
+         stdlib-mapping-value-methods-data
          declared-param-types
          declared-return-types
          declared-element-types
-         declared-param-element-types)
+         declared-param-element-types
+         declared-param-effect-rows)
 
 (define stdlib-type-methods-data
   (hash
@@ -127,13 +131,14 @@
                           "process_request_thread" 'pure "server_close" 'io)
    "WSGIServer" (hash "__init__" 'pure "close_request" 'io
                       "process_request_thread" 'pure "get_request" 'io
-                      "handle_error" 'io "serve_forever" 'process)
+                      "handle_error" 'io "serve_forever" 'process
+                      "set_app" 'pure "get_app" 'pure)
    ;; wsgiref request/server handlers Django's basehttp subclasses; their
    ;; methods live outside the scanned corpus, so self/super calls resolve
    ;; here by the external parent's bare class name.
    "WSGIRequestHandler" (hash "log_date_time_string" 'pure "get_stderr" 'pure
                               "parse_request" 'io "send_error" 'io
-                              "get_environ" 'pure "get_app" 'pure)
+                              "get_environ" 'pure)
    "ServerHandler" (hash "__init__" 'pure "cleanup_headers" 'io "get_stdin" 'pure
                          "send_headers" 'io "finish_response" 'io "close" 'io
                          "run" 'io)
@@ -275,6 +280,12 @@
                  "mget" 'cache "mset" 'cache "pipeline" 'cache "flushdb" 'cache
                  "keys" 'cache "ttl" 'cache "setex" 'cache "hset" 'cache
                  "hget" 'cache "publish" 'cache "eval" 'cache)
+   ;; redis-py pipeline: batched command queue, every command is still a cache
+   ;; round trip (execute() sends the batch).
+   "Pipeline" (hash "mset" 'cache "expire" 'cache "execute" 'cache "set" 'cache
+                    "get" 'cache "delete" 'cache "watch" 'cache "multi" 'cache
+                    "reset" 'cache "sadd" 'cache "zadd" 'cache "hset" 'cache
+                    "hget" 'cache "incr" 'cache "decr" 'cache)
    "ConnectionPool" (hash "from_url" 'pure "disconnect" 'io "reset" 'io)
    "DriverInfo" (hash "add_upstream_driver" 'pure)
    ;; django.http.request.HttpRequest methods inherited by WSGIRequest
@@ -315,7 +326,15 @@
                     "values" 'pure "get_content_type" 'pure "get_content_maintype" 'pure
                     "get_content_subtype" 'pure "get_filename" 'pure
                     "get_param" 'pure "get_params" 'pure "is_multipart" 'pure
-                    "walk" 'pure "attach" 'pure "set_charset" 'pure)
+                    "walk" 'pure "attach" 'pure "set_charset" 'pure
+                    ;; email.message.EmailMessage in-memory MIME construction:
+                    ;; building bodies / attaching parts mutates the in-memory
+                    ;; tree (pure) — the network write happens in send_messages.
+                    "add_attachment" 'pure "make_mixed" 'pure
+                    "make_alternative" 'pure "add_alternative" 'pure
+                    "add_related" 'pure "replace_header" 'pure "set_content" 'pure
+                    "set_param" 'pure "del_param" 'pure "get_payload" 'pure
+                    "set_payload" 'pure)
    ;; xml.dom Node / Element (in-memory DOM reads/mutation are pure; the
    ;; file/network read happened when the document was parsed)
    "Node" (hash "getAttribute" 'pure "hasAttribute" 'pure "setAttribute" 'pure
@@ -401,8 +420,11 @@
                   "count" 'pure "index" 'pure "remove" 'pure "reverse" 'pure
                   "rotate" 'pure)
    ;; django.urls.resolvers.URLResolver (external): resolve() matches the
-   ;; request path against the in-memory URL patterns.
-   "URLResolver" (hash "resolve" 'pure)
+   ;; request path against the in-memory URL patterns; check() validates the
+   ;; in-memory URL configuration; resolve_error_handler() looks up the
+   ;; registered error handler (the returned callable is itself dispatched at
+   ;; the call site, not by this lookup).
+   "URLResolver" (hash "resolve" 'pure "check" 'pure "resolve_error_handler" 'pure)
    ;; django.core.mail.backends.base.BaseEmailBackend (external): the email
    ;; backend returned by get_connection; send_messages carries the email
    ;; domain.
@@ -415,7 +437,29 @@
    ;; tearing down test databases (db) — and orchestrates the run (process).
    "DiscoverRunner" (hash "add_arguments" 'pure "run_tests" 'process
                           "setup_databases" 'db "teardown_databases" 'db
-                          "build_suite" 'pure "run_checks" 'db)))
+                          "build_suite" 'pure "run_checks" 'db)
+   ;; django.db.migrations.loader.MigrationLoader (external): reading the
+   ;; applied-migration recorder is db; conflict detection / prefix lookup /
+   ;; state projection are in-memory graph reads.
+   "MigrationLoader" (hash "check_consistent_history" 'db
+                           "detect_conflicts" 'pure
+                           "get_migration_by_prefix" 'pure
+                           "project_state" 'pure)
+   ;; django.db.migrations.graph.MigrationGraph (external): forwards/backwards
+   ;; plan walks the in-memory dependency graph (pure).
+   "MigrationGraph" (hash "forwards_plan" 'pure "backwards_plan" 'pure)
+   ;; django.db.migrations.recorder.MigrationRecorder (external): applied /
+   ;; unapplied migration records are persisted to the DB.
+   "MigrationRecorder" (hash "record_unapplied" 'db "record_applied" 'db
+                             "applied_migrations" 'db)
+   ;; django.db.backends.base.operations.DatabaseOperations (external): SQL
+   ;; generation for the connection's backend (db domain).
+   "DatabaseOperations" (hash "max_name_length" 'pure "sequence_reset_sql" 'db
+                              "sql_flush" 'db "quote_name" 'pure)
+   ;; django.db.backends.base.introspection.DatabaseIntrospection (external):
+   ;; table-name reads hit the DB; type-code mapping is in-memory.
+   "DatabaseIntrospection" (hash "table_names" 'db "django_table_names" 'db
+                                 "get_field_type" 'pure "identifier_converter" 'pure)))
 
 ;; module-path -> (function-name -> result-type-name) for stdlib/framework
 ;; functions whose RESULT is a receiver the next call can flow through
@@ -434,6 +478,12 @@
    "urllib.request" (hash "urlopen" "HTTPResponse")
    ;; os.fdopen wraps a raw fd into a text file object (io-capable receiver).
    "os" (hash "fdopen" "open")
+   ;; tempfile constructors open a real file object (io-capable receiver);
+   ;; the constructor call itself is io via the tempfile module domain, so
+   ;; only the RESULT type lives here (module-class-refs would re-classify
+   ;; the construction as pure, which NamedTemporaryFile is not).
+   "tempfile" (hash "NamedTemporaryFile" "open" "SpooledTemporaryFile" "open"
+                     "TemporaryFile" "open")
    ;; datetime.now()/today()/... construct a datetime whose methods are pure
    ;; (strftime etc.); the result flows through the stdlib-type-methods table.
    "datetime" (hash "now" "datetime" "utcnow" "datetime" "today" "datetime"
@@ -467,7 +517,11 @@
    "django.test.utils" (hash "get_runner" "DiscoverRunner")
    ;; django.utils.crypto.salted_hmac returns an hmac object (digest/hexdigest
    ;; are pure in-memory crypto).
-   "django.utils.crypto" (hash "salted_hmac" "hmac")))
+   "django.utils.crypto" (hash "salted_hmac" "hmac")
+   ;; django.utils.regex_helper._lazy_re_compile is the lazy re.compile
+   ;; wrapper; its result is a compiled Pattern (`_slashes_re.sub(...)` in
+   ;; handlers/wsgi.py), the same result type as re.compile.
+   "django.utils.regex_helper" (hash "_lazy_re_compile" "Pattern")))
 
 ;; module-path -> (attribute-name -> receiver-TYPE-name) for module-qualified
 ;; CLASS references (`smtplib.SMTP`, `ssl.SSLContext`, `concurrent.futures.
@@ -486,6 +540,10 @@
    "ssl" (hash "SSLContext" "SSLContext")
    "socket" (hash "socket" "socket")
    "email.generator" (hash "Generator" "Generator" "BytesGenerator" "Generator")
+   ;; email.message.EmailMessage is the stdlib MIME message Django's
+   ;; EmailMessage.message() constructs; qualified lookup keeps it from
+   ;; colliding with the corpus django.core.mail.message.EmailMessage class.
+   "email.message" (hash "EmailMessage" "Message")
    "collections" (hash "OrderedDict" "OrderedDict" "defaultdict" "defaultdict")
    "concurrent.futures" (hash "ThreadPoolExecutor" "ThreadPoolExecutor"
                               "ProcessPoolExecutor" "ProcessPoolExecutor"
@@ -496,12 +554,38 @@
    "xml.dom.minidom" (hash "Document" "Document")
    "redis" (hash "Redis" "Redis" "ConnectionPool" "ConnectionPool"
                  "DriverInfo" "DriverInfo")
+   ;; pathlib path classes: pure constructors whose methods read the in-memory
+   ;; path parts (`PurePosixPath(...).is_absolute`); PurePosixPath/PureWindowsPath
+   ;; share the PurePath method table.
+   "pathlib" (hash "Path" "Path" "PosixPath" "PosixPath" "WindowsPath" "WindowsPath"
+                   "PurePath" "PurePath" "PurePosixPath" "PurePath"
+                   "PureWindowsPath" "PurePath")
    ;; django.db.models.Expression (SQL expression the DB backend's
    ;; converters operate on; get_db_converters is pure).
    "django.db.models" (hash "Expression" "Expression")
    ;; PIL.ImageFile.Parser: the streaming image parser get_image_dimensions
    ;; feeds image chunks into (feed reads the in-memory buffer).
    "PIL.ImageFile" (hash "Parser" "Parser")))
+
+;; Bare function names whose call RESULT is a dynamically-imported or
+;; dynamically-created CLASS (a class factory): `import_string(path)` imports
+;; the attribute/class at the dotted path, and the 1- or 3-argument builtin
+;; `type(...)` yields a class (the argument's type, or a freshly created
+;; subclass). The result is tracked as the `dynamic-class` marker, so a later
+;; `cls(...)` on that value classifies as pure construction (the class itself
+;; is runtime-dependent; the constructed instance's class comes from the
+;; enclosing function's declared-return-types).
+(define dynamic-class-factories-data
+  (set "import_string" "type"))
+
+;; Mapping methods that RETURN the mapping's value and take an optional
+;; DEFAULT argument: `mapping.get(k, default)` / `mapping.setdefault(k, default)`
+;; / `mapping.pop(k, default)`. The engine projects such a call's result as the
+;; DEFAULT argument's class (a sound lower bound), which grounds the self-attr
+;; receiver dataflow the result feeds (`self._cache = _caches.setdefault(name,
+;; OrderedDict())` → OrderedDict → `self._cache.clear()`).
+(define stdlib-mapping-value-methods-data
+  (set "get" "setdefault" "pop"))
 
 ;; receiver-TYPE -> call -> result-TYPE for CALLS that preserve the receiver
 ;; type: a binary operator (`po_path = Path(dirpath) / f` lowers to
@@ -548,7 +632,14 @@
         "BaseDatabaseWrapper" (hash "schema_editor" "BaseDatabaseSchemaEditor")
         ;; django.template.Engine.from_string/get_template return a Template
         ;; whose render() serializes the in-memory template.
-        "Engine" (hash "from_string" "Template" "get_template" "Template")))
+        "Engine" (hash "from_string" "Template" "get_template" "Template")
+        ;; redis.Redis.pipeline() returns the batched Pipeline the caller then
+        ;; feeds (mset/expire/execute are all cache round trips).
+        "Redis" (hash "pipeline" "Pipeline")
+        ;; argparse.ArgumentParser.parse_args() returns the parsed Namespace
+        ;; whose _get_kwargs() is an in-memory read (call_command's defaults).
+        "ArgumentParser" (hash "parse_args" "Namespace"
+                               "parse_known_args" "Namespace")))
 
 ;; Declared param signatures for external-entry-point parameters the corpus call
 ;; chain could not type: a parameter supplied by a caller OUTSIDE the scanned
@@ -572,6 +663,10 @@
    (list (cons 'field 'Field))
    (cons "django.core.mail.backends.filebased" 'EmailBackend.write_message)
    (list (cons 'message 'EmailMessage))
+   (cons "django.core.paginator" 'Page.__init__)
+   (list (cons 'paginator 'Paginator))
+   (cons "django.core.paginator" 'AsyncPage.__init__)
+   (list (cons 'paginator 'AsyncPaginator))
    (cons "django.core.management.commands.migrate" 'Command.sync_apps)
    (list (cons 'connection 'BaseDatabaseWrapper))
    (cons "django.core.management.commands.migrate" 'Command.describe_operation)
@@ -615,7 +710,26 @@
    (cons "django.core.management.commands.loaddata" 'Command.load_label)
    (list (cons 'fixture 'open))
    (cons "django.core.validators" 'StepValueValidator.__call__)
-   (list (cons 'value 'Decimal))))
+   (list (cons 'value 'Decimal))
+   ;; ASGIRequest._stream / OutputWrapper._out are assigned directly from
+   ;; __init__ parameters (no `or`-default or conditional reassignment), so
+   ;; typing the parameter types the self-attr receiver.
+   (cons "django.core.handlers.asgi" 'ASGIRequest.__init__)
+   (list (cons 'body_file 'open))
+   ;; ASGIHandler.send_response's `response` is the HttpResponse it forwards;
+   ;; typing it lets `response.cookies.values()` iterate Morsel values and
+   ;; `c.OutputString()` classify as pure in-memory formatting.
+   (cons "django.core.handlers.asgi" 'ASGIHandler.send_response)
+   (list (cons 'response 'HttpResponse))
+   ;; LimitedStream wraps a WSGI input stream: `self._read = stream.read` /
+   ;; `self._readline = stream.readline` are bound-method aliases of a generic
+   ;; file object, so typing `stream` as the builtin open file-object type lets
+   ;; `self._read(size)` resolve through the file method table (read/readline
+   ;; are io) instead of staying `unknown`.
+   (cons "django.core.handlers.wsgi" 'LimitedStream.__init__)
+   (list (cons 'stream 'open))
+   (cons "django.core.management.base" 'OutputWrapper.__init__)
+   (list (cons 'out 'open))))
 
 ;; Declared return types for corpus functions whose body projects no return
 ;; class through the dataflow (a dynamic import_module(...).Command() result,
@@ -626,15 +740,41 @@
   (hash
    (cons "django.core.management" 'load_command_class) 'BaseCommand
    (cons "django.core.mail" 'get_connection) 'BaseEmailBackend
+   ;; Dynamic-import connection factories: the body calls
+   ;; `import_string(path)(...)` (a dynamic-class construction), so no concrete
+   ;; class projects through the dataflow; the declared base class is the
+   ;; instance class a caller holds (BaseConnectionHandler.__getitem__ / .all
+   ;; then dispatch its methods).
+   (cons "django.core.cache" 'CacheHandler.create_connection) 'BaseCache
+   (cons "django.core.files.storage.handler" 'StorageHandler.create_storage) 'Storage
+   (cons "django.core.mail.handler" 'MailersHandler.create_connection) 'BaseEmailBackend
    (cons "django.core.handlers.exception" 'get_exception_response) 'HttpResponse
    (cons "django.core.handlers.exception" 'handle_uncaught_exception) 'HttpResponse
+   ;; BaseHandler.get_response / get_response_async return the middleware
+   ;; chain's HttpResponse (the chain's last view result is a response); the
+   ;; body projects no class because `_middleware_chain` is a function value.
+   (cons "django.core.handlers.base" 'BaseHandler.get_response) 'HttpResponse
+   (cons "django.core.handlers.base" 'BaseHandler.get_response_async) 'HttpResponse
    (cons "django.core.management.base" 'BaseCommand.create_parser) 'ArgumentParser
    (cons "django.core.mail.message" 'EmailMessage.message) 'Message
    (cons "django.core.serializers.python" 'Deserializer._get_model_from_node) 'Model
    (cons "django.core.serializers.xml_serializer" 'Deserializer._get_model_from_node) 'Model
+   ;; get_deserializer returns _serializers[format].Deserializer (a class chosen
+   ;; at runtime by format), so no concrete class projects; the dynamic-class
+   ;; marker makes a caller's `d = get_deserializer(f); d(...)` classify as pure
+   ;; construction (mirroring import_string(path)(...)), the same rule
+   ;; get_serializer's `get_serializer(f)()` construction needs.
+   (cons "django.core.serializers" 'get_deserializer) 'dynamic-class
+   (cons "django.core.serializers" 'get_serializer) 'dynamic-class
    ;; get_cookie_signer returns a TimestampSigner (a corpus class in signing.py);
    ;; its unsign() calls the in-memory signer (crypto is pure).
-   (cons "django.core.signing" 'get_cookie_signer) 'TimestampSigner))
+   (cons "django.core.signing" 'get_cookie_signer) 'TimestampSigner
+   ;; fetch_command returns a loaded BaseCommand instance (a specific Command
+   ;; subclass at runtime, but the base class is the resolvable caller type).
+   (cons "django.core.management" 'ManagementUtility.fetch_command) 'BaseCommand
+   ;; InMemoryDirNode.resolve navigates to a (possibly newly created) directory
+   ;; node; its body's loop reassigns `current_node` so no single class projects.
+   (cons "django.core.files.storage.memory" 'InMemoryDirNode.resolve) 'InMemoryDirNode))
 
 ;; ELEMENT TYPE(S) of a module FUNCTION used as an iterable in a for-loop / with
 ;; (`for dirpath, dirnames, filenames in os.walk(...)`, `with os.scandir(p) as
@@ -686,6 +826,51 @@
    ;; of MigrationRecord namedtuples (whose .applied is a datetime).
    "MigrationLoader" (hash "applied_migrations" "MigrationRecord")))
 
+;; VALUE TYPE of an ATTRIBUTE on a tracked framework class, used when the
+;; attribute is itself the receiver of a further call (`connection.ops.sql_flush`,
+;; `executor.loader.check_consistent_history`, `Model._meta.get_fields`):
+;; class -> (attr -> value-type). The value mirror of
+;; class-attr-element-types-data (which names a container's ELEMENT class);
+;; this names the attribute's VALUE class, so a multi-level receiver chain
+;; crosses an external object boundary without a corpus class-attr graph.
+(define stdlib-class-attr-types-data
+  (hash
+   ;; django.db.backends.base.base.BaseDatabaseWrapper's cached sub-handles.
+   "BaseDatabaseWrapper" (hash "ops" "DatabaseOperations"
+                                "introspection" "DatabaseIntrospection")
+   ;; django.db.migrations.executor.MigrationExecutor's cached sub-handles.
+   "MigrationExecutor" (hash "loader" "MigrationLoader"
+                             "recorder" "MigrationRecorder")
+   ;; django.db.migrations.loader.MigrationLoader.graph.
+   "MigrationLoader" (hash "graph" "MigrationGraph")
+   ;; django.db.models.base.Model._meta (Options).
+   "Model" (hash "_meta" "django.db.models.options.Options")
+   ;; django.db.models.options.Options.pk (the primary-key Field).
+   "django.db.models.options.Options" (hash "pk" "Field")
+   ;; django.db.migrations.recorder.MigrationRecord.applied (datetime).
+   "MigrationRecord" (hash "applied" "datetime")
+   ;; django.db.migrations.state.ProjectState.apps (the Apps registry the
+   ;; migrate command reloads models through): unregister_model/render_multiple/
+   ;; bulk_update are model-registry mutation in the db domain.
+   "ProjectState" (hash "apps" "Apps")
+   ;; django.http.HttpResponse.cookies (the in-memory cookie jar a response
+   ;; carries; `response.cookies.values()` iterates Morsel instances).
+   "HttpResponse" (hash "cookies" "SimpleCookie")
+   ;; django.core.cache.backends.redis.RedisCacheClient's configured serializer
+   ;; and connection-pool class (`self._pool_class.from_url` on a classmethod;
+   ;; `self._serializer.dumps/loads` round-trip through pickle).
+   "RedisCacheClient" (hash "_serializer" "RedisSerializer"
+                             "_pool_class" "ConnectionPool")
+   ;; django.core.files.utils.FileProxyMixin delegates read/write/flush/... to
+   ;; its wrapped file object (`self.file.readable` / `self.file.writable`).
+   "FileProxyMixin" (hash "file" "open")
+   ;; django.core.management.ManagementUtility.argv (`self.argv.remove`).
+   "ManagementUtility" (hash "argv" "list")
+   ;; django.core.servers.basehttp.WSGIRequestHandler inherits connection/server
+   ;; from the external socketserver base (`self.connection.shutdown`, and
+   ;; `self.server.get_app` on the WSGIServer).
+   "WSGIRequestHandler" (hash "connection" "socket" "server" "WSGIServer")))
+
 ;; Declared ELEMENT types for iterable-returning calls whose element class no
 ;; corpus assignment can project: keyed (module-path . qualified-name) →
 ;; element spec (a class symbol — often a module-qualified marker so an
@@ -735,3 +920,30 @@
    ;; SQL column type (pure formatting).
    (cons "django.core.management.commands.createcachetable" 'Command.create_table)
    (list (cons 'fields 'Field))))
+
+;; Declared EFFECT rows for a PARAMETER that a function bare-calls (the
+;; higher-order row-hole shape): keyed (module-path . qualified-name) ->
+;; ((param-name . effect-domain) ...). A callback parameter that the function
+;; itself invokes (`send`/`receive` in the ASGI handlers, `start_response` in
+;; the WSGI handler, `on_bind` in the dev server) has its effect defined by the
+;; host protocol, not by any in-corpus call site: the caller (an ASGI/WSGI
+;; server, the socketserver) lives outside the scanned corpus, so the row hole
+;; has nothing to instantiate with and stays `unknown`. This table states the
+;; protocol contract as DATA, exactly as declared-param-types states the
+;; parameter's CLASS; the callback's effect is the transport write/read, the
+;; `io` domain (django.http is tagged io). Polymorphic callbacks whose effect
+;; depends on the caller (cache `default`, serializer `Model`, storage
+;; `child_cls`, attrs `omittable`) are deliberately ABSENT: they stay honest
+;; `unknown` rather than claiming a contract they do not have.
+(define declared-param-effect-rows
+  (hash
+   (cons "django.core.handlers.asgi" 'ASGIHandler.send_response)
+   (list (cons 'send 'io))
+   (cons "django.core.handlers.asgi" 'ASGIHandler.read_body)
+   (list (cons 'receive 'io))
+   (cons "django.core.handlers.asgi" 'ASGIHandler.listen_for_disconnect)
+   (list (cons 'receive 'io))
+   (cons "django.core.handlers.wsgi" 'WSGIHandler.__call__)
+   (list (cons 'start_response 'io))
+   (cons "django.core.servers.basehttp" 'run)
+   (list (cons 'on_bind 'io))))

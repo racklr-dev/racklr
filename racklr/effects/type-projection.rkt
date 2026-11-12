@@ -19,15 +19,17 @@
 (require racklr/uir
          racklr/effects/shape
          racklr/effects/library-tokens
+         racklr/effects/effect-roots
          racklr/effects/lexicon)
 
-(provide operator-result-type method-result-type literal-value-type)
+(provide operator-result-type method-result-type mapping-get-result-type
+         literal-value-type)
 
 ;; Result type of `(receiver-type, call)` from the injected table, or #f.
 (define (projection-result-type tokens rcls op)
   (and rcls op
        (let* ([table (hash-ref (effect-tokens-type-result-projections tokens)
-                               (symbol->string rcls) #f)]
+                               (symbol->string (stdlib-class-symbol rcls tokens)) #f)]
               [t (and table (hash-ref table (symbol->string op) #f))])
          (and t (string->symbol t)))))
 
@@ -51,6 +53,40 @@
               [op (effect-op-of-callee callee)]
               [bcls (and base (project-class base))])
          (projection-result-type tokens bcls op))))
+
+;; Is `bcls` a mapping receiver (dict or a subclass): its stdlib method table
+;; carries at least one of the host's mapping value-returning methods. Used to
+;; project the value half of `mapping.get(k, default)` /
+;; `mapping.setdefault(k, default)`.
+(define (mapping-receiver-type? bcls tokens)
+  (and bcls
+       (let ([m (hash-ref (effect-tokens-stdlib-type-methods tokens)
+                          (symbol->string (stdlib-class-symbol bcls tokens)) #f)])
+         (and m (for/or ([mn (in-set (effect-tokens-mapping-value-methods tokens))])
+                  (hash-ref m mn #f))))))
+
+;; Result TYPE of a mapping value-returning method call
+;; (`_caches.setdefault(name, OrderedDict())` → dict / the default's class).
+;; The method is one of the host's mapping value-returning methods (DATA),
+;; each of which takes an optional DEFAULT argument; the default argument's
+;; projected class is a sound lower bound on the result (`setdefault` returns
+;; the default only when the key is absent, `get` returns it whenever the key
+;; is absent, `pop` returns it the same way). `project` is the caller's
+;; value→type projection.
+(define (mapping-get-result-type value project tokens)
+  (and (uir-call? value)
+       (member-access-callee? (uir-call-callee value))
+       (let* ([callee (uir-call-callee value)]
+              [base (member-access-base callee)]
+              [op (member-access-field callee)]
+              [bcls (and base (project base))]
+              [args (uir-call-args value)])
+         (and op
+              (set-member? (effect-tokens-mapping-value-methods tokens)
+                           (symbol->string op))
+              (mapping-receiver-type? bcls tokens)
+              (>= (length args) 2)
+              (project (second args))))))
 
 ;; Receiver TYPE of a literal VALUE expression, from the host dialect's literal
 ;; receiver-type map: `xs = []; xs.append(v)` gets `list` from the dialect's

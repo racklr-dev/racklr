@@ -41,9 +41,50 @@
                            [return-types #f] [cov-box #f]
                            #:lexicon [lex default-lexicon])
   (define tokens (lexicon-tokens lex))
+  ;; FUNCTION-VALUE pre-pass: a bare call of a local bound to a bound-method
+  ;; alias (`x = obj.m` / `x = getattr(obj, "m", d)`), or a `self.attr(...)`
+  ;; call where attr is such an alias (`self._read = stream.read`), dispatches
+  ;; as if the callee were `obj.m(...)`. Rewrite the callee to a synthetic
+  ;; member access on a fresh receiver whose class is the alias's receiver, so
+  ;; the normal member-access cascade (MRO edge, receiver domain, stdlib
+  ;; method table) classifies it without a second code path.
+  (define fnv-desc
+    (let* ([bnm (and (not (member-access-callee? callee))
+                     (bare-name-symbol callee))]
+           [sfn (and rt (member-access-callee? callee)
+                     (member-access-field callee)
+                     (tokens-self-name? tokens
+                                        (bare-name-symbol
+                                         (member-access-base callee)))
+                     (hash-ref (receiver-types-fn-self-attrs rt)
+                               (member-access-field callee) #f))]
+           [desc (or (and rt bnm
+                          (hash-ref (receiver-types-fn-locals rt) bnm #f))
+                     sfn)])
+      desc))
   (define nm (callee-name callee))
   (define keys (method-callee-keys callee comp owner methods class-defs comp-supers tokens))
   (define key (for/or ([k (in-list keys)] #:when (hash-has-key? known k)) k))
+  ;; Calling a CONSTRUCTED instance (`FileExtensionValidator(...)(value)`,
+  ;; `get_serializer(format)()`): the callee is itself a call whose result is a
+  ;; corpus class; invoking that instance dispatches to the class's `__call__`
+  ;; through its MRO. This is structural (the instance class is resolved from
+  ;; the construction's callee), not the name-only `__call__` heuristic.
+  (define instance-call-key
+    (and rt (uir-call? callee)
+         (let* ([icls (or (value-class-of callee rt class-defs tokens import-env comp owner)
+                          (corpus-projected-value-class callee rt class-defs owner return-types
+                                                        methods fn-defs known comp-supers
+                                                        tokens import-env comp))])
+           (cond
+             ;; A dynamic class factory (`get_serializer(f)`) whose result is a
+             ;; runtime-chosen class: the outer `(...)()` is pure construction.
+             [(dynamic-class-marker? icls) 'pure]
+             [else
+              (let ([c (and icls (resolve-class-component icls comp class-defs))])
+                (and c
+                     (for/or ([k (in-list (mro-method-keys c icls '__call__ methods class-defs comp-supers))])
+                       (and (hash-has-key? known k) k))))]))))
   ;; Side channel for the coverage label (racklr/effects/labels): what evidence
   ;; classified this call. 'dataflow means the receiver class came from
   ;; receiver-type dataflow (locals, self-attributes, chains, call results);
@@ -53,8 +94,43 @@
   (define (note-evidence! kind) (when cov-box (set-box! cov-box kind)))
   (note-evidence! 'structural)
   (cond
+    ;; A function-valued local/self-attr bound to a bound-method alias: classify
+    ;; by recursing on a synthetic `receiver.method(...)` with the alias's
+    ;; receiver class injected. The synthetic base `__fnv__` is never itself a
+    ;; fn-alias, so the recursion terminates in the normal member-access path.
+    [(and fnv-desc (car fnv-desc))
+     (note-evidence! 'dataflow)
+     (define locals* (hash-copy (receiver-types-locals rt)))
+     (hash-set! locals* '__fnv__ (car fnv-desc))
+     (classify-call-all
+      (uir-get (uir-var (uir-symbol "__fnv__"))
+               (uir-symbol (symbol->string (cdr fnv-desc))))
+      known methods class-defs fn-defs comp-supers class-attrs
+      comp owner import-env
+      (receiver-types locals*
+                      (receiver-types-self-attrs rt)
+                      (receiver-types-elem-specs rt)
+                      (receiver-types-globals rt)
+                      (receiver-types-fn-locals rt)
+                      (receiver-types-fn-self-attrs rt))
+      return-types cov-box #:lexicon lex)]
     [(and key (hash-has-key? known key)) (cons 'edge key)]
+    [(eq? instance-call-key 'pure) (cons 'pure #f)]
+    [instance-call-key (cons 'edge instance-call-key)]
     [(bare-function-key nm comp fn-defs known) => (λ (k) (cons 'edge k))]
+    ;; A MODULE-QUALIFIED corpus function call (`color.color_style()`,
+    ;; `mail.get_connection()`): the callee's root resolves through the import
+    ;; graph to a module handle whose path is a scanned corpus module, and
+    ;; `func` is a bare function defined there. This is the EFFECT-half mirror
+    ;; of `module-function-key`'s return-type projection: the call resolves as
+    ;; a call-graph edge to that corpus function's own row instead of a coarse
+    ;; module-domain fallback or a name heuristic. Bare functions and tracked
+    ;; receivers already resolved above keep their more specific paths.
+    [(and (member-access-callee? callee)
+          (dotted-root callee) (effect-op-of-callee callee)
+          (module-function-key (dotted-root callee) (effect-op-of-callee callee)
+                              comp import-env fn-defs known))
+     => (λ (k) (cons 'edge k))]
     [else
      ;; A locally-tracked receiver (x = KnownClass(...)) shadows any import of
      ;; the same name and, more importantly, wins over the constructor

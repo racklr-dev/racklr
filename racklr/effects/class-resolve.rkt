@@ -197,29 +197,48 @@
 
 ;; Projected result class of a corpus function/method call
 ;; (`get_cookie_signer(...)`, `self.method()`), resolved through the
+;; Project the return type of a METHOD call from its candidate MRO keys:
+;; project only when every candidate key WITH a projected type agrees on one
+;; class (sound: a mixed MRO is not projected).
+(define (project-method-return-type mks return-types)
+  (and (pair? mks)
+       (let loop ([mks mks] [t #f])
+         (cond
+           [(null? mks) t]
+           [else
+            (define kt (hash-ref return-types (car mks) #f))
+            (cond
+              [(not kt) (loop (cdr mks) t)]
+              [(not t) (loop (cdr mks) kt)]
+              [(eq? kt t) (loop (cdr mks) t)]
+              [else #f])]))))
+
 ;; return-type projection table built by whole-program's pass 2. A bare
 ;; function call resolves through its unique definition key; a method call
 ;; resolves through its candidate MRO keys and projects only when every
 ;; candidate key WITH a projected type agrees on one class (sound: a mixed
-;; MRO is not projected).
+;; MRO is not projected). `#:receiver-class` (optional) resolves a
+;; member-access receiver through the CALLER's receiver-type env — a param /
+;; local / self-attr / chained value — so `message.message()` (param typed
+;; EmailMessage) and `self.fetch_command(x)` project their corpus return types
+;; the same way a bare `self.m()` does. The caller supplies the resolution to
+;; avoid a receiver-chain dependency cycle.
 (define (corpus-call-return-type callee comp class-defs owner methods fn-defs known comp-supers return-types
-                                 [tokens default-effect-tokens])
+                                 [tokens default-effect-tokens]
+                                 #:receiver-class [rcfn #f])
   (and return-types
        (let ([nm (callee-name callee)])
          (or (and nm (let ([k (bare-function-key nm comp fn-defs known)])
                        (and k (hash-ref return-types k #f))))
-             (let ([mks (method-callee-keys callee comp owner methods class-defs comp-supers tokens)])
-               (and (pair? mks)
-                    (let loop ([mks mks] [t #f])
-                      (cond
-                        [(null? mks) t]
-                        [else
-                         (define kt (hash-ref return-types (car mks) #f))
-                         (cond
-                           [(not kt) (loop (cdr mks) t)]
-                           [(not t) (loop (cdr mks) kt)]
-                           [(eq? kt t) (loop (cdr mks) t)]
-                           [else #f])]))))))))
+             (let ([mks (or (and rcfn (member-access-callee? callee)
+                                 (let* ([mname (member-access-field callee)]
+                                        [rcls (and mname (rcfn (member-access-base callee)))]
+                                        [rc (and rcls
+                                                 (resolve-class-component rcls comp class-defs))])
+                                   (and rc rcls mname
+                                        (mro-method-keys rc rcls mname methods class-defs comp-supers))))
+                            (method-callee-keys callee comp owner methods class-defs comp-supers tokens))])
+               (project-method-return-type mks return-types))))))
 
 
 ;; `(component . func)` key for a module-qualified corpus function call
@@ -292,15 +311,19 @@
 ;; submod` binding for a lowercase member is synthesized as an fn handle whose
 ;; path is the PARENT package and whose name is the submodule, so its effective
 ;; module path is parent.submod (`from email import generator` →
-;; "email.generator"). A lowercase class imported from its own module
-;; (`from datetime import datetime`) keeps its path: appending its name would
-;; invent a non-existent "datetime.datetime".
+;; "email.generator"). The discriminator is the handle name vs the path's last
+;; component, NOT the local binding name: `from PIL import ImageFile as
+;; PillowImageFile` aliases the local away from the submodule name, but the
+;; handle still records path "PIL" + name "ImageFile", so appending the name
+;; must still reconstruct "PIL.ImageFile". A lowercase class imported from its
+;; own module (`from datetime import datetime`) keeps its path: its name IS the
+;; path's last component, so appending would invent "datetime.datetime". The
+;; local alias (root) is irrelevant to both cases.
 (define (imported-binding-module-path h root)
   (and (handle? h) (handle-path h)
        (cond
          [(eq? (handle-kind h) 'module) (handle-path h)]
-         [(and (eq? (handle-kind h) 'fn) (handle-name h) root
-               (string=? (handle-name h) (symbol->string root))
+         [(and (eq? (handle-kind h) 'fn) (handle-name h)
                (not (string=? (handle-name h) (last-component (handle-path h)))))
           (string-append (handle-path h) "." (handle-name h))]
          [else (handle-path h)])))
@@ -336,14 +359,30 @@
               [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
               [h (and e root (hash-ref e (symbol->string root) #f))]
               [path0 (imported-binding-module-path h root)])
-         (and path0 (memq (handle-kind h) '(module fn))
-              attr (pair? fields) (>= (length fields) 2)
+         (and path0 attr (pair? fields) (>= (length fields) 2)
               (let* ([middle (drop-right (rest fields) 1)]
-                     [path (if (null? middle)
-                               path0
-                               (string-append path0 "."
-                                              (string-join (map symbol->string middle) ".")))]
-                     [table (hash-ref (effect-tokens-module-class-refs tokens) path #f)]
+                     [base-path (if (null? middle)
+                                    path0
+                                    (string-append path0 "."
+                                                   (string-join (map symbol->string middle) ".")))]
+                     ;; A `from pkg import Name` binding synthesized as a CLASS
+                     ;; handle may actually name a MODULE (`from PIL import
+                     ;; ImageFile as PillowImageFile`): the handle records path
+                     ;; "PIL" + name "ImageFile". The DATA module-class-refs
+                     ;; table is authoritative for whether `pkg.Name` is a
+                     ;; module: if it has a class table, resolve the root as
+                     ;; that module instead of as a class in `pkg`. A module/fn
+                     ;; handle resolves exactly as before.
+                     [module-path
+                      (or (and (memq (handle-kind h) '(module fn)) base-path)
+                          (and (eq? (handle-kind h) 'class)
+                               (handle-name h)
+                               (let ([cand (string-append (handle-path h) "."
+                                                          (handle-name h))])
+                                 (and (hash-has-key? (effect-tokens-module-class-refs tokens) cand)
+                                      cand))))]
+                     [table (and module-path
+                                 (hash-ref (effect-tokens-module-class-refs tokens) module-path #f))]
                      [t (and table (hash-ref table (symbol->string attr) #f))])
                 (and t (string->symbol t)))))))
 

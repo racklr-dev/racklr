@@ -158,6 +158,13 @@
     (hash)
     (hash)
     (hash)
+    ;; class attribute value types: none for the JS host yet
+    (hash)
+    ;; bare class factories: none for the JS host yet
+    (set)
+    ;; mapping methods returning a value with a default argument: none for the
+    ;; JS host yet (JS Map.get takes no default)
+    (set)
     ;; native pure procedures: none for the JS host (its pure names are the
     ;; whole-module / receiver-type tables above)
     (set)

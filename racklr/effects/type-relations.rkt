@@ -33,16 +33,21 @@
 (provide type-relations? type-relations
          type-relations-assign type-relations-self-attr
          type-relations-param type-relations-return
-         type-relations-elem-specs
+         type-relations-elem-specs type-relations-globals
+         type-relations-assign-fn type-relations-self-attr-fn
          set-type-relations-assign! set-type-relations-self-attr!
          set-type-relations-param! set-type-relations-return!
          set-type-relations-elem-specs!
+         set-type-relations-assign-fn! set-type-relations-self-attr-fn!
          materialize-type-relations
          close-type-relations!
          class-attr-env
+         module-globals
          seed-params)
 
-(struct type-relations (assign self-attr param return elem-specs) #:transparent #:mutable)
+(struct type-relations
+  (assign self-attr param return elem-specs globals assign-fn self-attr-fn)
+  #:transparent #:mutable)
 
 (define (key<? a b)
   (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
@@ -82,6 +87,36 @@
         [(struct? n)
          (for ([f (in-list (cdr (vector->list (struct->vector n))))]) (walk f))]
         [(pair? n) (walk (car n)) (walk (cdr n))])))
+  h)
+
+;; Module-level name -> class, from top-level assignments (`_caches = {}` →
+;; dict, `urlpatterns = [...]` → list). These are the free-name fallbacks every
+;; function in the component shares: a function body that reads `_caches` (or
+;; `_caches.setdefault(...)`) resolves the name to the module global's type.
+;; Only top-level assignments are read (never a class/function body's locals),
+;; and only STATIC projections — a literal, a known constructor, a class
+;; reference — so the module-global table needs no fixpoint round of its own.
+;; Call-result globals and cross-global chains stay unprojected until the
+;; join (they are rare at module scope in the scanned corpora).
+(define (module-globals program class-defs import-env comp
+                        [tokens default-effect-tokens])
+  (define h (make-hash))
+  (define rt (receiver-types (hash) (hash) (hash) (hash) (hash) (hash)))
+  (define (vc v) (value-class-of v rt class-defs tokens import-env comp #f))
+  (let walk ([n program])
+    (cond
+      [(uir-block? n)
+       (for ([s (in-list (uir-block-stmts n))])
+         (cond
+           [(uir-set!? s)
+            (define lhs (uir-set!-name s))
+            (define nm (and (or (uir-var? lhs) (uir-symbol? lhs))
+                            (bare-name-symbol lhs)))
+            (define cls (and nm (vc (uir-set!-value s))))
+            (when (and nm cls) (hash-set! h nm cls))]
+           [(uir-if? s) (walk (uir-if-then s)) (walk (uir-if-else s))]
+           [else (void)]))]
+      [else (void)]))
   h)
 
 ;; Wrap a propagated param type as a typed-param so the annotation-seeding path
@@ -131,8 +166,21 @@
                              #:when (eq? n (car pd)))
                       i))
         (define kk (cons k idx))
-        (when (and idx (not (hash-has-key? out kk)))
-          (hash-set! out kk (cdr pd))))))
+        (define existing (and idx (hash-ref out kk #f)))
+        (define declared (cdr pd))
+        (when (and idx
+                   (or (not existing)
+                       ;; A declared CONCRETE class outranks a call-chain
+                       ;; MODULE-PATH marker (`django.db`): the marker is the
+                       ;; coarse singleton-domain fallback, while the declared
+                       ;; class names the instance type a result projection
+                       ;; needs (BaseDatabaseWrapper.schema_editor() ->
+                       ;; BaseDatabaseSchemaEditor). Concrete-vs-concrete
+                       ;; conflicts still keep call-chain evidence.
+                       (and (symbol? existing) (symbol? declared)
+                            (string-contains? (symbol->string existing) ".")
+                            (not (string-contains? (symbol->string declared) ".")))))
+          (hash-set! out kk declared)))))
   out)
 
 ;; Self-attribute assignments collected across every class: class-level field
@@ -145,8 +193,10 @@
                           [param-types (hash)]
                           [return-types #f]
                           [methods #f] [fn-defs #f] [known #f] [comp-supers #f]
-                          #:tokens [tokens default-effect-tokens])
+                          #:tokens [tokens default-effect-tokens]
+                          #:globals [globals (hash)])
   (define h (class-field-attrs comp-programs class-defs import-env tokens))
+  (define hfn (make-hash))  ;; (comp . class) -> { attr -> (cons class method) }
   (for ([cp (in-list comp-programs)])
     (define comp (car cp))
     (define mparams (collect-method-params (cdr cp)))
@@ -155,50 +205,69 @@
       (define body (hash-ref cmethods n))
       (define owner (class-name-of-name n))
       (define k (cons comp n))
-      (define sa (receiver-types-self-attrs
-                  (infer-receiver-types body class-defs (hash) import-env comp
-                                        (seed-params (hash-ref mparams n '()) k param-types)
-                                        owner
-                                        #:tokens tokens
-                                        #:return-types return-types
-                                        #:methods methods
-                                        #:fn-defs fn-defs
-                                        #:known known
-                                        #:comp-supers comp-supers)))
+      (define rt (infer-receiver-types body class-defs (hash) import-env comp
+                                       (seed-params (hash-ref mparams n '()) k param-types)
+                                       owner
+                                       #:tokens tokens
+                                       #:return-types return-types
+                                       #:methods methods
+                                       #:fn-defs fn-defs
+                                       #:known known
+                                       #:comp-supers comp-supers
+                                       #:globals (hash-ref globals comp (hash))))
+      (define sa (receiver-types-self-attrs rt))
+      (define safn (receiver-types-fn-self-attrs rt))
       (define key (cons comp owner))
       (define cur (hash-ref h key #f))
       (cond
         [(not cur) (unless (zero? (hash-count sa)) (hash-set! h key (hash-copy sa)))]
-        [else (for ([(attr kls) (in-hash sa)]) (hash-set! cur attr kls))])))
-  h)
+        [else (for ([(attr kls) (in-hash sa)]) (hash-set! cur attr kls))])
+      (define curfn (hash-ref hfn key #f))
+      (cond
+        [(not curfn) (unless (zero? (hash-count safn)) (hash-set! hfn key (hash-copy safn)))]
+        [else (for ([(attr d) (in-hash safn)]) (hash-set! curfn attr d))])))
+  (values h hfn))
 
 ;; Inherited self-attribute environment for a class, following the MRO across
 ;; files with the most-derived class first. Returns a receiver-types with no
 ;; locals (locals are per-function).
-(define (class-attr-env comp class-name self-attr class-defs comp-supers)
+(define (class-attr-env comp class-name self-attr class-defs comp-supers
+                        [self-attr-fn (hash)])
   (define seen (make-hash))
   (define acc (make-hash))
+  (define accfn (make-hash))
   (let loop ([c comp] [cls class-name])
     (when (and c cls (not (hash-has-key? seen (cons c cls))))
       (hash-set! seen (cons c cls) #t)
       (for ([(attr kls) (in-hash (hash-ref self-attr (cons c cls) (hash)))])
         (unless (hash-has-key? acc attr) (hash-set! acc attr kls)))
+      (for ([(attr d) (in-hash (hash-ref self-attr-fn (cons c cls) (hash)))])
+        (unless (hash-has-key? accfn attr) (hash-set! accfn attr d)))
       (for ([sr (in-list (hash-ref comp-supers (cons c cls) '()))])
         (define c2 (car sr))
         (define s (cdr sr))
         (when (and c2 s) (loop c2 s)))))
-  (receiver-types (hash) acc (hash)))
+  (receiver-types (hash) acc (hash) (hash) (hash) accfn))
 
 ;; Syntax-visible seed: the self-attr relation from class fields + method
 ;; bodies. assign/param/return are empty until the join runs.
 (define (materialize-type-relations comp-programs class-defs import-env
                                     #:tokens [tokens default-effect-tokens])
+  (define globals (make-hash))   ;; comp -> { name-symbol -> class-symbol }
+  (for ([cp (in-list comp-programs)])
+    (hash-set! globals (car cp)
+               (module-globals (cdr cp) class-defs import-env (car cp) tokens)))
+  (define-values (seed-sa seed-safn)
+    (class-self-attrs comp-programs class-defs import-env (hash)
+                      #:tokens tokens))
   (type-relations (make-hash)
-                  (class-self-attrs comp-programs class-defs import-env (hash)
-                                    #:tokens tokens)
+                  seed-sa
                   (make-hash)
                   (make-hash)
-                  (make-hash)))
+                  (make-hash)
+                  globals
+                  (make-hash)
+                  seed-safn))
 
 ;; Deterministic join: close assign / self-attr / param / return to a fixed
 ;; point. Each round recomputes all four relations from the current others;
@@ -233,6 +302,9 @@
   (define param (type-relations-param tr))
   (define return (type-relations-return tr))
   (define elem-specs (type-relations-elem-specs tr))
+  (define globals (type-relations-globals tr))
+  (define assign-fn (type-relations-assign-fn tr))
+  (define self-attr-fn (type-relations-self-attr-fn tr))
 
   (define all-keys (sort (append (hash-keys fns) (hash-keys methods)) key<?))
   (define known (make-hash))
@@ -254,23 +326,67 @@
   ;; per-key elem-spec relation.
   (define (rt-of k)
     (define owner (owner-of k))
-    (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
+    (define class-env
+      (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers
+                                 self-attr-fn)))
     (receiver-types (hash-ref assign k (hash))
                     (or (and class-env (receiver-types-self-attrs class-env)) (hash))
-                    (hash-ref elem-specs k (hash))))
+                    (hash-ref elem-specs k (hash))
+                    (hash-ref globals (car k) (hash))
+                    (hash-ref assign-fn k (hash))
+                    (or (and class-env (receiver-types-fn-self-attrs class-env)) (hash))))
 
   (define (rebuild-self-attrs!)
-    (set! self-attr (class-self-attrs comp-programs class-defs import-env param
-                                      return methods fn-defs known comp-supers
-                                      #:tokens tokens))
-    (set-type-relations-self-attr! tr self-attr))
+    (define-values (new-sa new-safn)
+      (class-self-attrs comp-programs class-defs import-env param
+                        return methods fn-defs known comp-supers
+                        #:tokens tokens
+                        #:globals globals))
+    (set! self-attr new-sa)
+    (set! self-attr-fn new-safn)
+    (set-type-relations-self-attr! tr self-attr)
+    (set-type-relations-self-attr-fn! tr self-attr-fn))
+
+  ;; Closure-capture globals for a call-graph key: a nested function's free
+  ;; variables resolve to its enclosing function frames' locals and typed
+  ;; params (a nested `model_installed` reading the enclosing `sync_apps`'s
+  ;; `connection` param), overlaid on the shared module globals. The innermost
+  ;; enclosing frame wins over outer frames and module globals, matching the
+  ;; host's lexical scoping. The enclosing locals/params come from the CURRENT
+  ;; fixpoint round's relations, so the closure seed closes with them.
+  (define (closure-globals-of k comp base-globals)
+    (define out (hash-copy base-globals))
+    (define seen (make-hash))
+    (let loop ([nm (cdr k)])
+      (define parent (and nm (hash-ref fn-parents (cons comp nm) #f)))
+      (when (and parent (not (hash-has-key? seen parent)))
+        (hash-set! seen parent #t)
+        (define pk (cons comp parent))
+        (for ([(n cls) (in-hash (hash-ref assign pk (hash)))])
+          (unless (hash-has-key? out n) (hash-set! out n cls)))
+        (for ([i (in-naturals)] [p (in-list (params-of pk))])
+          (define pnm (cond
+                        [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
+                        [(uir-typed-param? p)
+                         (and (uir-symbol? (uir-typed-param-name p))
+                              (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
+                        [else #f]))
+          (define cls (hash-ref param (cons pk i) #f))
+          (when (and pnm cls (not (hash-has-key? out pnm)))
+            (hash-set! out pnm cls)))
+        (loop parent)))
+    out)
 
   (define (rebuild-assign!)
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
-      (define class-env (and owner (class-attr-env comp owner self-attr class-defs comp-supers)))
+      (define class-env
+        (and owner (class-attr-env comp owner self-attr class-defs comp-supers
+                                   self-attr-fn)))
       (define base-attrs (or (and class-env (receiver-types-self-attrs class-env)) (hash)))
+      (define base-fn-attrs
+        (or (and class-env (receiver-types-fn-self-attrs class-env)) (hash)))
       ;; Declared param ELEMENT types for this key (an external entry-point
       ;; param/local iterated in a for-loop): param-name -> element class.
       (define param-element-specs
@@ -290,11 +406,16 @@
                                        #:known known
                                        #:comp-supers comp-supers
                                        #:element-types element-types*
-                                       #:param-element-specs param-element-specs))
+                                       #:param-element-specs param-element-specs
+                                       #:globals (closure-globals-of k comp
+                                                                    (hash-ref globals comp (hash)))
+                                       #:base-fn-attrs base-fn-attrs))
       (hash-set! assign k (receiver-types-locals rt))
-      (hash-set! elem-specs k (receiver-types-elem-specs rt)))
+      (hash-set! elem-specs k (receiver-types-elem-specs rt))
+      (hash-set! assign-fn k (receiver-types-fn-locals rt)))
     (set-type-relations-assign! tr assign)
-    (set-type-relations-elem-specs! tr elem-specs))
+    (set-type-relations-elem-specs! tr elem-specs)
+    (set-type-relations-assign-fn! tr assign-fn))
 
   (define (collect-params!)
     (define cands (make-hash))   ;; (cons key idx) -> (listof class-symbol)
@@ -430,13 +551,32 @@
     (and modpath declared-returns*
          (hash-ref declared-returns* (cons modpath (cdr k)) #f)))
 
+  ;; A body-projected class is USABLE as a return type only when it can later
+  ;; resolve to a concrete MRO: a corpus class with several definitions
+  ;; (`Command`, `Serializer` — one per command module / per serialization
+  ;; format) has no single component, so `resolve-class-component` returns #f
+  ;; and every caller through it falls to `unknown`. Reject the ambiguous
+  ;; class and fall back to the declared return type (`load_command_class` →
+  ;; BaseCommand) or, failing that, to no projection: no projection is sounder
+  ;; than a class that cannot resolve. External classes (Message, redis.Redis,
+  ;; SMTP) and module-path markers have no corpus definition and stay usable.
+  (define (usable-return-class r)
+    (and r
+         (let ([defs (remove-duplicates (hash-ref class-defs r '()))])
+           (if (and (pair? defs) (> (length defs) 1)) #f r))))
+
   (define (collect-returns!)
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
       (define r (return-class-of (body-of k) (rt-of k) class-defs
-                                 tokens import-env comp owner))
-      (hash-set! return k (or r (declared-return-of k))))
+                                 tokens import-env comp owner
+                                 #:return-types return
+                                 #:methods methods
+                                 #:fn-defs fn-defs
+                                 #:known known
+                                 #:comp-supers comp-supers))
+      (hash-set! return k (or (usable-return-class r) (declared-return-of k))))
     (set-type-relations-return! tr return))
 
   (let loop ([round 0])

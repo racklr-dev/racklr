@@ -55,7 +55,12 @@
                       "get_event_loop")
         'inspect (set "isbuiltin" "isfunction" "ismethod" "isclass" "ismodule"
                       "isroutine" "isgenerator" "isasyncgen" "iscoroutine"
-                      "iscoroutinefunction" "getfullargspec" "getdoc")))
+                      "iscoroutinefunction" "getfullargspec" "getdoc")
+        ;; importlib.import_module loads an already-installed module (the same
+        ;; lazy-serializer/factory registration the bare `import_module` pure
+        ;; name covers); only that member is pure, the module's other members
+        ;; are absent.
+        'importlib (set "import_module")))
 
 ;; ── bare stdlib / framework / value-constructor pure names ──
 ;; bare stdlib/ctypes/functools/urllib/collections/inspect value constructors,
@@ -138,12 +143,15 @@
    "ExpressionWrapper" "CombinedExpression" "DurationValue" "Greatest" "Least"))
 
 ;; ── pure builtin names ──
-;; Side-effect-free Python builtins (lower to uir-var callees). Effectful
-;; builtins (open/input/print/eval/exec/compile/breakpoint/help) are
-;; deliberately absent so they stay `unknown` rather than being marked pure.
+;; Side-effect-free Python builtins (lower to uir-var callees). `compile`
+;; compiles source to a code object without executing it, so it is pure. The
+;; effectful builtins (open/input/print/eval/exec/breakpoint/help) are
+;; deliberately absent so they stay `unknown` rather than being marked pure
+;; (open/input/print classify as io through bare-name-effects; eval/exec
+;; classify as process the same way).
 (define pure-builtin-names-data
   (set "abs" "all" "any" "ascii" "bin" "bool" "bytearray" "bytes" "callable"
-       "chr" "classmethod" "complex" "delattr" "dict" "dir" "divmod"
+       "chr" "classmethod" "compile" "complex" "delattr" "dict" "dir" "divmod"
        "aiter" "anext"
        "enumerate" "filter" "float" "format" "frozenset" "getattr" "globals"
        "hasattr" "hash" "hex" "id" "int" "isinstance" "issubclass" "iter"
@@ -161,6 +169,7 @@
        "__eq__" "__ne__" "__lt__" "__le__" "__gt__" "__ge__" "__hash__"
        "__bool__" "__len__" "__contains__" "__iter__" "__next__"
        "__getitem__" "__setitem__" "__delitem__" "__copy__" "__deepcopy__"
+       "__class__"
        "__init_subclass__" "__set_name__"))
 
 ;; ── string-method names ──

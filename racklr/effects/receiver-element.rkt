@@ -79,6 +79,27 @@
 ;; `value-class` is the caller's value→class projection (receiver-type.rkt's
 ;; value-class-of bound to the caller's receiver env). Returns a class symbol,
 ;; a list of class symbols (a destructured tuple), or #f.
+;; The receiver-type class-union marker (same symbol receiver-type.rkt exports;
+;; this module must not require receiver-type, which requires this one). A
+;; tuple destructure whose conditional branches name DIFFERENT classes yields
+;; this marker for the element position, so a later bare call of that element
+;; classifies as pure construction of SOME class.
+(define class-union-marker 'class-union)
+
+;; Merge two element specs (each a class symbol or a list of class symbols)
+;; across a conditional's branches: same class folds, different classes become
+;; the class-union marker, and anything else is unprojected (#f).
+(define (merge-elem-specs t e)
+  (cond
+    [(and (symbol? t) (symbol? e)) (and (eq? t e) t)]
+    [(and (list? t) (list? e) (= (length t) (length e)))
+     (for/list ([a (in-list t)] [b (in-list e)])
+       (cond
+         [(eq? a b) a]
+         [(and (symbol? a) (symbol? b)) class-union-marker]
+         [else #f]))]
+    [else #f]))
+
 (define (iterable-element-spec iter rt tokens import-env comp value-class
                                #:class-defs [class-defs (hash)]
                                #:methods [methods #f]
@@ -88,7 +109,20 @@
                                #:owner [owner #f]
                                #:element-types [element-types #f]
                                #:elem-spec-lookup [elem-spec-lookup (λ (nm) #f)])
+  (define (recur v)
+    (iterable-element-spec v rt tokens import-env comp value-class
+                           #:class-defs class-defs #:methods methods
+                           #:fn-defs fn-defs #:known known
+                           #:comp-supers comp-supers #:owner owner
+                           #:element-types element-types
+                           #:elem-spec-lookup elem-spec-lookup))
   (cond
+    ;; A conditional iterable (`(A, b) if c else (C, d)` destructured through
+    ;; the lowerer's tmp subscript): project the union of the two branches'
+    ;; element specs, position by position, so `error_cls = tmp[0]` types the
+    ;; first element as SOME exception class instead of staying unknown.
+    [(uir-if? iter)
+     (merge-elem-specs (recur (uir-if-then iter)) (recur (uir-if-else iter)))]
     [(and (uir-call? iter) (member-access-callee? (uir-call-callee iter)))
      (or (imported-module-element-type (uir-call-callee iter) comp import-env tokens)
          (and rt (stdlib-method-element-type (uir-call-callee iter) rt tokens
@@ -107,9 +141,23 @@
            (let ([c (uir-call-callee iter)])
              (and (uir-symbol? c)
                   (eq? (string->symbol (uir-symbol-name c)) 'tuple)
-                  (let ([classes (for/list ([a (in-list (uir-call-args iter))])
-                                   (value-class a))])
-                    (and (pair? classes) (andmap (λ (x) x) classes) classes)))))
+                  (let ([args (uir-call-args iter)])
+                    ;; `tuple(<if>)` (a bare tuple RHS that is itself a
+                    ;; conditional of tuples) is the same value as `<if>`:
+                    ;; delegate to the conditional's merged spec.
+                    (cond
+                      [(and (= (length args) 1) (uir-if? (first args)))
+                       (recur (first args))]
+                      [else
+                       (let ([classes (for/list ([a (in-list args)])
+                                        (value-class a))])
+                         ;; A tuple element may be an int-valued module attr
+                         ;; (`errno.ENOTDIR`) with no tracked class: keep the
+                         ;; known positions and leave the rest #f, so the
+                         ;; later tmp[0]/tmp[1] projection types only the
+                         ;; positions it can, instead of dropping the whole
+                         ;; destructure. Require at least one known element.
+                         (and (pair? classes) (ormap (λ (x) x) classes) classes))])))))
       (call-element-spec (uir-call-callee iter) comp owner class-defs
                          methods fn-defs known comp-supers import-env
                          element-types))]

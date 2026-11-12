@@ -19,6 +19,17 @@
 
 (provide class-attr-lookup receiver-chain-class)
 
+;; VALUE TYPE of an attribute on a tracked framework class whose corpus
+;; attribute graph cannot see it (an external class): class -> attr ->
+;; value-type from the DATA table, so a multi-level chain (`connection.ops`,
+;; `executor.loader`, `Model._meta`) crosses an external object boundary.
+(define (stdlib-class-attr-type cls attr [tokens default-effect-tokens])
+  (and cls attr
+       (let* ([m (hash-ref (effect-tokens-class-attr-types tokens)
+                           (symbol->string cls) #f)]
+              [r (and m (hash-ref m (symbol->string attr) #f))])
+         (and r (string->symbol r)))))
+
 ;; ── receiver-type chain ─────────────────────────────────────────────
 
 ;; Attribute `attr` of class `class-name`, resolved across defining components
@@ -69,7 +80,8 @@
      (define nm (bare-name-symbol base))
      (cond
        [(and owner (tokens-self-name? tokens nm)) owner]
-       [else (hash-ref (receiver-types-locals rt) nm #f)])]
+       [else (or (hash-ref (receiver-types-locals rt) nm #f)
+                 (hash-ref (receiver-types-globals rt) nm #f))])]
     ;; A member access — Python `a.b` (uir-get) or JS/TS `a.b` (dot call):
     ;; both walk to the base's class and then through that class's attributes.
     [(member-access-callee? base)
@@ -87,13 +99,24 @@
         (or (hash-ref (receiver-types-self-attrs rt) attr #f)
             (and owner return-types attr
                  (mro-property-return-type comp owner attr return-types
-                                           class-defs comp-supers)))]
+                                           class-defs comp-supers))
+            ;; An implicit-receiver attribute the corpus attribute graph cannot
+            ;; see (a mixin method reading a subclass-assigned field, or an
+            ;; attribute assigned by an external parent's __init__): the DATA
+            ;; class-attr-types table names its value type, exactly as the
+            ;; non-self chain branch below does for `connection.ops`.
+            (and owner (stdlib-class-attr-type owner attr tokens)))]
        [else
         (define c (receiver-chain-class rt inner comp class-defs class-attrs comp-supers
                                         owner return-types methods fn-defs known import-env
                                         tokens))
         (and c
              (or (class-attr-lookup comp c attr class-defs class-attrs comp-supers)
+                 ;; An external framework class's attribute VALUE type
+                 ;; (`connection.ops` -> DatabaseOperations): the corpus
+                 ;; class-attr graph has no entry for a class outside the
+                 ;; scanned tree, but the DATA table names its sub-handle.
+                 (stdlib-class-attr-type c attr tokens)
                  ;; Bottom out at a module marker (`django.db` from
                  ;; `connection = connections[database]`, or `pylibmc.Client`):
                  ;; it has no corpus attribute graph to walk, but the marker

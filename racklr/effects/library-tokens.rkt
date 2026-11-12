@@ -41,15 +41,33 @@
   effect-tokens-module-element-types
   effect-tokens-stdlib-method-element-types
   effect-tokens-class-attr-element-types
+  effect-tokens-class-attr-types
+  effect-tokens-dynamic-class-factories
+  effect-tokens-mapping-value-methods
   effect-tokens-pure-native-builtin-names
   effect-tokens-dialect
-  default-effect-tokens)
+  default-effect-tokens
+  ;; The builtin(s) whose CALL RESULT is a bound-method alias: `getattr(obj,
+  ;; "name", default)` yields obj.name as a VALUE (a bound method when it is a
+  ;; method). This is Python-host DATA kept here, not an engine table; a host
+  ;; whose lowerer has no such construct leaves this set empty.
+  bound-method-factories)
 
 (require racket/hash
          racklr/effects/library-stdlib-types
          racklr/effects/library-pure-names
          racklr/effects/library-racket-tokens
          racklr/effects/library-dialect)
+
+;; The token tables of a host lexicon. Name sets are sets of strings; tables
+;; are hashes keyed as documented per field. `dialect` carries the host's
+;; naming / encoding conventions (lexicon-types.rkt).
+;; Builtin callee names whose result is a bound-method alias (Python's
+;; `getattr(obj, "name", default)`). The receiver-type dataflow records such a
+;; result as a (receiver-class . method-name) alias so a later bare call of the
+;; local resolves as `obj.name(...)`. DATA: a non-Python host supplies an empty
+;; set (or its own equivalent) through this same export.
+(define bound-method-factories (set "getattr"))
 
 ;; The token tables of a host lexicon. Name sets are sets of strings; tables
 ;; are hashes keyed as documented per field. `dialect` carries the host's
@@ -68,6 +86,9 @@
    module-result-types receiver-modules
    module-class-refs type-result-projections
    module-element-types stdlib-method-element-types class-attr-element-types
+   class-attr-types
+   dynamic-class-factories
+   mapping-value-methods
    ;; Host-NATIVE pure procedures (the compiler's own Racket front end, from
    ;; library-racket-tokens.rkt). A dedicated table: it must never feed the
    ;; Python/JS value-constructor table receiver typing reads, so a Racket
@@ -113,6 +134,12 @@
     "TemporaryDirectory" 'io
     "mkstemp" 'io
     "mkdtemp" 'io
+    ;; eval / exec run arbitrary code in-process (the Django shell command
+    ;; feeds user input to exec); code execution is the process domain, the
+    ;; same bucket as os.system / subprocess. compile is pure (see
+    ;; pure-builtin-names).
+    "eval" 'process
+    "exec" 'process
     ;; asgiref.sync.sync_to_async: runs a sync callable on a thread-pool
     ;; executor (the async bridge), so the scheduling is an io effect.
     "sync_to_async" 'io
@@ -289,6 +316,11 @@
    stdlib-module-element-types-data
    stdlib-method-element-types-data
    class-attr-element-types-data
+   stdlib-class-attr-types-data
+   ;; ── bare class factories: a call's RESULT is a runtime-dependent CLASS ──
+   dynamic-class-factories-data
+   ;; ── mapping methods that return the value and take a default argument ──
+   stdlib-mapping-value-methods-data
    ;; ── host-NATIVE pure procedures (the Racket corpus front end) ──
    racket-pure-builtins
    ;; ── host naming / encoding conventions ──

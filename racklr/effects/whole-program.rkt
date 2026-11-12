@@ -21,6 +21,7 @@
          racklr/effects/classify-all
          racklr/effects/type-relations
          racklr/effects/library-tokens
+         (only-in racklr/effects/library-stdlib-types declared-param-effect-rows)
          racklr/effects/imports
          racklr/effects/imports
          racklr/effects/labels
@@ -86,7 +87,9 @@
                            #:import-env [import-env #f]
                            #:unknown-tally [unknown-tally #f]
                            #:provenance-record [rec-box #f]
-                           #:lexicon [lex default-lexicon])
+                           #:lexicon [lex default-lexicon]
+                           #:declared-param-effects [declared-param-effects
+                                                    declared-param-effect-rows])
   (define tokens (lexicon-tokens lex))
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
@@ -147,6 +150,10 @@
   (define self-attr (type-relations-self-attr tr))
   (define return-types (type-relations-return tr))
   (define elem-specs (type-relations-elem-specs tr))
+  (define globals (type-relations-globals tr))
+  (define assign-fn (type-relations-assign-fn tr))
+  (define self-attr-fn (type-relations-self-attr-fn tr))
+  (define param (type-relations-param tr))
 
   (define known (make-hash))
   (for ([(k _) (in-hash fns)]) (hash-set! known k #t))
@@ -161,12 +168,61 @@
         (fn-owner-class (cdr k)
                         (λ (x) (hash-ref fn-parents (cons (car k) x) #f)))))
 
+  ;; Closure-capture globals for the CLASSIFICATION pass: the closed assign
+  ;; relation holds each frame's own locals (the type-relations join already
+  ;; seeded enclosing params into the enclosing frame's locals), so a nested
+  ;; function's free variables resolve to its enclosing frames' locals here,
+  ;; exactly as the join's rebuild-assign! did when it typed the assignments.
+  (define (closure-globals-of k comp base-globals)
+    (define out (hash-copy base-globals))
+    (define seen (make-hash))
+    (let loop ([nm (cdr k)])
+      (define parent (and nm (hash-ref fn-parents (cons comp nm) #f)))
+      (when (and parent (not (hash-has-key? seen parent)))
+        (hash-set! seen parent #t)
+        (define pk (cons comp parent))
+        (for ([(n cls) (in-hash (hash-ref assign pk (hash)))])
+          (unless (hash-has-key? out n) (hash-set! out n cls)))
+        (for ([i (in-naturals)] [p (in-list (or (hash-ref fn-params pk #f)
+                                                 (hash-ref method-params pk #f)))])
+          (define pnm (cond
+                        [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
+                        [(uir-typed-param? p)
+                         (and (uir-symbol? (uir-typed-param-name p))
+                              (string->symbol (uir-symbol-name (uir-typed-param-name p))))]
+                        [else #f]))
+          (define cls (hash-ref param (cons pk i) #f))
+          (when (and pnm cls (not (hash-has-key? out pnm)))
+            (hash-set! out pnm cls)))
+        (loop parent)))
+    out)
+
   (define (rt-of k)
     (define owner (owner-of-key k))
-    (define class-env (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers)))
+    (define class-env
+      (and owner (class-attr-env (car k) owner self-attr class-defs comp-supers
+                                 self-attr-fn)))
     (receiver-types (hash-ref assign k (hash))
                     (or (and class-env (receiver-types-self-attrs class-env)) (hash))
-                    (hash-ref elem-specs k (hash))))
+                    (hash-ref elem-specs k (hash))
+                    (closure-globals-of k (car k) (hash-ref globals (car k) (hash)))
+                    (hash-ref assign-fn k (hash))
+                    (or (and class-env (receiver-types-fn-self-attrs class-env)) (hash))))
+
+  ;; Declared EFFECT for a parameter this function bare-calls: the host
+  ;; protocol contract (ASGI/WSGI/socketserver transport callbacks) stated as
+  ;; DATA, read only when the bare-call shape is a param. Returns an effect
+  ;; domain symbol or #f. Absent from the table (polymorphic callbacks whose
+  ;; effect is the caller's, not the host's) stays a row hole, exactly as
+  ;; before.
+  (define (declared-param-effect-row comp name param)
+    (and import-env declared-param-effects param
+         (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+                [entry (and modpath
+                            (hash-ref declared-param-effects
+                                      (cons modpath name) #f))]
+                [hit (and entry (assq param entry))])
+           (and hit (cdr hit)))))
 
   ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))
@@ -329,31 +385,48 @@
                   [else #f]))
               (define higher-order?
                 (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
-              (if higher-order?
-                  (begin
-                    (set! effects (cons (list 'hole bare-name site) effects))
-                    (hash-update! called-params k (λ (l) (cons bare-name l)) '())
-                    (when prov
-                      (provenance-add-ground!
-                       prov
-                       (make-callee-site (function-fq k) 'unknown callee
-                                         #:kind 'unresolved
-                                         #:coverage
-                                         (unresolved-coverage callee param-names tokens)
-                                         #:file comp
-                                         #:position position))))
-                  (begin
-                    (set! effects (cons 'unknown effects))
-                    (when prov
-                      (provenance-add-ground!
-                       prov
-                       (make-callee-site (function-fq k) 'unknown callee
-                                         #:kind 'unresolved
-                                         #:coverage
-                                         (unresolved-coverage callee param-names tokens)
-                                         #:file comp
-                                         #:position position)))))
-              (when unknown-tally
+              ;; A declared param effect (host protocol contract) resolves the
+              ;; bare-call-to-param shape directly, so it never becomes a row
+              ;; hole: the caller (ASGI/WSGI server, socketserver) is outside
+              ;; the corpus, so no in-corpus call site could instantiate it.
+              (define declared-fx
+                (and higher-order?
+                     (declared-param-effect-row comp (cdr k) bare-name)))
+              (cond
+                [declared-fx
+                 (set! effects (cons declared-fx effects))
+                 (when prov
+                   (provenance-add-ground!
+                    prov
+                    (make-callee-site (function-fq k) declared-fx callee
+                                      #:kind 'declared
+                                      #:coverage 'universal
+                                      #:file comp
+                                      #:position position)))]
+                [higher-order?
+                 (set! effects (cons (list 'hole bare-name site) effects))
+                 (hash-update! called-params k (λ (l) (cons bare-name l)) '())
+                 (when prov
+                   (provenance-add-ground!
+                    prov
+                    (make-callee-site (function-fq k) 'unknown callee
+                                      #:kind 'unresolved
+                                      #:coverage
+                                      (unresolved-coverage callee param-names tokens)
+                                      #:file comp
+                                      #:position position)))]
+                [else
+                 (set! effects (cons 'unknown effects))
+                 (when prov
+                   (provenance-add-ground!
+                    prov
+                    (make-callee-site (function-fq k) 'unknown callee
+                                      #:kind 'unresolved
+                                      #:coverage
+                                      (unresolved-coverage callee param-names tokens)
+                                      #:file comp
+                                      #:position position)))])
+              (when (and unknown-tally (not declared-fx))
                 (set-box! unknown-tally
                           (cons (list (car k) (cdr k)
                                       shape
@@ -467,10 +540,14 @@
           (define idx (param-index (params-of k) p))
           (define a (and idx (< idx (length args)) (list-ref args idx)))
           (alg:join acc (if a (arg->row c a rows) (alg:empty-algebra-row)))))
-      (if (alg:same-row? inst (alg:empty-algebra-row))
+      ;; A hole with incoming sites is instantiated by them even when every
+      ;; passed arg classifies pure (instantiate-with-empty closes it); only a
+      ;; hole with no incoming site stays open for the dynamic/unknown deferral.
+      (if (null? (hash-ref incoming k '()))
           r
           (alg:instantiate-row-hole r p inst))))
   ;; Materialize the algebra rows back to the UIR row contract; holes still
-  ;; open become tracked `unknown` (never a ?-entry in the graph).
+  ;; open become tracked `dynamic` (a runtime callback, surfaced in the graph),
+  ;; never a ?-entry and no longer the `unknown` elimination obligation.
   (for/hash ([(k r) (in-hash rows)])
-    (values k (alg:algebra-row->uir (alg:row-holes->unknown (summary-row k rows))))))
+    (values k (alg:algebra-row->uir (alg:row-holes->dynamic (summary-row k rows))))))

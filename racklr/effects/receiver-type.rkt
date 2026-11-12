@@ -18,6 +18,7 @@
          racklr/effects/class-resolve
          racklr/effects/imports
          racklr/effects/library-tokens
+         racklr/effects/effect-roots
          racklr/effects/receiver-assign
          racklr/effects/receiver-element
          racklr/effects/type-projection
@@ -25,7 +26,8 @@
 
 (provide
   receiver-types? receiver-types receiver-types-locals receiver-types-self-attrs
-  receiver-types-elem-specs
+  receiver-types-elem-specs receiver-types-globals
+  receiver-types-fn-locals receiver-types-fn-self-attrs
   receiver-types-merge
   infer-receiver-types
   receiver-class-of
@@ -34,15 +36,28 @@
   call-result-type
   value-class-of
   return-class-of
+  corpus-projected-value-class
+  dynamic-class-marker dynamic-class-marker?
+  class-union-marker class-union-marker?
   bare-class-value)
 
-(struct receiver-types (locals self-attrs elem-specs) #:transparent)
+(struct receiver-types (locals self-attrs elem-specs globals fn-locals fn-self-attrs)
+  #:transparent)
 ;; locals:     hash name-symbol → class-name-symbol
 ;; self-attrs: hash attr-symbol → class-name-symbol (on self / cls)
+;; globals:    hash name-symbol → class-name-symbol (module-level names, shared
+;;             by every function in the component; the free-name fallback below)
 ;; elem-specs: hash name-symbol → element-spec: a class symbol (the element
 ;;             class of an iterable the name is bound to) or a list of class
 ;;             symbols (a tuple the loop destructures, e.g. os.walk yields
 ;;             (str list list)).
+;; fn-locals:  hash name-symbol → (cons receiver-class-or-#f method-name): a
+;;             local bound to a bound-method ALIAS (`x = obj.m` / `x =
+;;             getattr(obj, "m", default)`); calling it bare resolves as
+;;             obj.m(...).
+;; fn-self-attrs: hash attr-symbol → the same descriptor for a self/cls
+;;             attribute bound to a bound-method alias (`self._read =
+;;             stream.read`); `self._read(...)` resolves as stream.read(...).
 
 (define (self-or-cls-var? v [tokens default-effect-tokens])
   (and (or (uir-var? v) (uir-symbol? v))
@@ -83,11 +98,13 @@
   (cond
     [(not env) #f]
     [(uir-var? base)
-     (hash-ref (receiver-types-locals env)
-               (string->symbol (uir-symbol-name (uir-var-name base))) #f)]
+     (define nm (string->symbol (uir-symbol-name (uir-var-name base))))
+     (or (hash-ref (receiver-types-locals env) nm #f)
+         (hash-ref (receiver-types-globals env) nm #f))]
     [(uir-symbol? base)
-     (hash-ref (receiver-types-locals env)
-               (string->symbol (uir-symbol-name base)) #f)]
+     (define nm (string->symbol (uir-symbol-name base)))
+     (or (hash-ref (receiver-types-locals env) nm #f)
+         (hash-ref (receiver-types-globals env) nm #f))]
     [(member-access-callee? base)
      (define attr (member-access-field base))
      (and attr (self-or-cls-var? (member-access-base base) tokens)
@@ -109,8 +126,27 @@
        (or (hash-has-key? class-defs nm)
            (pure-stdlib-type? nm tokens)
            (imported-class-ref nm comp import-env)
-           (module-receiver? nm tokens))
+           (module-receiver? nm tokens)
+           ;; A bare exception class name: the host's exception-suffix
+           ;; convention (PascalCase Error/Exception/Warning) or its pure
+           ;; constructor-name table. Constructing an exception is pure — the
+           ;; raise is the effect — so `x = Warning` then `x(...)` classifies
+           ;; as pure construction, exactly as a tracked stdlib type would.
+           (exception-class-name? nm tokens))
        nm))
+
+;; Is `nm` an exception CLASS name (not an effectful function)? The suffix
+;; heuristic is the host dialect's own convention (kept case-sensitive: a
+;; lowercase `compute_error` must not match), and it already gates
+;; `super().__init__` on exception bases in receiver-resolve.rkt's
+;; exception-name?. Duplicated here because receiver-resolve requires this
+;; module (no reverse dependency).
+(define (exception-class-name? nm [tokens default-effect-tokens])
+  (and nm
+       (let ([s (symbol->string nm)])
+         (or (for/or ([suffix (in-set (tokens-exception-suffixes tokens))])
+               (string-suffix? s suffix))
+             (set-member? (effect-tokens-pure-constructor-names tokens) s)))))
 
 ;; Class name the constructor callee names, when it is a known class: a bare
 ;; callee (`QuerySet(...)`) or a dotted callee whose final field names a known
@@ -209,6 +245,24 @@
               (memq (handle-kind h) '(module fn))
               (handle-path h)))))
 
+
+;; The receiver-type marker for a dynamically-imported / dynamically-created
+;; CLASS: `import_string(path)` and `type(...)` return SOME class, but which
+;; one is runtime-dependent. A call through this marker (`cls(...)`) is pure
+;; construction (see classify-all), but the marker is never projected as a
+;; concrete result class: the enclosing function's declared-return-types (or a
+;; later concrete projection) names the instance class.
+(define dynamic-class-marker 'dynamic-class)
+(define (dynamic-class-marker? c) (eq? c dynamic-class-marker))
+
+;; Receiver-type marker for a conditional/or-fold whose EVERY branch is a
+;; (pure-to-construct) class reference but the branches name DIFFERENT classes
+;; (`stream_class = StringIO if is_str else BytesIO`). The value is SOME class,
+;; so a bare call through it is pure construction, but it is never projected as
+;; a concrete result/instance class: a union's instance type is ambiguous.
+(define class-union-marker 'class-union)
+(define (class-union-marker? c) (eq? c class-union-marker))
+
 ;; Result TYPE of a call expression: the class named by its callee when that
 ;; class is known, or the class a class-valued callee expression resolves to.
 ;; Covers corpus classes, pure stdlib value constructors, and any stdlib type
@@ -218,8 +272,37 @@
 ;; value (`self.build_file_class(...)`) carry the class through to the result.
 (define (call-result-type callee class-defs [tokens default-effect-tokens] [rt #f]
                            [import-env #f] [comp #f])
-  (or (and rt (receiver-class-of rt callee tokens))
+  (or (let ([c (and rt (receiver-class-of rt callee tokens))])
+        (and c (not (dynamic-class-marker? c)) (not (class-union-marker? c)) c))
+      ;; A module-qualified CLASS / FUNCTION reference (`smtplib.SMTP(...)`,
+      ;; `email.message.EmailMessage(...)`, `httpx.get(...)`) is more specific
+      ;; than the value->type fallback below: it requires the root to resolve
+      ;; through the import graph to a real module AND the (module, attribute)
+      ;; to be in the DATA lexicon. Checking it first keeps a qualified external
+      ;; class from colliding with a same-named corpus class
+      ;; (email.message.EmailMessage vs django.core.mail.message.EmailMessage),
+      ;; AND keeps `httpx.get(...)` typed Response instead of the coarser module
+      ;; marker the value->type projection would return for its root.
+      (imported-module-class-ref callee comp import-env tokens)
+      (imported-module-result-type callee comp import-env tokens)
+      ;; A class-valued callee the receiver-class-of fast path misses: a dotted
+      ;; class reference rooted at a module receiver (`self._lib.DriverInfo(...)`
+      ;; where `_lib` is the redis module) or a subscript into a tracked tuple.
+      ;; value-class-of is the single value->type projection, so it also covers
+      ;; the module.Class marker (`redis.DriverInfo`) that receiver-class-of
+      ;; (local/self-attr only) does not walk. A non-call callee cannot recurse
+      ;; back into call-result-type through value-class-of's call branch.
+      (let ([c (and rt (value-class-of callee rt class-defs tokens import-env comp #f))])
+        (and c (not (dynamic-class-marker? c)) (not (class-union-marker? c)) c))
       (constructor-class callee class-defs tokens)
+      ;; A class factory (`import_string`, `type`): the call's RESULT is a
+      ;; runtime-dependent class, tracked as the dynamic-class marker so the
+      ;; outer `cls(...)` call classifies as pure construction.
+      (let ([nm (callee-name callee)])
+        (and nm
+             (set-member? (effect-tokens-dynamic-class-factories tokens)
+                          (symbol->string nm))
+             dynamic-class-marker))
       (let ([nm (callee-name callee)])
         (and nm
              (hash-has-key? (effect-tokens-stdlib-type-methods tokens)
@@ -229,11 +312,49 @@
         (and nm comp import-env (imported-class-ref nm comp import-env)))
       (let ([nm (callee-name callee)])
         (and nm comp import-env (imported-fn-result-type nm comp import-env tokens)))
-      (imported-module-class-ref callee comp import-env tokens)
-      (imported-module-result-type callee comp import-env tokens)
       (method-result-type callee
-                          (λ (base) (receiver-class-of rt base tokens))
+                          (λ (base)
+                            (or (receiver-class-of rt base tokens)
+                                (value-class-of base rt class-defs tokens
+                                                import-env comp #f)))
                           tokens)))
+
+;; VALUE TYPE of an attribute on a tracked framework class whose corpus
+;; attribute graph cannot see it (an external class): class -> attr ->
+;; value-type from the DATA table, so an attribute access (`response.cookies`,
+;; `connection.ops`, `Model._meta`) resolves its VALUE class through the same
+;; table receiver-chain.rkt walks for multi-level method receivers. Kept here
+;; (not imported from receiver-chain.rkt, which requires this module) as a
+;; private duplicate of that module's stdlib-class-attr-type.
+(define (stdlib-attr-class cls attr [tokens default-effect-tokens])
+  (and cls attr
+       (let* ([m (hash-ref (effect-tokens-class-attr-types tokens)
+                           (symbol->string cls) #f)]
+              [r (and m (hash-ref m (symbol->string attr) #f))])
+         (and r (string->symbol r)))))
+
+;; Result class of a mapping value access `.get(k)` / `.setdefault(k)` WITHOUT a
+;; default argument: the single element the mapping yields. The mapping's
+;; element type comes from class-attr-element-types-data (a dict-valued
+;; attribute such as MigrationLoader.applied_migrations), reached through the
+;; attribute's OWN class because the value-class projection reads only the
+;; VALUE table. This is the element-type mirror of mapping-get-result-type's
+;; default-argument rule.
+(define (mapping-element-get-result value project tokens)
+  (and (uir-call? value)
+       (member-access-callee? (uir-call-callee value))
+       (let* ([callee (uir-call-callee value)]
+              [base (member-access-base callee)]
+              [op (member-access-field callee)]
+              [args (uir-call-args value)])
+         (and op
+              (set-member? (effect-tokens-mapping-value-methods tokens)
+                           (symbol->string op))
+              (= (length args) 1)
+              (member-access-callee? base)
+              (let* ([attr (member-access-field base)]
+                     [icls (project (member-access-base base))])
+                (class-attr-element-type icls attr tokens))))))
 
 ;; Class a VALUE expression resolves to under a receiver-type environment `rt`:
 ;; a tracked call result, a local alias, a self/cls attribute, or a bare class
@@ -244,6 +365,12 @@
   (cond
     [(uir-await? value) (value-class-of (uir-await-expr value) rt class-defs
                                         tokens import-env comp owner)]
+    ;; A parenthesized expression (`x = (A() if c else B())`) is transparent
+    ;; to typing: the front ends wrap conditional/boolean values in a paren
+    ;; node, which must not defeat the conditional fold or the literal/call
+    ;; projection below.
+    [(uir-paren? value) (value-class-of (uir-paren-inner value) rt class-defs
+                                        tokens import-env comp owner)]
     ;; Optional chain (`x?.y`): the front ends lower it to a null guard whose
     ;; absent branch is `void 0`. The value's type is the PRESENT branch's
     ;; class — the absent branch only means "no value", so it carries no
@@ -252,15 +379,26 @@
     [(and (uir-if? value) (optional-chain-present value))
      => (λ (present) (value-class-of present rt class-defs tokens import-env comp owner))]
     ;; Conditional expression (`x if c else y`): sound only when every branch
-    ;; projects to the SAME class; a mixed or unresolvable branch yields #f.
+    ;; projects to the SAME class; a mixed or unresolvable branch yields #f —
+    ;; EXCEPT when every branch is itself a class reference (different pure
+    ;; classes): then the value is SOME class, tracked as the class-union
+    ;; marker so a bare call through it is pure construction.
     [(uir-if? value)
      (let ([t (value-class-of (uir-if-then value) rt class-defs
                               tokens import-env comp owner)]
            [e (value-class-of (uir-if-else value) rt class-defs
                               tokens import-env comp owner)])
-       (and t e (eq? t e) t))]
+       (cond
+         [(and t e (eq? t e)) t]
+         [(and (bare-class-value (uir-if-then value) class-defs tokens
+                                 import-env comp)
+               (bare-class-value (uir-if-else value) class-defs tokens
+                                 import-env comp))
+          class-union-marker]
+         [else #f]))]
     ;; Boolean expression (`x or y` / `x and y`, lowered as (call "or"/"and"
-    ;; (list lhs rhs))): same-class fold, sound for the same reason.
+    ;; (list lhs rhs))): same-class fold, sound for the same reason, with the
+    ;; same class-union relaxation as the conditional.
     [(and (uir-call? value)
           (let ([c (uir-call-callee value)])
             (and (uir-symbol? c)
@@ -271,7 +409,14 @@
                                      tokens import-env comp owner)]
                   [b (value-class-of (second args) rt class-defs
                                      tokens import-env comp owner)])
-              (and a b (eq? a b) a))))]
+              (cond
+                [(and a b (eq? a b)) a]
+                [(and (bare-class-value (first args) class-defs tokens
+                                        import-env comp)
+                      (bare-class-value (second args) class-defs tokens
+                                        import-env comp))
+                 class-union-marker]
+                [else #f]))))]
     ;; `new C(...)` constructs an instance of C: the receiver type is C when
     ;; the class expression names a tracked class (corpus, stdlib value type, or
     ;; imported class handle), so a fresh JS/TS object seeds the dataflow.
@@ -291,6 +436,14 @@
           value
           (λ (v) (value-class-of v rt class-defs tokens import-env comp owner))
           tokens)
+         (mapping-get-result-type
+          value
+          (λ (v) (value-class-of v rt class-defs tokens import-env comp owner))
+          tokens)
+         (mapping-element-get-result
+          value
+          (λ (v) (value-class-of v rt class-defs tokens import-env comp owner))
+          tokens)
          (call-result-type (uir-call-callee value) class-defs tokens rt import-env comp))]
     ;; Literal receiver types: a local or self-attr bound to a container /
     ;; string literal has that host literal type (the mapping is dialect DATA),
@@ -303,41 +456,82 @@
      (define nm (string->symbol (uir-symbol-name (uir-var-name value))))
      (or (and owner (tokens-self-name? tokens nm) owner)
          (hash-ref (receiver-types-locals rt) nm #f)
+         (hash-ref (receiver-types-globals rt) nm #f)
          (bare-class-value value class-defs tokens import-env comp))]
     [(uir-symbol? value)
      (define nm (string->symbol (uir-symbol-name value)))
      (or (and owner (tokens-self-name? tokens nm) owner)
          (hash-ref (receiver-types-locals rt) nm #f)
+         (hash-ref (receiver-types-globals rt) nm #f)
          (bare-class-value value class-defs tokens import-env comp))]
     [(uir-get? value)
      (define attr (get-field-symbol (uir-get-field value)))
      (cond
        [(and attr (self-or-cls-var? (uir-get-base value) tokens))
-        (hash-ref (receiver-types-self-attrs rt) attr #f)]
+        (or (hash-ref (receiver-types-self-attrs rt) attr #f)
+            ;; An implicit-receiver attribute the corpus graph cannot see
+            ;; (a subclass-assigned field or an external parent's __init__):
+            ;; the DATA class-attr-types table names its value type.
+            (and owner (stdlib-attr-class owner attr tokens)))]
        [else
-        ;; `module.Class` where `module` is a tracked module receiver:
-        ;; resolve to the module-qualified class marker (pylibmc.Client), whose
-        ;; domain is the module's domain in classify-all.
-        (define bm (receiver-class-of rt (uir-get-base value)))
+        ;; A subscript into a tuple-typed local (`tmp[1]` where `tmp`'s
+        ;; elem-spec is (str list list)): project the i-th element class, so
+        ;; a destructured loop var (`dirnames`) resolves its methods instead
+        ;; of staying `unknown`.
+        (define base-nm
+          (and (uir-var? (uir-get-base value))
+               (string->symbol (uir-symbol-name
+                                (uir-var-name (uir-get-base value))))))
+        (define tspec (and base-nm rt
+                           (hash-ref (receiver-types-elem-specs rt) base-nm #f)))
+        (define idx (and (uir-number? (uir-get-field value))
+                         (string->number (uir-number-value (uir-get-field value)))))
         (cond
-          ;; `module.Class` where `module` is an imported module handle: the
-          ;; class table names the attribute (smtplib.SMTP → SMTP).
-          [(imported-module-class-ref value comp import-env tokens)]
+          [(and idx (list? tspec) (>= idx 0) (< idx (length tspec)))
+           (list-ref tspec idx)]
+          ;; `module.Class` where `module` is a tracked module receiver:
+          ;; resolve to the module-qualified class marker (pylibmc.Client),
+          ;; whose domain is the module's domain in classify-all.
+          [else
+           (define bm (receiver-class-of rt (uir-get-base value)))
+           (cond
+             ;; `module.Class` where `module` is an imported module handle:
+             ;; the class table names the attribute (smtplib.SMTP → SMTP).
+             [(imported-module-class-ref value comp import-env tokens)]
           [(and attr bm (module-receiver? bm tokens))
            (string->symbol (format "~a.~a" bm attr))]
-          ;; A subscript into an imported module/fn singleton
-          ;; (`connections[database]`): the field is the index expression (not
-          ;; an attribute name), and the base resolves through the import graph
-          ;; to a module/fn handle. Track the module path so a later chain
-          ;; (`connection.ops.sql_flush`) classifies by the module's domain.
-          [(and (not (uir-string? (uir-get-field value)))
-                (uir-var? (uir-get-base value))
-                import-env comp)
-           (define bname (string->symbol (uir-symbol-name
-                                         (uir-var-name (uir-get-base value)))))
-           (define p (imported-singleton-path bname comp import-env))
-           (and p (string->symbol p))]
-          [else #f])])]
+             ;; A tracked framework class's attribute VALUE type
+             ;; (`response.cookies` -> SimpleCookie, `connection.ops` ->
+             ;; DatabaseOperations): the DATA table names a sub-handle the
+             ;; corpus attribute graph cannot see, so an element-type or
+             ;; assignment projection crosses the external object boundary.
+             [(and attr bm (stdlib-attr-class bm attr tokens))]
+             ;; A subscript into an imported module/fn singleton
+             ;; (`connections[database]`): the field is the index expression
+             ;; (not an attribute name), and the base resolves through the
+             ;; import graph to a module/fn handle. Track the module path so a
+             ;; later chain (`connection.ops.sql_flush`) classifies by the
+             ;; module's domain.
+             [(and (not (uir-string? (uir-get-field value)))
+                   (uir-var? (uir-get-base value))
+                   import-env comp)
+              (define bname (string->symbol (uir-symbol-name
+                                            (uir-var-name (uir-get-base value)))))
+              (define p (imported-singleton-path bname comp import-env))
+              (and p (string->symbol p))]
+             ;; A subscript into a dict-valued ATTRIBUTE
+             ;; (`loader.graph.nodes[key]`): the DATA class-attr-element-types
+             ;; table names the container's element class (MigrationGraph.nodes
+             ;; -> Migration), so the subscripted value resolves its methods
+             ;; instead of staying `unknown`.
+             [(and (not (uir-string? (uir-get-field value)))
+                   (member-access-callee? (uir-get-base value)))
+              (let* ([base (uir-get-base value)]
+                     [attr (member-access-field base)]
+                     [icls (value-class-of (member-access-base base) rt class-defs
+                                           tokens import-env comp owner)])
+                (and attr icls (class-attr-element-type icls attr tokens)))]
+             [else #f])])])]
     [else #f]))
 
 ;; Return type of a function/method body, projected through its receiver-type
@@ -346,13 +540,46 @@
 ;; not project to a tracked class yields #f (sound: no projection is better
 ;; than a wrong one). `rt` is the precomputed receiver env (see
 ;; infer-receiver-types), so callers share one env instead of rebuilding it.
+;; Project a CALL value's result class through the whole-program corpus return
+;; table first (`self.other()` / `message.message()` / `self.fetch_command(x)`),
+;; then fall through to the local value→class projection. The corpus table is
+;; the fixpoint over declared + body-projected returns, so a method whose body
+;; is `return self._root.resolve(...)` (InMemoryStorage._resolve) projects
+;; InMemoryDirNode exactly as the assignment-tracking closure in
+;; infer-receiver-types does. Shared so return-class-of and the closure agree.
+(define (corpus-projected-value-class value rt class-defs owner return-types
+                                      methods fn-defs known comp-supers
+                                      [tokens default-effect-tokens]
+                                      [import-env #f] [comp #f])
+  ;; An awaited call (`await self.get_response_async(request)`) projects through
+  ;; the same corpus return table as a direct call: unwrap the await, exactly
+  ;; as value-class-of does, so async bodies don't lose the projection.
+  (define v (if (uir-await? value) (uir-await-expr value) value))
+  (and (uir-call? v) return-types methods fn-defs known comp-supers
+       (corpus-call-return-type (uir-call-callee v) comp class-defs owner
+                                methods fn-defs known comp-supers return-types
+                                tokens
+                                #:receiver-class
+                                (λ (base)
+                                  (value-class-of base rt class-defs tokens
+                                                  import-env comp owner)))))
+
 (define (return-class-of body rt class-defs [tokens default-effect-tokens]
-                         [import-env #f] [comp #f] [owner #f])
+                         [import-env #f] [comp #f] [owner #f]
+                         #:return-types [return-types #f]
+                         #:methods [methods #f]
+                         #:fn-defs [fn-defs #f]
+                         #:known [known #f]
+                         #:comp-supers [comp-supers #f])
   (define classes '())
   (walk-body body (λ (n)
                     (when (uir-return? n)
-                      (define c (value-class-of (uir-return-value n) rt class-defs
-                                                tokens import-env comp owner))
+                      (define v (uir-return-value n))
+                      (define c (or (corpus-projected-value-class
+                                     v rt class-defs owner return-types methods
+                                     fn-defs known comp-supers tokens import-env comp)
+                                    (value-class-of v rt class-defs
+                                                    tokens import-env comp owner)))
                       (when c (set! classes (cons c classes))))))
   (define uniq (remove-duplicates classes))
   (and (pair? uniq) (= (length uniq) 1) (car uniq)))
@@ -374,10 +601,14 @@
                               #:known [known #f]
                               #:comp-supers [comp-supers #f]
                               #:element-types [element-types #f]
-                              #:param-element-specs [param-element-specs (hash)])
+                              #:param-element-specs [param-element-specs (hash)]
+                              #:globals [globals (hash)]
+                              #:base-fn-attrs [base-fn-attrs (hash)])
   (define locals (make-hash))
   (define self-attrs (hash-copy base-attrs))
   (define elem-specs (make-hash))   ;; var -> element-spec (symbol | list)
+  (define fn-locals (make-hash))    ;; var -> (cons class-or-#f method-name)
+  (define fn-self-attrs (hash-copy base-fn-attrs)) ;; attr -> (cons class method)
   ;; A declared param ELEMENT type (`for message in messages` where `messages`
   ;; is an external entry-point param): the element class seeds the loop
   ;; variable exactly as a for-loop's elem-spec would, so `message.message()`
@@ -385,12 +616,25 @@
   (for ([(nm espec) (in-hash param-element-specs)])
     (hash-set! elem-specs nm espec)
     (when (symbol? espec) (hash-set! locals nm espec)))
+  (define rt-now
+    (λ () (receiver-types locals self-attrs elem-specs globals
+                          fn-locals fn-self-attrs)))
   (define (value-class value)
-    (or (and (uir-call? value) return-types methods fn-defs known comp-supers
-             (corpus-call-return-type (uir-call-callee value) comp class-defs owner
+    (define v (if (uir-await? value) (uir-await-expr value) value))
+    (or (and (uir-call? v) return-types methods fn-defs known comp-supers
+             (corpus-call-return-type (uir-call-callee v) comp class-defs owner
                                       methods fn-defs known comp-supers return-types
-                                      tokens))
-        (value-class-of value (receiver-types locals self-attrs elem-specs)
+                                      tokens
+                                      ;; resolve the receiver through the CURRENT
+                                      ;; env so `message.message()` (param typed
+                                      ;; EmailMessage) and `self.fetch_command(x)`
+                                      ;; project their corpus return types; this is
+                                      ;; the same env value-class-of uses below.
+                                      #:receiver-class
+                                      (λ (base)
+                                        (value-class-of base (rt-now)
+                                                        class-defs tokens import-env comp owner))))
+        (value-class-of value (rt-now)
                         class-defs tokens import-env comp owner)))
   ;; Seed parameter types: from the annotation (`def f(x: QuerySet)`) when there
   ;; is one, else from the parameter's DEFAULT VALUE (`def run(server_cls =
@@ -419,14 +663,23 @@
                               (hash-has-key? (effect-tokens-stdlib-type-methods tokens)
                                              (symbol->string tname))
                               tname)
+                         ;; A call-chain-collected module-path marker
+                         ;; (`connection = connections[database]` types the
+                         ;; param as `django.db`): not a class and not a
+                         ;; stdlib receiver type, but a tracked singleton
+                         ;; handle whose domain the receiver chain bottoms out
+                         ;; at. A class symbol never carries a dot, so the
+                         ;; dotted test keeps this marker distinct.
+                         (and tname (string-contains? (symbol->string tname) ".")
+                              tname)
                          (and (not ann) def (value-class def))))
         (when pcls (hash-set! locals pname pcls)))))
   ;; Element spec of an iterable value, for alias tracking (`entries =
   ;; os.scandir(path)` then `for entry in entries`).
   (define (elem-spec-of value)
-    (iterable-element-spec value (receiver-types locals self-attrs elem-specs)
+    (iterable-element-spec value (rt-now)
                            tokens import-env comp
-                           (λ (v) (value-class-of v (receiver-types locals self-attrs elem-specs)
+                           (λ (v) (value-class-of v (rt-now)
                                                   class-defs tokens import-env comp owner))
                            #:class-defs class-defs
                            #:methods methods
@@ -436,6 +689,44 @@
                            #:owner owner
                            #:element-types element-types
                            #:elem-spec-lookup (λ (nm) (hash-ref elem-specs nm #f))))
+  ;; A value that is a BOUND-METHOD alias: `obj.m` used as a value, or
+  ;; `getattr(obj, "m", default)`. Returns (cons receiver-class-or-#f
+  ;; method-name), so a later bare call of the local (or `self.attr` call)
+  ;; resolves as `obj.m(...)` in classify-call-all's function-value pre-pass.
+  (define (fn-alias-of value)
+    (define v (if (uir-await? value) (uir-await-expr value) value))
+    (define (lambda-branch? x)
+      (let ([x (if (uir-paren? x) (uir-paren-inner x) x)])
+        (uir-fn? x)))
+    (cond
+      [(uir-paren? v) (fn-alias-of (uir-paren-inner v))]
+      [(and (uir-call? v)
+            (let ([c (uir-call-callee v)])
+              (and (bare-name-symbol c)
+                   (set-member? bound-method-factories
+                                (symbol->string (bare-name-symbol c)))))
+            (pair? (uir-call-args v)))
+       (define name-arg (and (pair? (cdr (uir-call-args v)))
+                             (second (uir-call-args v))))
+       (define mname (and name-arg (uir-string? name-arg)
+                          (string->symbol (uir-string-value name-arg))))
+       (and mname (cons (value-class (first (uir-call-args v))) mname))]
+      [(member-access-callee? v)
+       (define mname (member-access-field v))
+       (and mname (cons (value-class (member-access-base v)) mname))]
+      ;; A conditional `x = (obj.m if c else lambda ...)` (or the mirrored
+      ;; order): a lambda branch is a separate, non-collected function value
+      ;; (walk-body never descends into it), so it contributes no effect to
+      ;; this function. Collapsing to the bound-method branch is therefore
+      ;; sound and lets a later bare call `x(...)` resolve as `obj.m(...)`.
+      [(uir-if? v)
+       (define t (fn-alias-of (uir-if-then v)))
+       (define e (fn-alias-of (uir-if-else v)))
+       (cond
+         [(and t (lambda-branch? (uir-if-else v))) t]
+         [(and e (lambda-branch? (uir-if-then v))) e]
+         [else #f])]
+      [else #f]))
   ;; Python `uir-set!` and JS/TS `=` assignments feed one target rule; the
   ;; caller supplies the value projection, host implicit-receiver name test and
   ;; env setters.
@@ -444,7 +735,11 @@
                       (λ (nm cls) (hash-set! locals nm cls))
                       (λ (attr cls) (hash-set! self-attrs attr cls))
                       #:elem-spec-of elem-spec-of
-                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec)))
+                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec))
+                      #:fn-alias-of fn-alias-of
+                      #:set-local-fn! (λ (nm d) (hash-set! fn-locals nm d))
+                      #:set-self-attr-fn!
+                      (λ (attr d) (hash-set! fn-self-attrs attr d)))
   ;; `with ctx() as name:` binds the context manager's RESULT type: track the
   ;; target so `with ThreadPoolExecutor() as executor` types `executor` and a
   ;; later `executor.submit(...)` resolves instead of staying `unknown`. Its
@@ -465,10 +760,23 @@
   ;; `v.m()` resolves through receiver-class-of.
   (define (process-for! n)
     (define espec (elem-spec-of (uir-for-each-iterable n)))
-    (define vnm (bare-name-symbol (uir-for-each-var n)))
-    (when (and vnm espec)
-      (hash-set! elem-specs vnm espec)
-      (when (symbol? espec) (hash-set! locals vnm espec))))
+    (define target (uir-for-each-var n))
+    (cond
+      ;; Tuple destructure (`for dirpath, dirnames, filenames in os.walk(...)`):
+      ;; the element spec is a list of class symbols; seed EACH destructured var
+      ;; into locals with its own class, so `dirnames.remove(...)` resolves
+      ;; through the list method table instead of staying `unknown`.
+      [(and (uir-list? target) (pair? espec) (list? espec))
+       (for ([v (in-list (uir-list-items target))]
+             [cls (in-list espec)])
+         (define vnm (bare-name-symbol v))
+         (when (and vnm (symbol? cls)) (hash-set! locals vnm cls))
+         (when vnm (hash-set! elem-specs vnm cls)))]
+      [else
+       (define vnm (bare-name-symbol target))
+       (when (and vnm espec)
+         (hash-set! elem-specs vnm espec)
+         (when (symbol? espec) (hash-set! locals vnm espec)))]))
   ;; A comprehension `(call "<type>-comp" (list result loop-var iter filter))`
   ;; binds loop-var (a var, or a uir-list for tuple destructuring) over iter
   ;; exactly like a for-loop, so the comp var's element methods resolve.
@@ -495,7 +803,21 @@
                     (when (uir-with? n) (process-with! n))
                     (when (uir-for-each? n) (process-for! n))
                     (process-comp! n)))
-  (receiver-types locals self-attrs elem-specs))
+  ;; Second assignment pass: loop-temp element specs are now seeded (a tuple
+  ;; destructure loweres to `tmp[1]` subscripts inside the loop body), so a
+  ;; subscript projection that the first pass could not see now resolves.
+  ;; Assignments are monotone and idempotent, so the repeat only fills gaps.
+  (apply-assignments! body value-class
+                      (λ (n) (tokens-self-name? tokens n))
+                      (λ (nm cls) (hash-set! locals nm cls))
+                      (λ (attr cls) (hash-set! self-attrs attr cls))
+                      #:elem-spec-of elem-spec-of
+                      #:set-local-elem! (λ (nm espec) (hash-set! elem-specs nm espec))
+                      #:fn-alias-of fn-alias-of
+                      #:set-local-fn! (λ (nm d) (hash-set! fn-locals nm d))
+                      #:set-self-attr-fn!
+                      (λ (attr d) (hash-set! fn-self-attrs attr d)))
+  (receiver-types locals self-attrs elem-specs globals fn-locals fn-self-attrs))
 
 ;; Overlay `overlay`'s entries onto `base` (overlay wins on a key collision).
 (define (hash-overlay base overlay)
@@ -511,4 +833,8 @@
   (receiver-types
    (hash-overlay (receiver-types-locals base) (receiver-types-locals overlay))
    (hash-overlay (receiver-types-self-attrs base) (receiver-types-self-attrs overlay))
-   (hash-overlay (receiver-types-elem-specs base) (receiver-types-elem-specs overlay))))
+   (hash-overlay (receiver-types-elem-specs base) (receiver-types-elem-specs overlay))
+   (hash-overlay (receiver-types-globals base) (receiver-types-globals overlay))
+   (hash-overlay (receiver-types-fn-locals base) (receiver-types-fn-locals overlay))
+   (hash-overlay (receiver-types-fn-self-attrs base)
+                 (receiver-types-fn-self-attrs overlay))))

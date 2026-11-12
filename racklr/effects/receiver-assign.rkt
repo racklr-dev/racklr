@@ -37,21 +37,55 @@
 ;; so a later `for entry in entries` types the loop var).
 (define (apply-assignments! body value-class self-name? set-local! set-self-attr!
                             #:elem-spec-of [elem-spec-of #f]
-                            #:set-local-elem! [set-local-elem! (λ (nm espec) (void))])
+                            #:set-local-elem! [set-local-elem! (λ (nm espec) (void))]
+                            #:fn-alias-of [fn-alias-of #f]
+                            #:set-local-fn!
+                            [set-local-fn! (λ (nm desc) (void))]
+                            #:set-self-attr-fn!
+                            [set-self-attr-fn! (λ (attr desc) (void))])
+  ;; `x = x.m(...)`: the call dispatches on the PRE-assignment receiver, so
+  ;; re-typing `x` from the result would make pass 3 read the call through the
+  ;; NEW type (`content = content.message(...)` re-typing content as the MIME
+  ;; Message, so the `.message` call itself misses the corpus EmailMessage
+  ;; edge). The single-final-type env cannot hold both, so keep the pre-call
+  ;; type: the self-call classifies correctly, and the result type is still the
+  ;; value of the call for any OTHER use via value-class. A fresh target
+  ;; (`msg = message.message()`) has no pre-call type to preserve, so it is
+  ;; still typed normally.
+  (define (self-reassign? lhs value)
+    (and (uir-call? value)
+         (member-access-callee? (uir-call-callee value))
+         (let ([bnm (bare-name-symbol (member-access-base (uir-call-callee value)))]
+               [tnm (target-name-symbol lhs)])
+           (and bnm tnm (eq? bnm tnm)))))
   (define (record! lhs value)
-    (define cls (value-class value))
-    (when cls
-      (define attr (and (member-access-callee? lhs) (member-access-field lhs)))
-      (cond
-        [(and attr (self-name? (bare-name-symbol (member-access-base lhs))))
-         (set-self-attr! attr cls)]
-        [(target-name-symbol lhs) => (λ (nm) (set-local! nm cls))]
-        [else (void)]))
-    (when elem-spec-of
-      (define lhsnm (target-name-symbol lhs))
-      (when lhsnm
-        (define espec (elem-spec-of value))
-        (when espec (set-local-elem! lhsnm espec)))))
+    (unless (self-reassign? lhs value)
+      (define cls (value-class value))
+      (when cls
+        (define attr (and (member-access-callee? lhs) (member-access-field lhs)))
+        (cond
+          [(and attr (self-name? (bare-name-symbol (member-access-base lhs))))
+           (set-self-attr! attr cls)]
+          [(target-name-symbol lhs) => (λ (nm) (set-local! nm cls))]
+          [else (void)]))
+      (when elem-spec-of
+        (define lhsnm (target-name-symbol lhs))
+        (when lhsnm
+          (define espec (elem-spec-of value))
+          (when espec (set-local-elem! lhsnm espec))))
+      ;; A bound-method alias value (`x = obj.m` / `x = getattr(obj, "m", d)`,
+      ;; or the self-attr form `self._read = stream.read`) is tracked by its
+      ;; (receiver-class . method-name) descriptor so the later bare/self-attr
+      ;; CALL resolves as `obj.m(...)`, not as a constructor of the alias.
+      (when fn-alias-of
+        (define desc (fn-alias-of value))
+        (when desc
+          (define attr (and (member-access-callee? lhs) (member-access-field lhs)))
+          (cond
+            [(and attr (self-name? (bare-name-symbol (member-access-base lhs))))
+             (set-self-attr-fn! attr desc)]
+            [(target-name-symbol lhs) => (λ (nm) (set-local-fn! nm desc))]
+            [else (void)])))))
   ;; `(call "=" (list target value))`: the JS/TS assignment encoding.
   (define (assignment-call n)
     (and (uir-call? n)

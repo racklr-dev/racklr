@@ -106,4 +106,18 @@
                      (uir-effect-row-entries (algebra-row->uir merged)))
               1)
 
+;; ── materialization: open holes can also become tracked dynamic ───
+(define dmat (row-holes->dynamic open-row))
+(check-false (row-holes-open? dmat))
+(check-not-false (row-lookup dmat 'dynamic))
+(check-false (row-lookup dmat 'unknown)
+             "dynamic materialization must not also leave an unknown entry")
+(check-not-false (row-lookup dmat 'db))
+(check-true (pair? (row-provenance dmat 'dynamic))
+            "open-hole evidence is carried under the tracked dynamic")
+(check-equal? (uir-effect-entry-modality (row-lookup dmat 'dynamic)) 'may
+              "dynamic is a may-deferral, not an unknown obligation")
+(check-true (same-row? (mkdb) (row-holes->dynamic (mkdb)))
+            "a hole-free row materializes unchanged under dynamic too")
+
 (displayln "effects-algebra-holes-test: all laws hold")

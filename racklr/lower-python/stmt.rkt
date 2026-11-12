@@ -107,6 +107,58 @@
              (find-rhs-in-children x)]
             [else #f]))))
 
+
+;; Multi-target tuple assignment (`a, b = expr`): lower to
+;; `tmp = expr; a = tmp[0]; b = tmp[1]; ...` so every bound name survives in
+;; the UIR (mirrors lower-for's destructuring, so effect inference and the
+;; census can type each element instead of dropping every target after the
+;; first). Only plain-name targets destructure: an attribute or subscript
+;; target falls back to the single-target rule.
+;; Lower the RHS of a multi-target tuple assignment. A BARE tuple RHS
+;; (`a, b = c, d`) arrives as a testlist_star_expr that lower-expr would
+;; collapse to its first item; lower it as a `tuple(...)` call instead so the
+;; destructuring subscripts have a real tuple to index. A parenthesized tuple
+;; or a single/conditional expression lowers through the normal path.
+;; Lower the RHS of a multi-target tuple assignment. The normal lower-expr
+;; collapses a BARE tuple RHS (`a, b = c, d`) to its first item (only a
+;; parenthesized tuple goes through the `tuple(...)` path), so rebuild the
+;; tuple from the collected test items when the collapse produced a non-tuple,
+;; non-conditional value. A ternary (`a, b = c if x else d`) and a
+;; parenthesized tuple both lower correctly and pass through untouched; a
+;; single iterable RHS (`a, b = c`) stays as-is so `tmp[0]`/`tmp[1]` unpack
+;; its elements.
+(define (lower-assign-rhs rhs tk-type tk-value)
+  (define le (lower-expr rhs tk-type tk-value))
+  (cond
+    [(uir-if? le) le]
+    [(and (uir-call? le) (uir-symbol? (uir-call-callee le))
+          (eq? (string->symbol (uir-symbol-name (uir-call-callee le))) 'tuple))
+     le]
+    [else
+     ;; lower-tuple-items must walk the RHS node itself (NOT unwrap-expr,
+     ;; whose node-children filter drops the parser's list-wrapped items
+     ;; after the first), so a bare tuple's later items are still collected.
+     (define items (lower-tuple-items rhs tk-type tk-value))
+     (if (and items (>= (length items) 2))
+         (uir-call (uir-symbol "tuple") items)
+         le)]))
+
+(define (lower-tuple-assign lhs rhs tk-type tk-value)
+  (define toks (cst-tokens-deep lhs tk-type tk-value))
+  (define has-dot? (for/or ([t toks]) (eq? (first t) 'DOT)))
+  (define names (for/list ([t toks]
+                           #:when (member (first t) '(NAME UNDERSCORE MATCH CASE)))
+                  (second t)))
+  (if (and (not has-dot?) (>= (length names) 2) rhs)
+      (let* ([tmp (uir-symbol (symbol->string (gensym 'unpacked)))]
+             [rhs-expr (lower-assign-rhs rhs tk-type tk-value)]
+             [assigns
+              (for/list ([nm (in-list names)] [i (in-naturals)])
+                (uir-set! (uir-var (uir-symbol nm))
+                          (uir-get (uir-var tmp) (uir-number (number->string i)))))])
+        (uir-block (cons (uir-set! (uir-var tmp) rhs-expr) assigns)))
+      #f))
+
 (define (lower-expr-stmt cst tk-type tk-value)
   (define kids (node-children cst))
   (cond [(null? kids) (uir-null)]
@@ -157,11 +209,13 @@
                                     (list lhs-expr
                                           (if rhs-node (lower-expr rhs-node tk-type tk-value) (uir-null))))))
               (let* ([lhs (first kids)]
-                     [rhs (find-rhs-in-children (cdr kids))])
-                (if rhs
-                    (uir-set! (lower-expr lhs tk-type tk-value)
-                              (lower-expr rhs tk-type tk-value))
-                    (lower-expr lhs tk-type tk-value)))))))]))
+                     [rhs (find-rhs-in-children (cdr kids))]
+                     [tuple-assign (and rhs (lower-tuple-assign lhs rhs tk-type tk-value))])
+                (cond
+                  [tuple-assign tuple-assign]
+                  [rhs (uir-set! (lower-expr lhs tk-type tk-value)
+                                 (lower-expr rhs tk-type tk-value))]
+                  [else (lower-expr lhs tk-type tk-value)]))))))]))
 
 (define (lower-import-name cst tk-type tk-value)
   (define toks (cst-tokens-deep cst tk-type tk-value))

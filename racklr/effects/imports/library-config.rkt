@@ -41,6 +41,10 @@
                           (effect-rule "django.core.management.base" 'io)
                           (effect-rule "django.core.files" 'io)
                           (effect-rule "django.http" 'io)
+                          ;; The request/response handler classes: a middleware
+                          ;; chain (`self._middleware_chain(request)`) runs the
+                          ;; full request pipeline (network/response io).
+                          (effect-rule "django.core.handlers.base" 'io)
                           (effect-rule "django.db" 'db)
                           ;; GIS: GEOS geometry is in-memory C math (pure); GDAL/OGR
                           ;; read and write raster/vector files (io); measure classes
@@ -130,6 +134,19 @@
    (effect-library "IPython" (list (effect-rule "IPython" 'io)))
    ;; contextlib's exports are in-memory context-manager helpers.
    (effect-library "contextlib" (list (effect-rule "contextlib" 'pure)))
+   ;; concurrent.futures is MIXED: as_completed / wait iterate in-memory over
+   ;; already-running futures (pure), while the executors submit work to a
+   ;; thread/process pool. Tagged at member granularity so executor calls stay
+   ;; unclassified rather than being hidden as pure.
+   (effect-library "concurrent" (list (effect-rule "concurrent.futures.as_completed" 'pure)
+                                       (effect-rule "concurrent.futures.wait" 'pure)
+                                       ;; `import concurrent.futures` resolves the
+                                       ;; root handle to the `concurrent` package
+                                       ;; and walks `.futures.as_completed` as
+                                       ;; root+mname, so the root spelling also
+                                       ;; needs the member rules.
+                                       (effect-rule "concurrent.as_completed" 'pure)
+                                       (effect-rule "concurrent.wait" 'pure)))
    ;; asgiref.sync's async_to_sync / sync_to_async are WRAPPER CONSTRUCTORS:
    ;; the direct call builds a closure without running it, so the wrapped
    ;; function's effect materializes at the separate wrapper-invocation site.

@@ -217,15 +217,27 @@
     (printf "  ~a\n" detail))
   (exit 4))
 
-(define (print-coverage-detail! verdict)
+(define (report-counter-maybe lines label)
+  (define prefix (string-append label ":"))
+  (define line (findf (λ (l) (string-prefix? l prefix)) lines))
+  (if line
+      (let ([n (string->number (string-trim (substring line (string-length prefix))))])
+        (or n 0))
+      0))
+
+(define (print-coverage-detail! verdict report)
   (define census (coverage-verdict-census verdict))
   (define obligation (coverage-verdict-obligation verdict))
+  (define lines (string-split report "\n"))
   (printf "  unknown functions: ~a (obligation: <= ~a)\n"
           (coverage-census-unknown-functions census)
           (coverage-obligation-unknown-functions obligation))
   (printf "  unknown files: ~a (obligation: <= ~a)\n"
           (coverage-census-unknown-files census)
-          (coverage-obligation-unknown-files obligation)))
+          (coverage-obligation-unknown-files obligation))
+  (printf "  dynamic functions: ~a / files: ~a (tracked, not an obligation)\n"
+          (report-counter-maybe lines "dynamic functions")
+          (report-counter-maybe lines "dynamic files")))
 
 ;; ── main ────────────────────────────────────────────────────────────
 
@@ -298,13 +310,13 @@
                  (printf "baseline OK ~a\n" pinned-hash)
                  (printf "  :status :passed\n")
                  (printf "  coverage: met\n")
-                 (print-coverage-detail! coverage)
+                 (print-coverage-detail! coverage report)
                  (exit 0))
                (begin
                  (printf "baseline COVERAGE-FAILED ~a\n" pinned-hash)
                  (printf "  ~a\n" (coverage-status-line coverage))
                  (printf "  graph: matches the pin (the pass/fail half is green)\n")
-                 (print-coverage-detail! coverage)
+                 (print-coverage-detail! coverage report)
                  (printf "  a run is not green while unknown leaves remain\n")
                  (exit 3)))]
           [else
@@ -312,7 +324,7 @@
            (printf "  :status :failed\n")
            (printf "  coverage at this revision: ~a\n"
                    (coverage-status-line coverage))
-           (print-coverage-detail! coverage)
+           (print-coverage-detail! coverage report)
            (exit 1)]))))
 
 (module+ main

@@ -18,8 +18,9 @@
 ;; polymorphism. Pass-through (a caller passing its own callback along) is
 ;; transitive instantiation of the same id.
 ;;
-;; Obligation: a hole that survives to materialization is a tracked deferral,
-;; exactly like `unknown`. Callers must check `row-holes-open?` before
+;; Obligation: a hole that survives to materialization is a tracked deferral
+;; (`dynamic` for a genuine runtime callback, or `unknown` as the elimination
+;; obligation). Callers must check `row-holes-open?` before
 ;; `algebra-row->uir` is written back or handed to `row-subtype?`; the property
 ;; tests pin that instantiate-then-close eliminates every hole.
 
@@ -39,7 +40,8 @@
   row-holes-open?
   instantiate-row-hole
   close-row-hole
-  row-holes->unknown)
+  row-holes->unknown
+  row-holes->dynamic)
 
 ;; The one-character prefix that marks a hole name. Concrete domain names
 ;; (llm/db/network/cache/io/process/time/email) never start with it.
@@ -121,27 +123,41 @@
    (hash-remove (algebra-row-provenance r) (hole-symbol id))))
 
 ;; Materialize a row for the graph/contract checker: every open hole becomes a
-;; tracked `unknown` entry (the honest deferral), and the holes' own evidence
-;; is carried under `unknown` so the grounding invariant holds at the boundary.
-;; Instantiated/closed holes are already gone. This is the only hole->concrete
-;; transition that may run; inference must call it before write-back.
-(define (row-holes->unknown r)
+;; single concrete deferral entry named `target` (with the given modality), and
+;; the holes' own evidence is carried under that name so the grounding
+;; invariant holds at the boundary. Instantiated/closed holes are already gone.
+;; This is the only hole->concrete transition that may run; inference must call
+;; it before write-back.
+(define (row-holes->entry r target modality)
   (define entries (uir-effect-row-entries (algebra-row->uir r)))
   (define hole-entries (filter hole-entry? entries))
   (define concrete (filter (λ (e) (not (hole-entry? e))) entries))
   (define hole-prov
     (append-map (λ (e) (row-provenance r (effect-name-symbol e))) hole-entries))
-  (define has-unknown?
-    (for/or ([e (in-list concrete)]) (eq? (effect-name-symbol e) 'unknown)))
+  (define has-target?
+    (for/or ([e (in-list concrete)]) (eq? (effect-name-symbol e) target)))
   (define entries*
-    (if (and (pair? hole-entries) (not has-unknown?))
-        (cons (uir-effect-entry (uir-symbol "unknown") 'unknown '() #f #f) concrete)
+    (if (and (pair? hole-entries) (not has-target?))
+        (cons (uir-effect-entry (uir-symbol (symbol->string target)) modality '() #f #f)
+              concrete)
         concrete))
   (define prov-table
     (for/fold ([t (algebra-row-provenance r)]) ([e (in-list hole-entries)])
       (hash-remove t (effect-name-symbol e))))
   (define prov-table*
     (if (pair? hole-prov)
-        (hash-update prov-table 'unknown (λ (l) (append hole-prov l)) '())
+        (hash-update prov-table target (λ (l) (append hole-prov l)) '())
         prov-table))
   (make-algebra-row (uir-effect-row entries*) prov-table*))
+
+;; Open holes materialize as the tracked `unknown` deferral (modality `unknown`:
+;; the elimination obligation) — the pre-hole behavior, kept for callers that
+;; still treat every surviving hole as an obligation.
+(define (row-holes->unknown r)
+  (row-holes->entry r 'unknown 'unknown))
+
+;; Open holes materialize as the tracked `dynamic` deferral (modality `may`: a
+;; genuine runtime-dependent callback, resolved at run time and surfaced in the
+;; graph as a first-class effect rather than an elimination obligation).
+(define (row-holes->dynamic r)
+  (row-holes->entry r 'dynamic 'may))

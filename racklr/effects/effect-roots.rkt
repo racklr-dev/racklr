@@ -17,7 +17,8 @@
 (provide
   direct-effect-of-callee
   pure-stdlib-callee?
-  stdlib-type-method-effect)
+  stdlib-type-method-effect
+  stdlib-class-symbol)
 
 ;; Is `root` a builtin type or stdlib module name? Used to keep the name-only
 ;; method fallback from claiming dotted calls on non-library receivers
@@ -105,6 +106,21 @@
                   (let ([ms (hash-ref (effect-tokens-pure-stdlib-methods tokens) root #f)])
                     (and ms (set-member? ms (symbol->string op)))))))))
 
+;; A module-qualified receiver marker (`redis.Redis`, `redis.DriverInfo`) names
+;; the class after a known module-receiver prefix; the method/projection tables
+;; are keyed by the BARE class (`Redis`, `DriverInfo`). Strip the module prefix
+;; so both encodings hit the same entry. A bare name or a marker whose prefix
+;; is not a module receiver is unchanged.
+(define (stdlib-class-symbol type-name [tokens default-effect-tokens])
+  (cond
+    [(not type-name) #f]
+    [else
+     (define parts (regexp-split #rx"[.]" (symbol->string type-name)))
+     (if (and (> (length parts) 1)
+              (hash-has-key? (effect-tokens-receiver-modules tokens) (car parts)))
+         (string->symbol (string-join (cdr parts) "."))
+         type-name)]))
+
 ;; Effect (or 'pure) for a method on a stdlib/builtin receiver TYPE, from the
 ;; receiver-type method table (class -> method -> domain). Returns an effect
 ;; symbol, 'pure, or #f. This is the stdlib half of receiver-type dataflow:
@@ -113,7 +129,7 @@
 (define (stdlib-type-method-effect type-name mname [tokens default-effect-tokens])
   (and type-name mname
        (let ([m (hash-ref (effect-tokens-stdlib-type-methods tokens)
-                          (symbol->string type-name) #f)])
+                          (symbol->string (stdlib-class-symbol type-name tokens)) #f)])
          (and m (hash-ref m (symbol->string mname) #f)))))
 
 ;; Directly-performed effect for a call's callee, or #f.

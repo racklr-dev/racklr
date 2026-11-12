@@ -273,34 +273,53 @@
                   [else #f]))))))
 
 ;; `super().m()` that resolved to no corpus edge: classify by the parent chain.
-;; A corpus parent contributes nothing here (its methods were already tried);
-;; a non-corpus parent resolves through its stdlib type table or the exception
-;; protocol. When every parent is a corpus class that does not define `m`, the
-;; target is the object root, whose protocol methods are pure.
+;; The walk is the FULL MRO, not just the direct bases: a corpus parent
+;; contributes its own parents (so `class WSGIServer(simple_server.WSGIServer)`
+;; reaches the external wsgiref WSGIServer's stdlib method table through a
+;; corpus subclass). A non-corpus class on the chain resolves through its
+;; stdlib type table, its import handle, or the exception protocol. When the
+;; chain is exhausted and every direct base is corpus, the target is the object
+;; root, whose protocol methods are pure.
 (define (super-stdlib-fallback callee comp owner comp-supers class-defs import-env
                                [lex default-lexicon])
   (and (member-access-callee? callee)
        (let* ([tokens (lexicon-tokens lex)]
               [base (member-access-base callee)]
               [mname (member-access-field callee)]
-              [parents (hash-ref comp-supers (cons comp owner) '())])
+              [parents (hash-ref comp-supers (cons comp owner) '())]
+              [seen (make-hash)])
          (and (or (super-call? base)
                   ;; JS/TS `super.m()`: the `super` keyword lowers to a bare
                   ;; symbol, unlike the Python `super()` invocation.
                   (eq? (bare-name-symbol base) 'super))
               mname
-              (or (for/or ([pr (in-list parents)])
-                    (cond
-                      [(car pr) #f]
-                      [else
-                       (let ([p (cdr pr)])
-                         (or (stdlib-type-method-effect p mname tokens)
-                             (imported-parent-effect comp p mname import-env lex)
-                             (and (exception-name? p tokens)
-                                  (pure-dunder-name? mname tokens) 'pure)))]))
-                  (and (pure-dunder-name? mname tokens)
-                       (andmap car parents)
-                       'pure))))))
+              (letrec ([walk
+                        (lambda (c cls)
+                          (and c cls
+                               (not (hash-has-key? seen (cons c cls)))
+                               (begin
+                                 (hash-set! seen (cons c cls) #t)
+                                 (for/or ([pr (in-list (hash-ref comp-supers
+                                                                  (cons c cls) '()))])
+                                   (define c2 (car pr))
+                                   (define p (cdr pr))
+                                   (cond
+                                     ;; A corpus parent: its corpus methods were
+                                     ;; already tried; recurse into ITS parents so
+                                     ;; an external ancestor's stdlib method table
+                                     ;; is still reached.
+                                     [(and c2 p) (walk c2 p)]
+                                     ;; A non-corpus ancestor: stdlib table, import
+                                     ;; handle, or exception protocol.
+                                     [p (or (stdlib-type-method-effect p mname tokens)
+                                            (imported-parent-effect c p mname import-env lex)
+                                            (and (exception-name? p tokens)
+                                                 (pure-dunder-name? mname tokens) 'pure))]
+                                     [else #f])))))])
+                (or (and owner (walk comp owner))
+                    (and (pure-dunder-name? mname tokens)
+                         (andmap car parents)
+                         'pure)))))))
 
 ;; `self.m()` / `cls.m()` that resolved to no corpus edge: classify through a
 ;; NON-corpus parent's stdlib/framework type table. `self.fail()` on a
