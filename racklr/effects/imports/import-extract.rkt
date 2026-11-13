@@ -86,8 +86,10 @@
       (when (and (< l n) (eq? (typ l) 'AS))
         (set! alias (val (add1 l)))
         (set! l (+ l 2)))
+      ;; `import a.b as c` binds the local `c` to the full module `a.b`;
+      ;; `import a.b` (no alias) binds the top package `a` (existing behavior).
       (define local (or alias (first-component mod)))
-      (define target (or alias (first-component mod)))
+      (define target (if alias mod (first-component mod)))
       (set! bindings (append bindings (list (cons local target))))
       (cond
         [(and (< l n) (eq? (typ l) 'COMMA)) (loop (add1 l))]

@@ -118,6 +118,10 @@
     [(eq? instance-call-key 'pure) (cons 'pure #f)]
     [instance-call-key (cons 'edge instance-call-key)]
     [(bare-function-key nm comp fn-defs known) => (λ (k) (cons 'edge k))]
+    ;; An aliased import of a corpus function (`from ._types import is_prepared
+    ;; as _is_prepared` then bare `_is_prepared(...)`) resolves to the same
+    ;; call-graph edge as the unaliased name, via the import export graph.
+    [(imported-fn-edge nm comp import-env fn-defs known) => (λ (k) (cons 'edge k))]
     ;; A MODULE-QUALIFIED corpus function call (`color.color_style()`,
     ;; `mail.get_connection()`): the callee's root resolves through the import
     ;; graph to a module handle whose path is a scanned corpus module, and

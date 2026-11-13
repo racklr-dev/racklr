@@ -471,10 +471,13 @@
                 [higher-order?
                  (set! effects (cons (list 'hole bare-name site) effects))
                  (hash-update! called-params k (λ (l) (cons bare-name l)) '())
+                 ;; The bare-called param becomes a row HOLE; a hole still open
+                 ;; at fixpoint end materializes as `dynamic` (runtime callback),
+                 ;; so its ground must name `dynamic`, not the pre-hole `unknown`.
                  (when prov
                    (provenance-add-ground!
                     prov
-                    (make-callee-site (function-fq k) 'unknown callee
+                    (make-callee-site (function-fq k) 'dynamic callee
                                       #:kind 'unresolved
                                       #:coverage
                                       (unresolved-coverage callee param-names tokens)

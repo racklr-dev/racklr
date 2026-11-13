@@ -23,6 +23,7 @@
          mro-method-keys
          method-callee-keys
          bare-function-key
+         imported-fn-edge
          module-function-key
          corpus-call-return-type
          call-element-spec
@@ -209,6 +210,28 @@
         (define k (cons (car defs) nm))
         (and (hash-has-key? known k) k)]
        [else #f])]))
+
+;; `(component . name)` key for a bare call to an IMPORTED corpus function
+;; under an ALIAS (`from ._types import is_prepared as _is_prepared` then a
+;; bare `_is_prepared(...)`): the import export graph maps the local alias to
+;; an fn handle whose path is the defining module and whose name is the
+;; DEFINED name, so resolve the defined name back to the corpus function key.
+;; Only a scanned module (fn-defs entry + matching module path) qualifies;
+;; an external module's fn handle falls through to `imported-fn-effect`.
+(define (imported-fn-edge nm comp import-env fn-defs known)
+  (and import-env comp nm
+       (let* ([modpath (hash-ref (import-env-comp-modpath import-env) comp #f)]
+              [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
+              [h (and e (hash-ref e (symbol->string nm) #f))])
+         (and (handle? h) (eq? (handle-kind h) 'fn)
+              (handle-path h) (handle-name h)
+              (let* ([tname (string->symbol (handle-name h))]
+                     [defs (remove-duplicates (hash-ref fn-defs tname '()))])
+                (for/or ([c (in-list defs)])
+                  (define cm (hash-ref (import-env-comp-modpath import-env) c #f))
+                  (and cm (equal? cm (handle-path h))
+                       (let ([k (cons c tname)])
+                         (and (hash-has-key? known k) k)))))))))
 
 ;; Projected result class of a corpus function/method call
 ;; (`get_cookie_signer(...)`, `self.method()`), resolved through the
