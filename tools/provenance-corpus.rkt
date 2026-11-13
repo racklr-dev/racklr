@@ -57,6 +57,8 @@
          racklr/graph/profile
          "sha256.rkt")
 
+(provide corpus-rows)
+
 (define default-probe-dirs '("django/django/core"))
 
 ;; ── paths ───────────────────────────────────────────────────────────
