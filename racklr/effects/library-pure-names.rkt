@@ -105,7 +105,12 @@
        ;; constructing one is pure value construction.
        "EmailAlternative" "EmailAttachment" "URLPattern"
        ;; bare pure helpers imported from math / ctypes
-       "ceil" "sizeof" "OVERLAPPED"))
+       "ceil" "sizeof" "OVERLAPPED"
+       ;; urllib.parse / typing / base64 / urllib3 pure helpers imported bare
+       ;; (urlsplit/urljoin/urlencode/quote/unquote/parse_qs/parse_qsl were
+       ;; already listed above; these complete the parse-surface).
+       "urlparse" "urlunparse" "cast" "b64encode" "b64decode"
+       "parse_url" "builtin_str" "timedelta"))
 
 ;; ── pure op names (also dotted): translation-lookup aliases ──
 (define pure-op-names-data

@@ -106,6 +106,12 @@
    "ZipFile" (hash "__init__" 'io "read" 'io "open" 'io "extract" 'io
                    "extractall" 'io "close" 'io "namelist" 'io "infolist" 'io
                    "getinfo" 'io "printdir" 'io "testzip" 'io)
+   ;; urllib3 URL and pool receivers (reducer stage-2 return types).
+   "Url" (hash "geturl" 'pure "_replace" 'pure "host" 'pure "port" 'pure
+                "scheme" 'pure "path" 'pure "netloc" 'pure)
+   "ProxyManager" (hash "connection_from_url" 'network
+                         "connection_from_host" 'network
+                         "clear" 'pure "urlopen" 'network)
    ;; json encoder (pure)
    "JSONEncoder" (hash "__init__" 'pure "default" 'pure "encode" 'pure
                        "iterencode" 'pure)
@@ -481,6 +487,11 @@
                      "patch" "Response" "delete" "Response" "head" "Response"
                      "options" "Response" "request" "Response")
    "urllib.request" (hash "urlopen" "HTTPResponse")
+   ;; urllib3: URL / pool objects whose methods flow through the stdlib-type
+   ;; tables (Url.geturl/_replace pure; PoolManager.connection_* network).
+   "urllib3.util" (hash "parse_url" "Url")
+   "urllib3.poolmanager" (hash "proxy_from_url" "ProxyManager"
+                               "PoolManager" "PoolManager")
    ;; os.fdopen wraps a raw fd into a text file object (io-capable receiver).
    "os" (hash "fdopen" "open")
    ;; tempfile constructors open a real file object (io-capable receiver);

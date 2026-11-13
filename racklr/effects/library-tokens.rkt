@@ -140,6 +140,10 @@
     "TemporaryDirectory" 'io
     "mkstemp" 'io
     "mkdtemp" 'io
+    ;; netrc (reads ~/.netrc) and bare file-position ops (seek/tell).
+    "netrc" 'io
+    "seek" 'io
+    "tell" 'io
     ;; eval / exec run arbitrary code in-process (the Django shell command
     ;; feeds user input to exec); code execution is the process domain, the
     ;; same bucket as os.system / subprocess. compile is pure (see

@@ -126,6 +126,25 @@
    (effect-library "pathlib" (list (effect-rule "pathlib" 'io)))
    (effect-library "importlib" (list (effect-rule "importlib.util" 'io)))
    (effect-library "urllib" (list (effect-rule "urllib.request" 'network)))
+   ;; urllib3 (HTTP client): connection pools/response objects do network I/O;
+   ;; its util.* helpers (URL/retry parsing) are pure. Most-specific first.
+   (effect-library "urllib3"
+                   (list (effect-rule "urllib3.util.retry" 'pure)
+                         (effect-rule "urllib3.util.url" 'pure)
+                         (effect-rule "urllib3" 'network)))
+   ;; stdlib modules whose members are pure or read the clock/entropy (reducer
+   ;; stage-2 output): os.urandom reads entropy (io), time.ctime reads the clock
+   ;; (time) while time.strptime parses (pure), threading.local / platform info /
+   ;; codecs / chardet / http.cookiejar construct or analyze in memory (pure).
+   (effect-library "os" (list (effect-rule "os.urandom" 'io)))
+   (effect-library "time" (list (effect-rule "time.strptime" 'pure)
+                                (effect-rule "time" 'time)))
+   (effect-library "threading" (list (effect-rule "threading" 'pure)))
+   (effect-library "platform" (list (effect-rule "platform" 'pure)))
+   (effect-library "zipfile" (list (effect-rule "zipfile" 'io)))
+   (effect-library "codecs" (list (effect-rule "codecs" 'pure)))
+   (effect-library "chardet" (list (effect-rule "chardet" 'pure)))
+   (effect-library "http.cookiejar" (list (effect-rule "http.cookiejar" 'pure)))
    (effect-library "xml" (list (effect-rule "xml.dom" 'io)
                                 (effect-rule "xml.sax" 'io)))
    (effect-library "readline" (list (effect-rule "readline" 'io)))
