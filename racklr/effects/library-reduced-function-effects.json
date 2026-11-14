@@ -1,0 +1,945 @@
+{
+ "fastapi._compat.shared::_annotation_is_complex": [
+  "pure"
+ ],
+ "fastapi._compat.shared::annotation_is_pydantic_v1": [
+  "pure"
+ ],
+ "fastapi._compat.shared::field_annotation_is_complex": [
+  "pure"
+ ],
+ "fastapi._compat.shared::field_annotation_is_scalar_sequence": [
+  "pure"
+ ],
+ "fastapi._compat.shared::field_annotation_is_sequence": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_bytes_or_nonable_bytes_annotation": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_bytes_sequence_annotation": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_pydantic_v1_model_class": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_pydantic_v1_model_instance": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_uploadfile_or_nonable_uploadfile_annotation": [
+  "pure"
+ ],
+ "fastapi._compat.shared::is_uploadfile_sequence_annotation": [
+  "pure"
+ ],
+ "fastapi._compat.v2::GenerateJsonSchema.bytes_schema": [
+  "pure"
+ ],
+ "fastapi._compat.v2::ModelField.__post_init__": [
+  "pure"
+ ],
+ "fastapi._compat.v2::ModelField.get_default": [
+  "pure"
+ ],
+ "fastapi._compat.v2::ModelField.serialize": [
+  "pure"
+ ],
+ "fastapi._compat.v2::ModelField.serialize_json": [
+  "pure"
+ ],
+ "fastapi._compat.v2::ModelField.validate": [
+  "pure"
+ ],
+ "fastapi._compat.v2::copy_field_info": [
+  "pure"
+ ],
+ "fastapi._compat.v2::create_body_model": [
+  "pure"
+ ],
+ "fastapi._compat.v2::evaluate_forwardref": [
+  "pure"
+ ],
+ "fastapi._compat.v2::get_definitions": [
+  "pure"
+ ],
+ "fastapi._compat.v2::get_flat_models_from_annotation": [
+  "pure"
+ ],
+ "fastapi._compat.v2::get_flat_models_from_field": [
+  "pure"
+ ],
+ "fastapi._compat.v2::get_missing_field_error": [
+  "pure"
+ ],
+ "fastapi._compat.v2::get_model_fields": [
+  "pure"
+ ],
+ "fastapi._compat.v2::serialize_sequence_value": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.__call__": [
+  "network"
+ ],
+ "fastapi.applications::FastAPI.add_api_route": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.add_api_websocket_route": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.frontend": [
+  "io"
+ ],
+ "fastapi.applications::FastAPI.head": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.include_router": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.on_event": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.openapi": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.options": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.patch": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.post": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.put": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.setup": [
+  "pure"
+ ],
+ "fastapi.applications::FastAPI.trace": [
+  "pure"
+ ],
+ "fastapi.applications::decorator": [
+  "pure"
+ ],
+ "fastapi.background::BackgroundTasks.__call__": [
+  "dynamic"
+ ],
+ "fastapi.background::BackgroundTasks.add_task": [
+  "pure"
+ ],
+ "fastapi.cli::main": [
+  "process"
+ ],
+ "fastapi.concurrency::contextmanager_in_threadpool": [
+  "dynamic"
+ ],
+ "fastapi.datastructures::UploadFile.__get_pydantic_core_schema__": [
+  "pure"
+ ],
+ "fastapi.datastructures::UploadFile.close": [
+  "io"
+ ],
+ "fastapi.dependencies.utils::_add_form_union_validators": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_apply_form_body_schema": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_extract_form_items": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_extract_form_model": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_get_body_field": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_get_form_model_schema": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_get_form_union_models": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_get_model_type": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_get_multidict_value": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_request_param_model_to_args": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_solve_generator": [
+  "dynamic"
+ ],
+ "fastapi.dependencies.utils::_validate_value_with_model_field": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::analyze_param": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::get_stream_item_type": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::solve_dependencies": [
+  "dynamic"
+ ],
+ "fastapi.encoders::jsonable_encoder": [
+  "dynamic"
+ ],
+ "fastapi.exception_handlers::websocket_request_validation_exception_handler": [
+  "network"
+ ],
+ "fastapi.openapi.models::EmailStr.__get_pydantic_core_schema__": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::_get_openapi_operation_parameters": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::get_openapi_operation_metadata": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::get_openapi_operation_request_body": [
+  "pure"
+ ],
+ "fastapi.params::Body.__init__": [
+  "pure"
+ ],
+ "fastapi.params::Param.__init__": [
+  "pure"
+ ],
+ "fastapi.responses::ORJSONResponse.render": [
+  "pure"
+ ],
+ "fastapi.responses::UJSONResponse.render": [
+  "pure"
+ ],
+ "fastapi.routing::APIRoute.handle": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRoute.matches": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter.__init__": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter._contains_router": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter._get_routes_version": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter._iter_low_priority_routes": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter._match_low_priority": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter._shutdown": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRouter._startup": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRouter.add_api_route": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRouter.add_route": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter.add_websocket_route": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter.app": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRouter.handle": [
+  "dynamic"
+ ],
+ "fastapi.routing::APIRouter.include_router": [
+  "pure"
+ ],
+ "fastapi.routing::APIRouter.matches": [
+  "pure"
+ ],
+ "fastapi.routing::APIWebSocketRoute.__init__": [
+  "pure"
+ ],
+ "fastapi.routing::APIWebSocketRoute.matches": [
+  "pure"
+ ],
+ "fastapi.routing::_AsyncLiftContextManager.__aenter__": [
+  "dynamic"
+ ],
+ "fastapi.routing::_AsyncLiftContextManager.__aexit__": [
+  "dynamic"
+ ],
+ "fastapi.routing::_DefaultLifespan.__aenter__": [
+  "dynamic"
+ ],
+ "fastapi.routing::_DefaultLifespan.__aexit__": [
+  "dynamic"
+ ],
+ "fastapi.routing::_EffectiveRouteContext.from_api_route": [
+  "pure"
+ ],
+ "fastapi.routing::_EffectiveRouteContext.matches": [
+  "pure"
+ ],
+ "fastapi.routing::_EffectiveRouteContext.url_path_for": [
+  "pure"
+ ],
+ "fastapi.routing::_FrontendRoute.matches_with_path": [
+  "pure"
+ ],
+ "fastapi.routing::_FrontendRouteGroup._match": [
+  "pure"
+ ],
+ "fastapi.routing::_FrontendRouteGroup.handle": [
+  "dynamic"
+ ],
+ "fastapi.routing::_FrontendStaticFiles.__init__": [
+  "io"
+ ],
+ "fastapi.routing::_FrontendStaticFiles._check_fallback_file": [
+  "io"
+ ],
+ "fastapi.routing::_FrontendStaticFiles._fallback_file_exists": [
+  "dynamic"
+ ],
+ "fastapi.routing::_FrontendStaticFiles._fallback_response": [
+  "dynamic"
+ ],
+ "fastapi.routing::_FrontendStaticFiles._lookup_path": [
+  "dynamic"
+ ],
+ "fastapi.routing::_FrontendStaticFiles.get_response": [
+  "io"
+ ],
+ "fastapi.routing::_FrontendStaticFiles.get_response_for_scope": [
+  "io"
+ ],
+ "fastapi.routing::_IncludedRouter._build_effective_context": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter._handle_selected": [
+  "dynamic"
+ ],
+ "fastapi.routing::_IncludedRouter._match": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter.effective_candidates": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter.effective_low_priority_routes": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter.effective_route_contexts": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter.handle": [
+  "network"
+ ],
+ "fastapi.routing::_IncludedRouter.matches": [
+  "pure"
+ ],
+ "fastapi.routing::_IncludedRouter.url_path_for": [
+  "pure"
+ ],
+ "fastapi.routing::_get_resolved_absolute_path": [
+  "pure"
+ ],
+ "fastapi.routing::_iter_accept_media_types": [
+  "pure"
+ ],
+ "fastapi.routing::_iter_routes_with_context": [
+  "pure"
+ ],
+ "fastapi.routing::_keepalive_inserter": [
+  "io"
+ ],
+ "fastapi.routing::_populate_api_route_state": [
+  "pure"
+ ],
+ "fastapi.routing::_producer": [
+  "pure"
+ ],
+ "fastapi.routing::_serialize_data": [
+  "pure"
+ ],
+ "fastapi.routing::_serialize_sse_item": [
+  "pure"
+ ],
+ "fastapi.routing::_sse_producer_cm": [
+  "dynamic"
+ ],
+ "fastapi.routing::_wrap_gen_lifespan_context": [
+  "pure"
+ ],
+ "fastapi.routing::app": [
+  "dynamic"
+ ],
+ "fastapi.routing::merged_lifespan": [
+  "dynamic"
+ ],
+ "fastapi.routing::request_response": [
+  "pure"
+ ],
+ "fastapi.routing::run_endpoint_function": [
+  "dynamic"
+ ],
+ "fastapi.routing::serialize_response": [
+  "pure"
+ ],
+ "fastapi.routing::wrapper": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._api::_get_request_telemetry": [
+  "pure"
+ ],
+ "fastapi.telemetry._api::_route_selected": [
+  "io"
+ ],
+ "fastapi.telemetry._api::_run_sync_endpoint": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._api::_traced_operation": [
+  "io"
+ ],
+ "fastapi.telemetry._api::_validation_failed": [
+  "io"
+ ],
+ "fastapi.telemetry._asgi::NativeTelemetry.__call__": [
+  "io"
+ ],
+ "fastapi.telemetry._asgi::NativeTelemetry._get_tracer": [
+  "io"
+ ],
+ "fastapi.telemetry._asgi::NativeTelemetry._instruments": [
+  "io"
+ ],
+ "fastapi.telemetry._asgi::NativeTelemetry.enabled": [
+  "pure"
+ ],
+ "fastapi.telemetry._asgi::_HeadersGetter.get": [
+  "pure"
+ ],
+ "fastapi.telemetry._asgi::_exception": [
+  "io"
+ ],
+ "fastapi.telemetry._asgi::_legacy_otel": [
+  "pure"
+ ],
+ "fastapi.telemetry._asgi::finish": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._runtime::_configure_from_environment": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._runtime::_flush": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._runtime::_shutdown": [
+  "dynamic"
+ ],
+ "fastapi.telemetry._runtime::wrapped_send": [
+  "dynamic"
+ ],
+ "httpx._api::delete": [
+  "network"
+ ],
+ "httpx._api::get": [
+  "network"
+ ],
+ "httpx._api::head": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._api::options": [
+  "dynamic",
+  "network",
+  "time"
+ ],
+ "httpx._api::patch": [
+  "network"
+ ],
+ "httpx._api::post": [
+  "network"
+ ],
+ "httpx._api::put": [
+  "network"
+ ],
+ "httpx._api::request": [
+  "network"
+ ],
+ "httpx._api::stream": [
+  "network"
+ ],
+ "httpx._auth::Auth.async_auth_flow": [
+  "network"
+ ],
+ "httpx._auth::Auth.sync_auth_flow": [
+  "network"
+ ],
+ "httpx._auth::DigestAuth._parse_challenge": [],
+ "httpx._auth::DigestAuth.auth_flow": [
+  "pure"
+ ],
+ "httpx._auth::FunctionAuth.auth_flow": [
+  "dynamic"
+ ],
+ "httpx._auth::NetRCAuth.__init__": [
+  "io"
+ ],
+ "httpx._auth::digest": [
+  "pure"
+ ],
+ "httpx._client::AsyncClient.__aenter__": [
+  "dynamic"
+ ],
+ "httpx._client::AsyncClient.__aexit__": [
+  "dynamic"
+ ],
+ "httpx._client::AsyncClient.__init__": [],
+ "httpx._client::AsyncClient._send_handling_auth": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::AsyncClient._send_handling_redirects": [
+  "network"
+ ],
+ "httpx._client::AsyncClient._send_single_request": [
+  "network"
+ ],
+ "httpx._client::AsyncClient._transport_for_url": [
+  "pure"
+ ],
+ "httpx._client::AsyncClient.aclose": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.delete": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.get": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.head": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.options": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.patch": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::AsyncClient.post": [
+  "network"
+ ],
+ "httpx._client::AsyncClient.put": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "httpx._client::AsyncClient.request": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::AsyncClient.send": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::AsyncClient.stream": [
+  "network"
+ ],
+ "httpx._client::BaseClient.__init__": [
+  "pure"
+ ],
+ "httpx._client::BaseClient._build_redirect_request": [],
+ "httpx._client::BaseClient._get_proxy_map": [
+  "process"
+ ],
+ "httpx._client::BaseClient._merge_cookies": [],
+ "httpx._client::BaseClient._merge_headers": [],
+ "httpx._client::BaseClient._merge_url": [
+  "pure"
+ ],
+ "httpx._client::BaseClient._redirect_headers": [],
+ "httpx._client::BaseClient._set_timeout": [
+  "pure"
+ ],
+ "httpx._client::BaseClient.build_request": [
+  "pure"
+ ],
+ "httpx._client::BaseClient.event_hooks": [],
+ "httpx._client::BaseClient.headers": [],
+ "httpx._client::Client.__enter__": [
+  "network"
+ ],
+ "httpx._client::Client.__exit__": [
+  "network"
+ ],
+ "httpx._client::Client.__init__": [
+  "pure"
+ ],
+ "httpx._client::Client._send_handling_auth": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::Client._send_handling_redirects": [
+  "dynamic",
+  "network",
+  "time"
+ ],
+ "httpx._client::Client._send_single_request": [
+  "network"
+ ],
+ "httpx._client::Client._transport_for_url": [
+  "pure"
+ ],
+ "httpx._client::Client.close": [
+  "network"
+ ],
+ "httpx._client::Client.delete": [
+  "network"
+ ],
+ "httpx._client::Client.get": [
+  "network"
+ ],
+ "httpx._client::Client.head": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::Client.options": [
+  "network"
+ ],
+ "httpx._client::Client.patch": [
+  "network"
+ ],
+ "httpx._client::Client.post": [
+  "dynamic",
+  "io",
+  "network",
+  "time"
+ ],
+ "httpx._client::Client.put": [
+  "network"
+ ],
+ "httpx._client::Client.request": [
+  "dynamic",
+  "network"
+ ],
+ "httpx._client::Client.send": [
+  "dynamic",
+  "network",
+  "time"
+ ],
+ "httpx._client::Client.stream": [
+  "network"
+ ],
+ "httpx._client::_is_https_redirect": [],
+ "httpx._client::_port_or_default": [],
+ "httpx._client::_same_origin": [],
+ "httpx._config::create_ssl_context": [
+  "io"
+ ],
+ "httpx._content::AsyncIteratorByteStream.__aiter__": [
+  "io"
+ ],
+ "httpx._decoders::BrotliDecoder.__init__": [
+  "pure"
+ ],
+ "httpx._decoders::BrotliDecoder.decode": [
+  "pure"
+ ],
+ "httpx._decoders::BrotliDecoder.flush": [
+  "pure"
+ ],
+ "httpx._decoders::DeflateDecoder.__init__": [
+  "pure"
+ ],
+ "httpx._decoders::DeflateDecoder.decode": [
+  "pure"
+ ],
+ "httpx._decoders::GZipDecoder.__init__": [
+  "pure"
+ ],
+ "httpx._decoders::GZipDecoder.decode": [
+  "pure"
+ ],
+ "httpx._decoders::TextDecoder.__init__": [
+  "pure"
+ ],
+ "httpx._decoders::ZStandardDecoder.__init__": [
+  "pure"
+ ],
+ "httpx._decoders::ZStandardDecoder.decode": [
+  "pure"
+ ],
+ "httpx._main::download_response": [
+  "io"
+ ],
+ "httpx._main::get_lexer_for_response": [
+  "pure"
+ ],
+ "httpx._main::handle_help": [
+  "process"
+ ],
+ "httpx._main::main": [
+  "io",
+  "network"
+ ],
+ "httpx._main::print_help": [
+  "io"
+ ],
+ "httpx._main::print_request_headers": [
+  "io"
+ ],
+ "httpx._main::print_response": [
+  "io"
+ ],
+ "httpx._main::print_response_headers": [
+  "io"
+ ],
+ "httpx._main::trace": [
+  "network"
+ ],
+ "httpx._main::validate_auth": [
+  "io"
+ ],
+ "httpx._main::validate_json": [
+  "pure"
+ ],
+ "httpx._models::Cookies.__init__": [
+  "pure"
+ ],
+ "httpx._models::Cookies.clear": [
+  "pure"
+ ],
+ "httpx._models::Cookies.delete": [
+  "pure"
+ ],
+ "httpx._models::Cookies.extract_cookies": [
+  "pure"
+ ],
+ "httpx._models::Cookies.set": [
+  "pure"
+ ],
+ "httpx._models::Cookies.set_cookie_header": [
+  "pure"
+ ],
+ "httpx._models::Cookies.update": [
+  "pure"
+ ],
+ "httpx._models::Headers.values": [],
+ "httpx._models::Request.__init__": [
+  "pure"
+ ],
+ "httpx._models::Response._get_content_decoder": [
+  "pure"
+ ],
+ "httpx._models::Response.charset_encoding": [],
+ "httpx._models::Response.links": [
+  "pure"
+ ],
+ "httpx._models::_parse_content_type_charset": [
+  "pure"
+ ],
+ "httpx._multipart::MultipartStream.__init__": [
+  "pure"
+ ],
+ "httpx._multipart::MultipartStream.get_content_length": [
+  "io"
+ ],
+ "httpx._multipart::MultipartStream.iter_chunks": [
+  "io"
+ ],
+ "httpx._multipart::replacer": [
+  "pure"
+ ],
+ "httpx._transports.asgi::ASGITransport.handle_async_request": [
+  "dynamic"
+ ],
+ "httpx._transports.asgi::create_event": [
+  "pure"
+ ],
+ "httpx._transports.asgi::is_running_trio": [
+  "pure"
+ ],
+ "httpx._transports.asgi::receive": [
+  "dynamic"
+ ],
+ "httpx._transports.asgi::send": [
+  "pure"
+ ],
+ "httpx._transports.default::AsyncHTTPTransport.__aenter__": [
+  "network"
+ ],
+ "httpx._transports.default::AsyncHTTPTransport.__aexit__": [
+  "network"
+ ],
+ "httpx._transports.default::AsyncHTTPTransport.__init__": [
+  "network"
+ ],
+ "httpx._transports.default::AsyncHTTPTransport.aclose": [
+  "network"
+ ],
+ "httpx._transports.default::AsyncHTTPTransport.handle_async_request": [
+  "network"
+ ],
+ "httpx._transports.default::AsyncResponseStream.aclose": [
+  "network"
+ ],
+ "httpx._transports.default::HTTPTransport.__enter__": [
+  "network"
+ ],
+ "httpx._transports.default::HTTPTransport.__exit__": [
+  "network"
+ ],
+ "httpx._transports.default::HTTPTransport.__init__": [
+  "network"
+ ],
+ "httpx._transports.default::HTTPTransport.close": [
+  "network"
+ ],
+ "httpx._transports.default::HTTPTransport.handle_request": [
+  "network"
+ ],
+ "httpx._transports.default::ResponseStream.close": [
+  "network"
+ ],
+ "httpx._transports.default::map_httpcore_exceptions": [
+  "dynamic"
+ ],
+ "httpx._transports.mock::MockTransport.handle_async_request": [
+  "dynamic"
+ ],
+ "httpx._transports.mock::MockTransport.handle_request": [
+  "dynamic"
+ ],
+ "httpx._transports.wsgi::WSGIByteStream.close": [
+  "dynamic"
+ ],
+ "httpx._urlparse::ParseResult.copy_with": [],
+ "httpx._urlparse::normalize_port": [],
+ "httpx._urlparse::quote": [
+  "pure"
+ ],
+ "httpx._urlparse::urlparse": [
+  "pure"
+ ],
+ "httpx._urls::QueryParams.__eq__": [
+  "pure"
+ ],
+ "httpx._urls::QueryParams.add": [],
+ "httpx._urls::QueryParams.get_list": [],
+ "httpx._urls::QueryParams.values": [],
+ "httpx._urls::URL.__init__": [],
+ "httpx._urls::URL.copy_add_param": [],
+ "httpx._urls::URL.raw": [
+  "pure"
+ ],
+ "httpx._utils::get_environment_proxies": [
+  "process"
+ ],
+ "requests.adapters::HTTPAdapter.close": [
+  "network"
+ ],
+ "requests.adapters::HTTPAdapter.get_connection": [
+  "network"
+ ],
+ "requests.adapters::HTTPAdapter.get_connection_with_tls_context": [
+  "network"
+ ],
+ "requests.adapters::HTTPAdapter.send": [
+  "network"
+ ],
+ "requests.auth::HTTPDigestAuth.build_digest_header": [
+  "pure"
+ ],
+ "requests.auth::HTTPDigestAuth.handle_401": [
+  "network"
+ ],
+ "requests.auth::KD": [
+  "pure"
+ ],
+ "requests.cookies::MockResponse.getheaders": [
+  "pure"
+ ],
+ "requests.cookies::RequestsCookieJar.__contains__": [
+  "pure"
+ ],
+ "requests.cookies::RequestsCookieJar.__iter__": [
+  "pure"
+ ],
+ "requests.cookies::RequestsCookieJar.copy": [
+  "pure"
+ ],
+ "requests.cookies::RequestsCookieJar.set_cookie": [
+  "pure"
+ ],
+ "requests.cookies::_copy_cookie_jar": [
+  "pure"
+ ],
+ "requests.cookies::create_cookie": [
+  "pure"
+ ],
+ "requests.cookies::extract_cookies_to_jar": [
+  "pure"
+ ],
+ "requests.cookies::get_cookie_header": [
+  "pure"
+ ],
+ "requests.cookies::merge_cookies": [
+  "pure"
+ ],
+ "requests.cookies::remove_cookie_by_name": [
+  "pure"
+ ],
+ "requests.exceptions::JSONDecodeError.__reduce__": [
+  "pure"
+ ],
+ "requests.hooks::dispatch_hook": [
+  "dynamic"
+ ],
+ "requests.models::PreparedRequest.prepare_body": [
+  "io"
+ ],
+ "requests.models::RequestEncodingMixin._encode_files": [
+  "io"
+ ],
+ "requests.models::RequestEncodingMixin._encode_params": [
+  "pure"
+ ],
+ "requests.models::RequestHooksMixin.deregister_hook": [
+  "pure"
+ ],
+ "requests.models::Response.close": [
+  "network"
+ ],
+ "requests.models::Response.json": [
+  "pure"
+ ],
+ "requests.models::generate": [
+  "network"
+ ],
+ "requests.sessions::Session.close": [
+  "network"
+ ],
+ "requests.sessions::Session.send": [
+  "network"
+ ],
+ "requests.sessions::merge_setting": [
+  "dynamic"
+ ],
+ "requests.structures::CaseInsensitiveDict.__eq__": [
+  "pure"
+ ],
+ "requests.utils::rewind_body": [
+  "io"
+ ],
+ "requests.utils::stream_decode_response_unicode": [
+  "pure"
+ ]
+}
