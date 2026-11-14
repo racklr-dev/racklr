@@ -18,4 +18,6 @@ trap 'rm -f "$TSV"' EXIT
 
 # The census prints parser-generation warnings to stderr; keep stdout clean.
 racket "$HERE/unknown-census.rkt" "$DIR" --tsv "$TSV" >/dev/null 2>&1
-python3 "$HERE/reduce-effects.py" "$DIR" "$TSV"
+# --apply writes the generated declared-function-effects DATA file directly;
+# without it the diff is printed for review only.
+python3 "$HERE/reduce-effects.py" "$DIR" "$TSV" "${@:2}"
