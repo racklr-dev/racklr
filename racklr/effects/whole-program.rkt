@@ -21,7 +21,8 @@
          racklr/effects/classify-all
          racklr/effects/type-relations
          racklr/effects/library-tokens
-         (only-in racklr/effects/library-stdlib-types declared-param-effect-rows)
+         (only-in racklr/effects/library-stdlib-types declared-param-effect-rows
+                  declared-function-effects-data)
          racklr/effects/imports
          racklr/effects/imports
          racklr/effects/labels
@@ -90,7 +91,9 @@
                            #:lexicon [lex default-lexicon]
                            #:declared-param-effects [declared-param-effects
                                                     declared-param-effect-rows]
-                           #:known-pure-names [known-pure-names '()])
+                           #:known-pure-names [known-pure-names '()]
+                           #:declared-function-effects [declared-function-effects
+                                                    declared-function-effects-data])
   (define tokens (lexicon-tokens lex))
   (define fns (make-hash))           ;; (cons comp name) → body
   (define methods (make-hash))       ;; (cons comp name) → body
@@ -234,6 +237,43 @@
                                       (cons modpath name) #f))]
                 [hit (and entry (assq param entry))])
            (and hit (cdr hit)))))
+
+  ;; Declared function effect: the producer (reducer) names a function's
+  ;; effect domain directly when inference is structurally blind. Keyed by
+  ;; (module-path . qualified-name-symbol), grounded as a declared capability
+  ;; (provenance kind 'declared), never a silent default. Applied to the
+  ;; DIRECT row so the fixpoint propagates the declared domain (inheritors
+  ;; never see the unknown it replaces).
+  (define (declared-function-fx k)
+    (and declared-function-effects
+         (let* ([comp (car k)] [name (cdr k)]
+                [modpath (and import-env
+                               (hash-ref (import-env-comp-modpath import-env)
+                                         comp #f))])
+           (hash-ref declared-function-effects (cons (or modpath comp) name) #f))))
+  (define (row-has-unknown? uir-row)
+    (for/or ([e (in-list (uir-effect-row-entries uir-row))])
+      (eq? (entry-effect-name e) 'unknown)))
+  (define (algebra-row-replace-unknown row fx)
+    (alg:make-algebra-row
+     (uir-effect-row
+      (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
+                      (uir-effect-row-entries (alg:algebra-row->uir row)))
+              (uir-effect-row-entries (effects->row (if (list? fx) fx (list fx))))))
+     (alg:algebra-row-provenance row)))
+  (define (declared-function-row! k row)
+    (define fx (declared-function-fx k))
+    (cond
+      [(and fx (row-has-unknown? (alg:algebra-row->uir row)))
+       (when prov
+         (for ([d (in-list (if (list? fx) fx (list fx)))])
+           (provenance-add-ground!
+            prov
+            (make-declared-site (function-fq k) d
+                                (list (car k) (symbol->string (cdr k))) #f
+                                #:file (car k)))))
+       (algebra-row-replace-unknown row fx)]
+      [else row]))
 
   ;; Pass 3: classification + call-graph edges.
   (define direct-rows (make-hash))
@@ -526,7 +566,7 @@
           (define hsite (caddr item))
           (alg:join r (alg:row-hole pname (alg:provenance (list hsite) #f
                                                        (list (symbol->string pname))))))))
-    (hash-set! direct-rows k direct-row)
+    (hash-set! direct-rows k (declared-function-row! k direct-row))
     (hash-set! edge-sites k (reverse call-sites))
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
                                                             (string<? (format "~a.~a" (car a) (cdr a))
@@ -625,8 +665,30 @@
       (if (null? (hash-ref incoming k '()))
           r
           (alg:instantiate-row-hole r p inst))))
+  ;; UIR-row sibling of algebra-row-replace-unknown, for the materialization
+  ;; fallback below (a residual unknown that the fixpoint joins in from a
+  ;; non-declared callee).
+  (define (uir-row-replace-unknown uir-row fx)
+    (uir-effect-row
+     (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
+                     (uir-effect-row-entries uir-row))
+             (uir-effect-row-entries (effects->row (if (list? fx) fx (list fx)))))))
   ;; Materialize the algebra rows back to the UIR row contract; holes still
   ;; open become tracked `dynamic` (a runtime callback, surfaced in the graph),
-  ;; never a ?-entry and no longer the `unknown` elimination obligation.
+  ;; never a ?-entry and no longer the `unknown` elimination obligation. A
+  ;; still-unknown row the producer has declared a domain for takes that
+  ;; declared domain (grounded, so the certificate checker still accepts it).
   (for/hash ([(k r) (in-hash rows)])
-    (values k (alg:algebra-row->uir (alg:row-holes->dynamic (summary-row k rows))))))
+    (define uir-row (alg:algebra-row->uir (alg:row-holes->dynamic (summary-row k rows))))
+    (define fx (declared-function-fx k))
+    (cond
+      [(and fx (row-has-unknown? uir-row))
+       (when prov
+         (for ([d (in-list (if (list? fx) fx (list fx)))])
+           (provenance-add-ground!
+            prov
+            (make-declared-site (function-fq k) d
+                                (list (car k) (symbol->string (cdr k))) #f
+                                #:file (car k)))))
+       (values k (uir-row-replace-unknown uir-row fx))]
+      [else (values k uir-row)])))
