@@ -259,7 +259,10 @@
      (uir-effect-row
       (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
                       (uir-effect-row-entries (alg:algebra-row->uir row)))
-              (uir-effect-row-entries (effects->row (if (list? fx) fx (list fx))))))
+              ;; `pure` is the ABSENCE of an effect, not an entry: declaring
+              ;; a function pure replaces its unknown with an empty row.
+              (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
+                                                            (if (list? fx) fx (list fx)))))))
      (alg:algebra-row-provenance row)))
   (define (declared-function-row! k row)
     (define fx (declared-function-fx k))
@@ -676,7 +679,9 @@
     (uir-effect-row
      (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
                      (uir-effect-row-entries uir-row))
-             (uir-effect-row-entries (effects->row (if (list? fx) fx (list fx)))))))
+             ;; `pure` is the ABSENCE of an effect, not an entry.
+             (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
+                                                           (if (list? fx) fx (list fx))))))))
   ;; Materialize the algebra rows back to the UIR row contract; holes still
   ;; open become tracked `dynamic` (a runtime callback, surfaced in the graph),
   ;; never a ?-entry and no longer the `unknown` elimination obligation. A
