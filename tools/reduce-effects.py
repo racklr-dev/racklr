@@ -156,7 +156,7 @@ def main():
             dom = it.get("domain")
             comp, _, fn = it["name"].rpartition("::")
             if dom in ("pure", "io", "network", "db", "time", "process", "dynamic"):
-                print(f"  (cons \"{comp}\" '{fn}) '{dom}'   ; {it.get('reason','')}")
+                print(f"  (cons \"{comp}\" '{fn}) '{dom}   ; {it.get('reason','')}")
                 decl.append({"name": it["name"], "domain": dom,
                              "confidence": it.get("confidence"),
                              "reason": it.get("reason")})
