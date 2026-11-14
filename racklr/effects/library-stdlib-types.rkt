@@ -1,5 +1,8 @@
 #lang racket
 
+(require (only-in racklr/effects/library-reduced-function-effects
+                  reduced-function-effects))
+
 ;; racklr/effects/library-stdlib-types.rkt
 ;;
 ;; Receiver-TYPE -> method -> effect tables for call-result chains
@@ -1047,122 +1050,7 @@
 ;; host protocol callbacks. Populated by tools/reduce-effects.sh; committed
 ;; entries are reviewed.
 (define declared-function-effects-data
-  (hash
-   (cons "requests.adapters" 'HTTPAdapter.close) 'network
-   (cons "requests.adapters" 'HTTPAdapter.get_connection) 'network
-   (cons "requests.adapters" 'HTTPAdapter.get_connection_with_tls_context) 'network
-   (cons "requests.adapters" 'HTTPAdapter.send) 'network
-   (cons "requests.auth" 'HTTPDigestAuth.build_digest_header) 'pure
-   (cons "requests.auth" 'HTTPDigestAuth.handle_401) 'network
-   (cons "requests.auth" 'KD) 'pure
-   (cons "requests.cookies" 'MockResponse.getheaders) 'pure
-   (cons "requests.cookies" 'RequestsCookieJar.__contains__) 'pure
-   (cons "requests.cookies" 'RequestsCookieJar.__iter__) 'pure
-   (cons "requests.cookies" 'RequestsCookieJar.copy) 'pure
-   (cons "requests.cookies" 'RequestsCookieJar.set_cookie) 'pure
-   (cons "requests.cookies" '_copy_cookie_jar) 'pure
-   (cons "requests.cookies" 'create_cookie) 'pure
-   (cons "requests.cookies" 'extract_cookies_to_jar) 'pure
-   (cons "requests.cookies" 'get_cookie_header) 'pure
-   (cons "requests.cookies" 'merge_cookies) 'pure
-   (cons "requests.cookies" 'remove_cookie_by_name) 'pure
-   (cons "requests.exceptions" 'JSONDecodeError.__reduce__) 'pure
-   (cons "requests.hooks" 'dispatch_hook) 'dynamic
-   (cons "requests.models" 'PreparedRequest.prepare_body) 'io
-   (cons "requests.models" 'RequestEncodingMixin._encode_files) 'io
-   (cons "requests.models" 'RequestEncodingMixin._encode_params) 'pure
-   (cons "requests.models" 'RequestHooksMixin.deregister_hook) 'pure
-   (cons "requests.models" 'Response.close) 'network
-   (cons "requests.models" 'Response.json) 'pure
-   (cons "requests.models" 'generate) 'network
-   (cons "requests.sessions" 'Session.close) 'network
-   (cons "requests.sessions" 'Session.send) 'network
-   (cons "requests.sessions" 'merge_setting) 'dynamic
-   (cons "requests.structures" 'CaseInsensitiveDict.__eq__) 'pure
-   (cons "requests.utils" 'rewind_body) 'io
-   (cons "requests.utils" 'stream_decode_response_unicode) 'pure
-   (cons "httpx._auth" 'Auth.async_auth_flow) 'network
-   (cons "httpx._auth" 'Auth.sync_auth_flow) 'network
-   (cons "httpx._auth" 'DigestAuth.auth_flow) 'pure
-   (cons "httpx._auth" 'FunctionAuth.auth_flow) 'dynamic
-   (cons "httpx._auth" 'NetRCAuth.__init__) 'io
-   (cons "httpx._auth" 'digest) 'pure
-   (cons "httpx._client" 'AsyncClient.__aenter__) 'dynamic
-   (cons "httpx._client" 'AsyncClient.__aexit__) 'dynamic
-   (cons "httpx._client" 'AsyncClient._send_handling_auth) 'dynamic
-   (cons "httpx._client" 'AsyncClient._send_handling_redirects) 'dynamic
-   (cons "httpx._client" 'AsyncClient._send_single_request) 'network
-   (cons "httpx._client" 'AsyncClient._transport_for_url) 'pure
-   (cons "httpx._client" 'AsyncClient.aclose) 'network
-   (cons "httpx._client" 'BaseClient._merge_url) 'pure
-   (cons "httpx._client" 'BaseClient._set_timeout) 'pure
-   (cons "httpx._client" 'BaseClient.build_request) 'pure
-   (cons "httpx._client" 'Client.__enter__) 'network
-   (cons "httpx._client" 'Client.__exit__) 'network
-   (cons "httpx._client" 'Client._send_handling_auth) 'dynamic
-   (cons "httpx._client" 'Client._send_handling_redirects) 'dynamic
-   (cons "httpx._client" 'Client._send_single_request) 'network
-   (cons "httpx._client" 'Client._transport_for_url) 'pure
-   (cons "httpx._client" 'Client.close) 'network
-   (cons "httpx._config" 'create_ssl_context) 'io
-   (cons "httpx._content" 'AsyncIteratorByteStream.__aiter__) 'io
-   (cons "httpx._decoders" 'BrotliDecoder.__init__) 'pure
-   (cons "httpx._decoders" 'BrotliDecoder.decode) 'pure
-   (cons "httpx._decoders" 'BrotliDecoder.flush) 'pure
-   (cons "httpx._decoders" 'DeflateDecoder.__init__) 'pure
-   (cons "httpx._decoders" 'DeflateDecoder.decode) 'pure
-   (cons "httpx._decoders" 'GZipDecoder.__init__) 'pure
-   (cons "httpx._decoders" 'GZipDecoder.decode) 'pure
-   (cons "httpx._decoders" 'TextDecoder.__init__) 'pure
-   (cons "httpx._decoders" 'ZStandardDecoder.__init__) 'pure
-   (cons "httpx._decoders" 'ZStandardDecoder.decode) 'pure
-   (cons "httpx._main" 'download_response) 'io
-   (cons "httpx._main" 'get_lexer_for_response) 'pure
-   (cons "httpx._main" 'handle_help) 'process
-   (cons "httpx._main" 'main) 'io
-   (cons "httpx._main" 'print_help) 'io
-   (cons "httpx._main" 'print_request_headers) 'io
-   (cons "httpx._main" 'print_response) 'io
-   (cons "httpx._main" 'print_response_headers) 'io
-   (cons "httpx._main" 'trace) 'network
-   (cons "httpx._main" 'validate_auth) 'io
-   (cons "httpx._main" 'validate_json) 'pure
-   (cons "httpx._models" 'Cookies.__init__) 'pure
-   (cons "httpx._models" 'Cookies.clear) 'pure
-   (cons "httpx._models" 'Cookies.delete) 'pure
-   (cons "httpx._models" 'Cookies.extract_cookies) 'pure
-   (cons "httpx._models" 'Cookies.set) 'pure
-   (cons "httpx._models" 'Cookies.set_cookie_header) 'pure
-   (cons "httpx._models" 'Cookies.update) 'pure
-   (cons "httpx._models" 'Response._get_content_decoder) 'pure
-   (cons "httpx._models" '_parse_content_type_charset) 'pure
-   (cons "httpx._multipart" 'MultipartStream.__init__) 'pure
-   (cons "httpx._multipart" 'MultipartStream.get_content_length) 'io
-   (cons "httpx._multipart" 'MultipartStream.iter_chunks) 'io
-   (cons "httpx._multipart" 'replacer) 'pure
-   (cons "httpx._transports.asgi" 'ASGITransport.handle_async_request) 'dynamic
-   (cons "httpx._transports.asgi" 'create_event) 'pure
-   (cons "httpx._transports.asgi" 'is_running_trio) 'pure
-   (cons "httpx._transports.asgi" 'receive) 'dynamic
-   (cons "httpx._transports.asgi" 'send) 'pure
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.__aenter__) 'network
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.__aexit__) 'network
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.__init__) 'network
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.aclose) 'network
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.handle_async_request) 'network
-   (cons "httpx._transports.default" 'AsyncResponseStream.aclose) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.__enter__) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.__exit__) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.__init__) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.close) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.handle_request) 'network
-   (cons "httpx._transports.default" 'ResponseStream.close) 'network
-   (cons "httpx._transports.default" 'map_httpcore_exceptions) 'dynamic
-   (cons "httpx._transports.mock" 'MockTransport.handle_async_request) 'dynamic
-   (cons "httpx._transports.mock" 'MockTransport.handle_request) 'dynamic
-   (cons "httpx._transports.wsgi" 'WSGIByteStream.close) 'dynamic
-   (cons "httpx._urlparse" 'quote) 'pure
-   (cons "httpx._urlparse" 'urlparse) 'pure
-   (cons "httpx._urls" 'QueryParams.__eq__) 'pure
-   (cons "httpx._urls" 'URL.__init__) 'pure
-   (cons "httpx._urls" 'URL.raw) 'pure))
+  ;; auto-discovered (module-path . qualified-name) -> effect domain, generated
+  ;; by tools/reduce-effects.sh --apply and committed for review. Hand-tuned
+  ;; entries can live here too; the generated table is merged first.
+  reduced-function-effects)

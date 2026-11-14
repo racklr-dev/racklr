@@ -201,6 +201,7 @@
     "library-stdlib-types.rkt"   ; receiver-type domain tables (DATA)
     "library-dialect.rkt"        ; host naming/encoding conventions (DATA)
     "library-racket-tokens.rkt"  ; Racket stdlib pure/effect names (DATA)
+    "library-reduced-function-effects.rkt" ; auto-discovered declared effects (DATA)
     "annotation-hooks.rkt"       ; front-end annotation hook binding
     "python-annot.rkt"           ; Python annotation front end
     "clojure-annot.rkt"          ; Clojure annotation front end
