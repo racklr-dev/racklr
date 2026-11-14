@@ -109,6 +109,15 @@
    ;; urllib3 URL and pool receivers (reducer stage-2 return types).
    "Url" (hash "geturl" 'pure "_replace" 'pure "host" 'pure "port" 'pure
                 "scheme" 'pure "path" 'pure "netloc" 'pure)
+   ;; urllib.parse ParseResult/SplitResult: pure string accessors.
+   "ParseResult" (hash "geturl" 'pure "_replace" 'pure "hostname" 'pure
+                        "port" 'pure "scheme" 'pure "netloc" 'pure
+                        "path" 'pure "query" 'pure "fragment" 'pure)
+   "SplitResult" (hash "geturl" 'pure "_replace" 'pure "hostname" 'pure
+                        "port" 'pure "scheme" 'pure "netloc" 'pure
+                        "path" 'pure "query" 'pure "fragment" 'pure)
+   ;; netrc object: pure reads of the parsed netrc entries.
+   "netrc" (hash "authenticators" 'pure "hosts" 'pure)
    "ProxyManager" (hash "connection_from_url" 'network
                          "connection_from_host" 'network
                          "clear" 'pure "urlopen" 'network)
@@ -487,11 +496,19 @@
                      "patch" "Response" "delete" "Response" "head" "Response"
                      "options" "Response" "request" "Response")
    "urllib.request" (hash "urlopen" "HTTPResponse")
+   ;; urllib.parse pure URL parse/format functions (their result's methods are
+   ;; pure string accessors; see ParseResult/SplitResult in the method table).
+   "urllib.parse" (hash "urlparse" "ParseResult" "urlsplit" "SplitResult"
+                         "urljoin" "ParseResult" "urlunparse" "ParseResult")
    ;; urllib3: URL / pool objects whose methods flow through the stdlib-type
    ;; tables (Url.geturl/_replace pure; PoolManager.connection_* network).
    "urllib3.util" (hash "parse_url" "Url")
    "urllib3.poolmanager" (hash "proxy_from_url" "ProxyManager"
                                "PoolManager" "PoolManager")
+   ;; netrc() is a lowercase CLASS constructor (mis-synthesized as an fn
+   ;; handle); its result is the netrc object whose authenticators/hosts are
+   ;; pure reads of the in-memory parsed file.
+   "netrc" (hash "netrc" "netrc")
    ;; os.fdopen wraps a raw fd into a text file object (io-capable receiver).
    "os" (hash "fdopen" "open")
    ;; tempfile constructors open a real file object (io-capable receiver);
@@ -581,7 +598,9 @@
    "django.db.models" (hash "Expression" "Expression")
    ;; PIL.ImageFile.Parser: the streaming image parser get_image_dimensions
    ;; feeds image chunks into (feed reads the in-memory buffer).
-   "PIL.ImageFile" (hash "Parser" "Parser")))
+   "PIL.ImageFile" (hash "Parser" "Parser")
+   ;; zipfile.ZipFile (constructing one reads the archive header -> io receiver).
+   "zipfile" (hash "ZipFile" "ZipFile")))
 
 ;; Bare function names whose call RESULT is a dynamically-imported or
 ;; dynamically-created CLASS (a class factory): `import_string(path)` imports
