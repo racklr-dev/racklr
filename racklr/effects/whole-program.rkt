@@ -264,18 +264,24 @@
               (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
                                                             (if (list? fx) fx (list fx)))))))
      (alg:algebra-row-provenance row)))
+  ;; A declared function effect is AUTHORITATIVE: the producer (LLM) names the
+  ;; function's complete effect set, overriding the structural inference (which
+  ;; can carry a coarse name-table false positive, e.g. `get`/`set`/`pop` -> db
+  ;; on a dict). `pure` means the empty row. Every declared domain is grounded.
   (define (declared-function-row! k row)
     (define fx (declared-function-fx k))
     (cond
-      [(and fx (row-has-unknown? (alg:algebra-row->uir row)))
+      [fx
+       (define domains (filter (λ (d) (not (eq? d 'pure)))
+                               (if (list? fx) fx (list fx))))
        (when prov
-         (for ([d (in-list (if (list? fx) fx (list fx)))])
+         (for ([d (in-list domains)])
            (provenance-add-ground!
             prov
             (make-declared-site (function-fq k) d
                                 (list (car k) (symbol->string (cdr k))) #f
                                 #:file (car k)))))
-       (algebra-row-replace-unknown row fx)]
+       (effects->algebra-row domains)]
       [else row]))
 
   ;; Pass 3: classification + call-graph edges.
