@@ -606,7 +606,11 @@
          [(edge) (list 'fn (cdr cls))]
          [(effect) (list 'row (effects->algebra-row (list (cdr cls))))]
          [(pure) (list 'row (alg:empty-algebra-row))]
-         [else (list 'row (effects->algebra-row '(unknown)))])]))
+         ;; An argument that is neither an edge, an effect, nor pure is a
+         ;; runtime-dispatched callback: defer to `dynamic` (tracked, modality
+         ;; may), never `unknown` — the elimination obligation is only for
+         ;; statically-nameable effects.
+         [else (list 'row (effects->algebra-row '(dynamic)))])]))
   (define (arg->row k a rows)
     (define v (arg-row k a))
     (case (car v)
