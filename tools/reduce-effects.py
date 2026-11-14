@@ -21,6 +21,7 @@ from collections import defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLASSIFY = os.path.join(HERE, "classify-effects.sh")
 CLASSIFY_RECV = os.path.join(HERE, "classify-receivers.sh")
+CLASSIFY_FN = os.path.join(HERE, "classify-functions.sh")
 RECV_LEVERS = {
     "return-type-projection", "unbound-binding-resolution", "self-attr-typing",
     "call-result", "attribute-alias-typing", "parameter-dataflow",
@@ -63,6 +64,25 @@ def stage_bare(rows):
     return run_classifier(CLASSIFY, items)
 
 
+def stage_functions(rows):
+    """Function-level declared effects: the residual the engine cannot resolve."""
+    funcs = {}
+    for row in rows:
+        comp = row["component"]
+        fn = row["function"]
+        if not fn or not row["site"]:
+            continue
+        key = (comp, fn)
+        funcs.setdefault(key, {"name": f"{comp}::{fn}", "sites": [], "sites_n": 0})
+        if row["site"] not in funcs[key]["sites"]:
+            funcs[key]["sites"].append(row["site"])
+        funcs[key]["sites_n"] += 1
+    if not funcs:
+        return None
+    items = [v for v in funcs.values()]
+    return run_classifier(CLASSIFY_FN, items)
+
+
 def stage_receivers(rows):
     sites = {}
     for row in rows:
@@ -91,6 +111,7 @@ def main():
 
     bare = stage_bare(rows)
     recv = stage_receivers(rows)
+    fnfx = stage_functions(rows)
 
     print("== proposed DATA diff ==\n")
 
@@ -128,8 +149,23 @@ def main():
                 print(f"  (skip/edge) {mod}: {dom} — {'; '.join(rules[mod]['reasons'][:2])}")
         print()
 
+    if fnfx:
+        decl = []
+        print(f"-- declared-function-effects ({len(fnfx)}) --")
+        for it in fnfx:
+            dom = it.get("domain")
+            comp, _, fn = it["name"].rpartition("::")
+            if dom in ("pure", "io", "network", "db", "time", "process", "dynamic"):
+                print(f"  (cons \"{comp}\" '{fn}) '{dom}'   ; {it.get('reason','')}")
+                decl.append({"name": it["name"], "domain": dom,
+                             "confidence": it.get("confidence"),
+                             "reason": it.get("reason")})
+            else:
+                print(f"  (skip) {it['name']}: {dom}")
+        print()
+
     print("== summary JSON ==")
-    print(json.dumps({"bare": bare, "receivers": recv}, indent=2))
+    print(json.dumps({"bare": bare, "receivers": recv, "functions": fnfx}, indent=2))
 
 
 if __name__ == "__main__":
