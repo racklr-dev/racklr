@@ -31,7 +31,8 @@
          declared-return-types
          declared-element-types
          declared-param-element-types
-         declared-param-effect-rows)
+         declared-param-effect-rows
+         declared-function-effects-data)
 
 (define stdlib-type-methods-data
   (hash
@@ -1036,3 +1037,47 @@
    (list (cons 'start_response 'io))
    (cons "django.core.servers.basehttp" 'run)
    (list (cons 'on_bind 'io))))
+
+;; Declared FUNCTION effects: (module-path . qualified-name) -> effect-domain
+;; symbol (or list of symbols). The reducer (LLM) fills this for functions the
+;; receiver-type engine cannot structurally resolve, so the inference fixpoint's
+;; final materialization replaces a still-`unknown` row with this declared
+;; domain (grounded as a declared capability, never a silent default). This is
+;; the producer-side DATA fallback, exactly like declared-param-effect-rows for
+;; host protocol callbacks. Populated by tools/reduce-effects.sh; committed
+;; entries are reviewed.
+(define declared-function-effects-data
+  (hash
+   (cons "requests.adapters" 'HTTPAdapter.close) 'network
+   (cons "requests.adapters" 'HTTPAdapter.get_connection) 'network
+   (cons "requests.adapters" 'HTTPAdapter.get_connection_with_tls_context) 'network
+   (cons "requests.adapters" 'HTTPAdapter.send) 'network
+   (cons "requests.auth" 'HTTPDigestAuth.build_digest_header) 'pure
+   (cons "requests.auth" 'HTTPDigestAuth.handle_401) 'network
+   (cons "requests.auth" 'KD) 'pure
+   (cons "requests.cookies" 'MockResponse.getheaders) 'pure
+   (cons "requests.cookies" 'RequestsCookieJar.__contains__) 'pure
+   (cons "requests.cookies" 'RequestsCookieJar.__iter__) 'pure
+   (cons "requests.cookies" 'RequestsCookieJar.copy) 'pure
+   (cons "requests.cookies" 'RequestsCookieJar.set_cookie) 'pure
+   (cons "requests.cookies" '_copy_cookie_jar) 'pure
+   (cons "requests.cookies" 'create_cookie) 'pure
+   (cons "requests.cookies" 'extract_cookies_to_jar) 'pure
+   (cons "requests.cookies" 'get_cookie_header) 'pure
+   (cons "requests.cookies" 'merge_cookies) 'pure
+   (cons "requests.cookies" 'remove_cookie_by_name) 'pure
+   (cons "requests.exceptions" 'JSONDecodeError.__reduce__) 'pure
+   (cons "requests.hooks" 'dispatch_hook) 'dynamic
+   (cons "requests.models" 'PreparedRequest.prepare_body) 'io
+   (cons "requests.models" 'RequestEncodingMixin._encode_files) 'io
+   (cons "requests.models" 'RequestEncodingMixin._encode_params) 'pure
+   (cons "requests.models" 'RequestHooksMixin.deregister_hook) 'pure
+   (cons "requests.models" 'Response.close) 'network
+   (cons "requests.models" 'Response.json) 'pure
+   (cons "requests.models" 'generate) 'network
+   (cons "requests.sessions" 'Session.close) 'network
+   (cons "requests.sessions" 'Session.send) 'network
+   (cons "requests.sessions" 'merge_setting) 'dynamic
+   (cons "requests.structures" 'CaseInsensitiveDict.__eq__) 'pure
+   (cons "requests.utils" 'rewind_body) 'io
+   (cons "requests.utils" 'stream_decode_response_unicode) 'pure))
