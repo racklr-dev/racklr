@@ -843,51 +843,72 @@
  "httpx._utils::get_environment_proxies": [
   "process"
  ],
+ "requests.__init__::_check_cryptography": [
+  "io"
+ ],
+ "requests.__init__::check_compatibility": [
+  "io"
+ ],
+ "requests.adapters::HTTPAdapter.build_connection_pool_key_attributes": [
+  "pure"
+ ],
+ "requests.adapters::HTTPAdapter.build_response": [
+  "pure"
+ ],
+ "requests.adapters::HTTPAdapter.cert_verify": [
+  "io"
+ ],
  "requests.adapters::HTTPAdapter.close": [
   "network"
  ],
  "requests.adapters::HTTPAdapter.get_connection": [
-  "network"
+  "pure"
  ],
  "requests.adapters::HTTPAdapter.get_connection_with_tls_context": [
   "network"
  ],
+ "requests.adapters::HTTPAdapter.proxy_headers": [
+  "pure"
+ ],
+ "requests.adapters::HTTPAdapter.proxy_manager_for": [],
+ "requests.adapters::HTTPAdapter.request_url": [
+  "pure"
+ ],
  "requests.adapters::HTTPAdapter.send": [
   "network"
  ],
+ "requests.adapters::_urllib3_request_context": [
+  "pure"
+ ],
  "requests.api::delete": [
-  "io",
   "network"
  ],
  "requests.api::get": [
-  "dynamic",
-  "io",
   "network"
  ],
  "requests.api::head": [
-  "io",
   "network"
  ],
  "requests.api::options": [
-  "io",
   "network"
  ],
  "requests.api::patch": [
-  "io",
   "network"
  ],
  "requests.api::post": [
-  "io",
   "network"
  ],
  "requests.api::put": [
-  "dynamic",
-  "io",
   "network"
  ],
  "requests.api::request": [
-  "io",
   "network"
+ ],
+ "requests.auth::HTTPBasicAuth.__call__": [
+  "pure"
+ ],
+ "requests.auth::HTTPDigestAuth.__call__": [
+  "time"
  ],
  "requests.auth::HTTPDigestAuth.build_digest_header": [
   "pure"
@@ -895,9 +916,15 @@
  "requests.auth::HTTPDigestAuth.handle_401": [
   "network"
  ],
+ "requests.auth::HTTPProxyAuth.__call__": [],
  "requests.auth::KD": [
   "pure"
  ],
+ "requests.auth::_basic_auth_str": [],
+ "requests.cookies::MockRequest.get_full_url": [
+  "pure"
+ ],
+ "requests.cookies::MockRequest.get_header": [],
  "requests.cookies::MockResponse.getheaders": [
   "pure"
  ],
@@ -907,12 +934,18 @@
  "requests.cookies::RequestsCookieJar.__iter__": [
   "pure"
  ],
+ "requests.cookies::RequestsCookieJar.__setitem__": [],
+ "requests.cookies::RequestsCookieJar.__setstate__": [],
  "requests.cookies::RequestsCookieJar.copy": [
   "pure"
+ ],
+ "requests.cookies::RequestsCookieJar.set": [
+  "time"
  ],
  "requests.cookies::RequestsCookieJar.set_cookie": [
   "pure"
  ],
+ "requests.cookies::RequestsCookieJar.update": [],
  "requests.cookies::_copy_cookie_jar": [
   "pure"
  ],
@@ -928,16 +961,37 @@
  "requests.cookies::merge_cookies": [
   "pure"
  ],
+ "requests.cookies::morsel_to_cookie": [
+  "time"
+ ],
  "requests.cookies::remove_cookie_by_name": [
   "pure"
  ],
  "requests.exceptions::JSONDecodeError.__reduce__": [
   "pure"
  ],
+ "requests.help::main": [
+  "io"
+ ],
  "requests.hooks::dispatch_hook": [
   "dynamic"
  ],
+ "requests.models::PreparedRequest.prepare": [
+  "dynamic",
+  "io"
+ ],
+ "requests.models::PreparedRequest.prepare_auth": [
+  "dynamic"
+ ],
  "requests.models::PreparedRequest.prepare_body": [
+  "io"
+ ],
+ "requests.models::PreparedRequest.prepare_content_length": [
+  "pure"
+ ],
+ "requests.models::PreparedRequest.prepare_url": [],
+ "requests.models::Request.prepare": [
+  "dynamic",
   "io"
  ],
  "requests.models::RequestEncodingMixin._encode_files": [
@@ -949,80 +1003,161 @@
  "requests.models::RequestHooksMixin.deregister_hook": [
   "pure"
  ],
+ "requests.models::Response.__exit__": [
+  "network"
+ ],
+ "requests.models::Response.__iter__": [
+  "network"
+ ],
  "requests.models::Response.close": [
   "network"
  ],
- "requests.models::Response.json": [
+ "requests.models::Response.content": [
+  "network"
+ ],
+ "requests.models::Response.iter_content": [
+  "network"
+ ],
+ "requests.models::Response.iter_lines": [
+  "network"
+ ],
+ "requests.models::Response.json": [],
+ "requests.models::Response.links": [
   "pure"
  ],
  "requests.models::generate": [
+  "network"
+ ],
+ "requests.sessions::Session.__exit__": [
   "network"
  ],
  "requests.sessions::Session.close": [
   "network"
  ],
  "requests.sessions::Session.delete": [
-  "io",
   "network"
  ],
  "requests.sessions::Session.get": [
-  "dynamic",
-  "io",
   "network"
  ],
  "requests.sessions::Session.head": [
-  "io",
   "network"
  ],
- "requests.sessions::Session.merge_environment_settings": [
-  "io",
-  "network",
-  "process"
- ],
+ "requests.sessions::Session.merge_environment_settings": [],
  "requests.sessions::Session.options": [
-  "io",
   "network"
  ],
  "requests.sessions::Session.patch": [
-  "io",
   "network"
  ],
  "requests.sessions::Session.post": [
+  "dynamic",
   "io",
-  "network"
+  "network",
+  "time"
  ],
  "requests.sessions::Session.prepare_request": [
-  "dynamic",
-  "io",
-  "network"
+  "io"
  ],
  "requests.sessions::Session.put": [
-  "dynamic",
-  "io",
   "network"
  ],
  "requests.sessions::Session.request": [
   "dynamic",
   "io",
-  "network"
+  "network",
+  "time"
  ],
  "requests.sessions::Session.send": [
-  "io",
   "network"
  ],
+ "requests.sessions::SessionRedirectMixin.rebuild_auth": [],
+ "requests.sessions::SessionRedirectMixin.rebuild_proxies": [
+  "process"
+ ],
+ "requests.sessions::SessionRedirectMixin.resolve_redirects": [
+  "network"
+ ],
+ "requests.sessions::SessionRedirectMixin.should_strip_auth": [
+  "pure"
+ ],
  "requests.sessions::merge_hooks": [
-  "dynamic"
+  "pure"
  ],
- "requests.sessions::merge_setting": [
-  "dynamic"
- ],
+ "requests.sessions::merge_setting": [],
  "requests.structures::CaseInsensitiveDict.__eq__": [
+  "pure"
+ ],
+ "requests.structures::CaseInsensitiveDict.__init__": [
+  "pure"
+ ],
+ "requests.structures::LookupDict.__getitem__": [
+  "pure"
+ ],
+ "requests.structures::LookupDict.get": [
+  "pure"
+ ],
+ "requests.utils::address_in_network": [
+  "pure"
+ ],
+ "requests.utils::atomic_open": [
+  "io"
+ ],
+ "requests.utils::dotted_netmask": [
+  "pure"
+ ],
+ "requests.utils::extract_zipped_paths": [
+  "io"
+ ],
+ "requests.utils::get_encoding_from_headers": [
+  "pure"
+ ],
+ "requests.utils::get_encodings_from_content": [
+  "pure"
+ ],
+ "requests.utils::get_environ_proxies": [
+  "pure"
+ ],
+ "requests.utils::get_netrc_auth": [
+  "io"
+ ],
+ "requests.utils::get_unicode_from_response": [
+  "io"
+ ],
+ "requests.utils::guess_json_utf": [],
+ "requests.utils::is_ipv4_address": [
+  "pure"
+ ],
+ "requests.utils::is_valid_cidr": [
+  "pure"
+ ],
+ "requests.utils::parse_dict_header": [
+  "pure"
+ ],
+ "requests.utils::parse_list_header": [],
+ "requests.utils::prepend_scheme_if_needed": [],
+ "requests.utils::proxy_bypass": [
+  "process"
+ ],
+ "requests.utils::proxy_bypass_registry": [
+  "io"
+ ],
+ "requests.utils::resolve_proxies": [
   "pure"
  ],
  "requests.utils::rewind_body": [
   "io"
  ],
+ "requests.utils::select_proxy": [
+  "pure"
+ ],
+ "requests.utils::should_bypass_proxies": [
+  "pure"
+ ],
  "requests.utils::stream_decode_response_unicode": [
   "pure"
+ ],
+ "requests.utils::super_len": [
+  "io"
  ]
 }
