@@ -13,4 +13,6 @@ python3 "$HERE/formalize.py" "$DIR"
 racket "$HERE/unknown-census.rkt" "$DIR" --tsv /tmp/_formalize.tsv >/dev/null 2>&1
 racket "$HERE/unknown-census.rkt" "$DIR" 2>/dev/null | grep -E 'unknown functions|unknown files' || true
 echo '--- fizz ---'
-racket "$HERE/emit-fizz.rkt" "$DIR" 2>/dev/null | sed -n '/^system /,$p'
+racket "$HERE/emit-fizz.rkt" "$DIR" 2>/dev/null | sed -n '/^system /,$p' > /tmp/_f.fizz
+echo '--- gherkin ---'
+racket "$HERE/emit-gherkin.rkt" /tmp/_f.fizz 2>/dev/null | grep -vE 'WARNING|accumulator'
