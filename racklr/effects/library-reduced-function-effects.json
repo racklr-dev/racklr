@@ -855,6 +855,40 @@
  "requests.adapters::HTTPAdapter.send": [
   "network"
  ],
+ "requests.api::delete": [
+  "io",
+  "network"
+ ],
+ "requests.api::get": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.api::head": [
+  "io",
+  "network"
+ ],
+ "requests.api::options": [
+  "io",
+  "network"
+ ],
+ "requests.api::patch": [
+  "io",
+  "network"
+ ],
+ "requests.api::post": [
+  "io",
+  "network"
+ ],
+ "requests.api::put": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.api::request": [
+  "io",
+  "network"
+ ],
  "requests.auth::HTTPDigestAuth.build_digest_header": [
   "pure"
  ],
@@ -927,8 +961,57 @@
  "requests.sessions::Session.close": [
   "network"
  ],
- "requests.sessions::Session.send": [
+ "requests.sessions::Session.delete": [
+  "io",
   "network"
+ ],
+ "requests.sessions::Session.get": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.head": [
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.merge_environment_settings": [
+  "io",
+  "network",
+  "process"
+ ],
+ "requests.sessions::Session.options": [
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.patch": [
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.post": [
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.prepare_request": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.put": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.request": [
+  "dynamic",
+  "io",
+  "network"
+ ],
+ "requests.sessions::Session.send": [
+  "io",
+  "network"
+ ],
+ "requests.sessions::merge_hooks": [
+  "dynamic"
  ],
  "requests.sessions::merge_setting": [
   "dynamic"

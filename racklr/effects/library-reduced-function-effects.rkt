@@ -297,6 +297,14 @@
    (cons "requests.adapters" 'HTTPAdapter.get_connection) 'network
    (cons "requests.adapters" 'HTTPAdapter.get_connection_with_tls_context) 'network
    (cons "requests.adapters" 'HTTPAdapter.send) 'network
+   (cons "requests.api" 'delete) '(io network)
+   (cons "requests.api" 'get) '(dynamic io network)
+   (cons "requests.api" 'head) '(io network)
+   (cons "requests.api" 'options) '(io network)
+   (cons "requests.api" 'patch) '(io network)
+   (cons "requests.api" 'post) '(io network)
+   (cons "requests.api" 'put) '(dynamic io network)
+   (cons "requests.api" 'request) '(io network)
    (cons "requests.auth" 'HTTPDigestAuth.build_digest_header) 'pure
    (cons "requests.auth" 'HTTPDigestAuth.handle_401) 'network
    (cons "requests.auth" 'KD) 'pure
@@ -321,7 +329,18 @@
    (cons "requests.models" 'Response.json) 'pure
    (cons "requests.models" 'generate) 'network
    (cons "requests.sessions" 'Session.close) 'network
-   (cons "requests.sessions" 'Session.send) 'network
+   (cons "requests.sessions" 'Session.delete) '(io network)
+   (cons "requests.sessions" 'Session.get) '(dynamic io network)
+   (cons "requests.sessions" 'Session.head) '(io network)
+   (cons "requests.sessions" 'Session.merge_environment_settings) '(io network process)
+   (cons "requests.sessions" 'Session.options) '(io network)
+   (cons "requests.sessions" 'Session.patch) '(io network)
+   (cons "requests.sessions" 'Session.post) '(io network)
+   (cons "requests.sessions" 'Session.prepare_request) '(dynamic io network)
+   (cons "requests.sessions" 'Session.put) '(dynamic io network)
+   (cons "requests.sessions" 'Session.request) '(dynamic io network)
+   (cons "requests.sessions" 'Session.send) '(io network)
+   (cons "requests.sessions" 'merge_hooks) 'dynamic
    (cons "requests.sessions" 'merge_setting) 'dynamic
    (cons "requests.structures" 'CaseInsensitiveDict.__eq__) 'pure
    (cons "requests.utils" 'rewind_body) 'io
