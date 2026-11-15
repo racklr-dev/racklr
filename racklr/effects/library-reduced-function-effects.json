@@ -50,6 +50,12 @@
  "fastapi._compat.v2::ModelField.validate": [
   "pure"
  ],
+ "fastapi._compat.v2::_has_computed_fields": [
+  "pure"
+ ],
+ "fastapi._compat.v2::_regenerate_error_with_loc": [
+  "pure"
+ ],
  "fastapi._compat.v2::copy_field_info": [
   "pure"
  ],
@@ -59,9 +65,7 @@
  "fastapi._compat.v2::evaluate_forwardref": [
   "pure"
  ],
- "fastapi._compat.v2::get_definitions": [
-  "pure"
- ],
+ "fastapi._compat.v2::get_definitions": [],
  "fastapi._compat.v2::get_flat_models_from_annotation": [
   "pure"
  ],
@@ -74,21 +78,29 @@
  "fastapi._compat.v2::get_model_fields": [
   "pure"
  ],
+ "fastapi._compat.v2::get_schema_from_model_field": [
+  "pure"
+ ],
  "fastapi._compat.v2::serialize_sequence_value": [
   "pure"
  ],
  "fastapi.applications::FastAPI.__call__": [
-  "network"
+  "dynamic"
  ],
+ "fastapi.applications::FastAPI.__init__": [],
  "fastapi.applications::FastAPI.add_api_route": [
   "pure"
  ],
  "fastapi.applications::FastAPI.add_api_websocket_route": [
   "pure"
  ],
+ "fastapi.applications::FastAPI.delete": [
+  "pure"
+ ],
  "fastapi.applications::FastAPI.frontend": [
   "io"
  ],
+ "fastapi.applications::FastAPI.get": [],
  "fastapi.applications::FastAPI.head": [
   "pure"
  ],
@@ -122,6 +134,13 @@
  "fastapi.applications::decorator": [
   "pure"
  ],
+ "fastapi.applications::openapi": [
+  "pure"
+ ],
+ "fastapi.applications::redoc_html": [],
+ "fastapi.applications::swagger_ui_html": [
+  "pure"
+ ],
  "fastapi.background::BackgroundTasks.__call__": [
   "dynamic"
  ],
@@ -129,6 +148,8 @@
   "pure"
  ],
  "fastapi.cli::main": [
+  "io",
+  "network",
   "process"
  ],
  "fastapi.concurrency::contextmanager_in_threadpool": [
@@ -140,12 +161,22 @@
  "fastapi.datastructures::UploadFile.close": [
   "io"
  ],
+ "fastapi.datastructures::UploadFile.read": [
+  "io"
+ ],
+ "fastapi.datastructures::UploadFile.seek": [
+  "io"
+ ],
+ "fastapi.datastructures::UploadFile.write": [
+  "io"
+ ],
+ "fastapi.dependencies.models::_get_cache_key": [],
+ "fastapi.dependencies.models::_uses_scopes": [],
  "fastapi.dependencies.utils::_add_form_union_validators": [
   "pure"
  ],
- "fastapi.dependencies.utils::_apply_form_body_schema": [
-  "pure"
- ],
+ "fastapi.dependencies.utils::_apply_form_body_schema": [],
+ "fastapi.dependencies.utils::_extract_form_body": [],
  "fastapi.dependencies.utils::_extract_form_items": [
   "pure"
  ],
@@ -167,6 +198,16 @@
  "fastapi.dependencies.utils::_get_multidict_value": [
   "pure"
  ],
+ "fastapi.dependencies.utils::_get_param_aliases": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_is_form_model_supplied": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::_normalize_form_model": [],
+ "fastapi.dependencies.utils::_read_file_bytes": [
+  "io"
+ ],
  "fastapi.dependencies.utils::_request_param_model_to_args": [
   "pure"
  ],
@@ -176,25 +217,74 @@
  "fastapi.dependencies.utils::_validate_value_with_model_field": [
   "pure"
  ],
- "fastapi.dependencies.utils::analyze_param": [
+ "fastapi.dependencies.utils::analyze_param": [],
+ "fastapi.dependencies.utils::ensure_multipart_is_installed": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::get_dependant": [],
+ "fastapi.dependencies.utils::get_flat_params": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::get_parameterless_sub_dependant": [
   "pure"
  ],
  "fastapi.dependencies.utils::get_stream_item_type": [
   "pure"
  ],
+ "fastapi.dependencies.utils::get_typed_signature": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::request_body_to_args": [
+  "pure"
+ ],
+ "fastapi.dependencies.utils::request_params_to_args": [],
  "fastapi.dependencies.utils::solve_dependencies": [
   "dynamic"
  ],
  "fastapi.encoders::jsonable_encoder": [
   "dynamic"
  ],
+ "fastapi.exception_handlers::request_validation_exception_handler": [],
  "fastapi.exception_handlers::websocket_request_validation_exception_handler": [
   "network"
  ],
+ "fastapi.exceptions::RequestValidationError.__init__": [
+  "pure"
+ ],
+ "fastapi.exceptions::ResponseValidationError.__init__": [
+  "pure"
+ ],
+ "fastapi.exceptions::ValidationException.__init__": [
+  "pure"
+ ],
+ "fastapi.exceptions::WebSocketRequestValidationError.__init__": [
+  "pure"
+ ],
+ "fastapi.openapi.docs::_html_safe_json": [
+  "pure"
+ ],
+ "fastapi.openapi.docs::get_swagger_ui_html": [],
  "fastapi.openapi.models::EmailStr.__get_pydantic_core_schema__": [
   "pure"
  ],
+ "fastapi.openapi.models::EmailStr._validate": [
+  "pure"
+ ],
+ "fastapi.openapi.models::EmailStr.validate": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::_get_openapi_dependency_data": [],
  "fastapi.openapi.utils::_get_openapi_operation_parameters": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::_get_openapi_security_definitions": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::generate_operation_id": [
+  "pure"
+ ],
+ "fastapi.openapi.utils::get_fields_from_routes": [],
+ "fastapi.openapi.utils::get_openapi": [
   "pure"
  ],
  "fastapi.openapi.utils::get_openapi_operation_metadata": [
@@ -203,6 +293,7 @@
  "fastapi.openapi.utils::get_openapi_operation_request_body": [
   "pure"
  ],
+ "fastapi.openapi.utils::get_openapi_path": [],
  "fastapi.params::Body.__init__": [
   "pure"
  ],
@@ -215,27 +306,28 @@
  "fastapi.responses::UJSONResponse.render": [
   "pure"
  ],
+ "fastapi.routing::APIRoute.__init__": [
+  "pure"
+ ],
+ "fastapi.routing::APIRoute.get_route_handler": [],
  "fastapi.routing::APIRoute.handle": [
   "dynamic"
  ],
- "fastapi.routing::APIRoute.matches": [
-  "pure"
- ],
+ "fastapi.routing::APIRoute.matches": [],
  "fastapi.routing::APIRouter.__init__": [
   "pure"
  ],
  "fastapi.routing::APIRouter._contains_router": [
   "pure"
  ],
+ "fastapi.routing::APIRouter._frontend_match_is_more_specific": [],
  "fastapi.routing::APIRouter._get_routes_version": [
   "pure"
  ],
  "fastapi.routing::APIRouter._iter_low_priority_routes": [
   "pure"
  ],
- "fastapi.routing::APIRouter._match_low_priority": [
-  "pure"
- ],
+ "fastapi.routing::APIRouter._match_low_priority": [],
  "fastapi.routing::APIRouter._shutdown": [
   "dynamic"
  ],
@@ -243,7 +335,7 @@
   "dynamic"
  ],
  "fastapi.routing::APIRouter.add_api_route": [
-  "dynamic"
+  "pure"
  ],
  "fastapi.routing::APIRouter.add_route": [
   "pure"
@@ -251,8 +343,9 @@
  "fastapi.routing::APIRouter.add_websocket_route": [
   "pure"
  ],
- "fastapi.routing::APIRouter.app": [
-  "dynamic"
+ "fastapi.routing::APIRouter.app": [],
+ "fastapi.routing::APIRouter.frontend": [
+  "io"
  ],
  "fastapi.routing::APIRouter.handle": [
   "dynamic"
@@ -260,12 +353,8 @@
  "fastapi.routing::APIRouter.include_router": [
   "pure"
  ],
- "fastapi.routing::APIRouter.matches": [
-  "pure"
- ],
- "fastapi.routing::APIWebSocketRoute.__init__": [
-  "pure"
- ],
+ "fastapi.routing::APIRouter.matches": [],
+ "fastapi.routing::APIWebSocketRoute.__init__": [],
  "fastapi.routing::APIWebSocketRoute.matches": [
   "pure"
  ],
@@ -284,20 +373,31 @@
  "fastapi.routing::_EffectiveRouteContext.from_api_route": [
   "pure"
  ],
+ "fastapi.routing::_EffectiveRouteContext.from_frontend_route_group": [
+  "pure"
+ ],
  "fastapi.routing::_EffectiveRouteContext.matches": [
   "pure"
  ],
  "fastapi.routing::_EffectiveRouteContext.url_path_for": [
   "pure"
  ],
+ "fastapi.routing::_FrontendRoute.handle": [
+  "dynamic"
+ ],
  "fastapi.routing::_FrontendRoute.matches_with_path": [
   "pure"
  ],
+ "fastapi.routing::_FrontendRouteGroup.__init__": [],
  "fastapi.routing::_FrontendRouteGroup._match": [
   "pure"
  ],
- "fastapi.routing::_FrontendRouteGroup.handle": [
+ "fastapi.routing::_FrontendRouteGroup._solve_dependencies": [
   "dynamic"
+ ],
+ "fastapi.routing::_FrontendRouteGroup.handle": [
+  "dynamic",
+  "io"
  ],
  "fastapi.routing::_FrontendStaticFiles.__init__": [
   "io"
@@ -306,13 +406,19 @@
   "io"
  ],
  "fastapi.routing::_FrontendStaticFiles._fallback_file_exists": [
-  "dynamic"
+  "io"
  ],
  "fastapi.routing::_FrontendStaticFiles._fallback_response": [
-  "dynamic"
+  "io"
  ],
  "fastapi.routing::_FrontendStaticFiles._lookup_path": [
-  "dynamic"
+  "io"
+ ],
+ "fastapi.routing::_FrontendStaticFiles._lookup_static_resource": [
+  "io"
+ ],
+ "fastapi.routing::_FrontendStaticFiles.get_path": [
+  "pure"
  ],
  "fastapi.routing::_FrontendStaticFiles.get_response": [
   "io"
@@ -320,36 +426,42 @@
  "fastapi.routing::_FrontendStaticFiles.get_response_for_scope": [
   "io"
  ],
- "fastapi.routing::_IncludedRouter._build_effective_context": [
-  "pure"
- ],
+ "fastapi.routing::_IncludedRouter._build_effective_context": [],
  "fastapi.routing::_IncludedRouter._handle_selected": [
   "dynamic"
  ],
- "fastapi.routing::_IncludedRouter._match": [
-  "pure"
- ],
- "fastapi.routing::_IncludedRouter.effective_candidates": [
-  "pure"
- ],
+ "fastapi.routing::_IncludedRouter._match": [],
+ "fastapi.routing::_IncludedRouter.effective_candidates": [],
  "fastapi.routing::_IncludedRouter.effective_low_priority_routes": [
   "pure"
  ],
- "fastapi.routing::_IncludedRouter.effective_route_contexts": [
-  "pure"
- ],
+ "fastapi.routing::_IncludedRouter.effective_route_contexts": [],
  "fastapi.routing::_IncludedRouter.handle": [
-  "network"
+  "dynamic"
  ],
- "fastapi.routing::_IncludedRouter.matches": [
+ "fastapi.routing::_IncludedRouter.matches": [],
+ "fastapi.routing::_IncludedRouter.url_path_for": [
   "pure"
  ],
- "fastapi.routing::_IncludedRouter.url_path_for": [
+ "fastapi.routing::_async_stream_jsonl": [
+  "dynamic",
+  "time"
+ ],
+ "fastapi.routing::_async_stream_raw": [
+  "dynamic"
+ ],
+ "fastapi.routing::_build_dependant_with_parameterless_dependencies": [],
+ "fastapi.routing::_frontend_scope_specificity": [
   "pure"
  ],
  "fastapi.routing::_get_resolved_absolute_path": [
   "pure"
  ],
+ "fastapi.routing::_get_scope_effective_route_context": [
+  "pure"
+ ],
+ "fastapi.routing::_get_scope_included_router": [],
+ "fastapi.routing::_is_frontend_navigation_request": [],
  "fastapi.routing::_iter_accept_media_types": [
   "pure"
  ],
@@ -357,15 +469,23 @@
   "pure"
  ],
  "fastapi.routing::_keepalive_inserter": [
+  "network",
+  "time"
+ ],
+ "fastapi.routing::_populate_api_route_state": [],
+ "fastapi.routing::_producer": [
+  "dynamic"
+ ],
+ "fastapi.routing::_resolve_frontend_check_dir": [
   "io"
  ],
- "fastapi.routing::_populate_api_route_state": [
-  "pure"
- ],
- "fastapi.routing::_producer": [
+ "fastapi.routing::_restore_fastapi_scope_key": [
   "pure"
  ],
  "fastapi.routing::_serialize_data": [
+  "pure"
+ ],
+ "fastapi.routing::_serialize_item": [
   "pure"
  ],
  "fastapi.routing::_serialize_sse_item": [
@@ -374,6 +494,14 @@
  "fastapi.routing::_sse_producer_cm": [
   "dynamic"
  ],
+ "fastapi.routing::_sse_with_checkpoints": [
+  "dynamic",
+  "time"
+ ],
+ "fastapi.routing::_sync_stream_jsonl": [
+  "dynamic"
+ ],
+ "fastapi.routing::_update_scope": [],
  "fastapi.routing::_wrap_gen_lifespan_context": [
   "pure"
  ],
@@ -395,29 +523,54 @@
  "fastapi.routing::wrapper": [
   "dynamic"
  ],
+ "fastapi.security.api_key::APIKeyCookie.__call__": [
+  "pure"
+ ],
+ "fastapi.security.api_key::APIKeyHeader.__call__": [],
+ "fastapi.security.api_key::APIKeyQuery.__call__": [],
+ "fastapi.security.http::HTTPBase.__call__": [],
+ "fastapi.security.http::HTTPBasic.__call__": [],
+ "fastapi.security.http::HTTPBearer.__call__": [],
+ "fastapi.security.http::HTTPDigest.__call__": [
+  "pure"
+ ],
+ "fastapi.security.oauth2::OAuth2.__call__": [
+  "pure"
+ ],
+ "fastapi.security.oauth2::OAuth2AuthorizationCodeBearer.__call__": [],
+ "fastapi.security.oauth2::OAuth2PasswordBearer.__call__": [],
+ "fastapi.security.open_id_connect_url::OpenIdConnect.__call__": [],
  "fastapi.telemetry._api::_get_request_telemetry": [
   "pure"
  ],
+ "fastapi.telemetry._api::_operation": [
+  "dynamic",
+  "time"
+ ],
  "fastapi.telemetry._api::_route_selected": [
-  "io"
+  "pure"
  ],
  "fastapi.telemetry._api::_run_sync_endpoint": [
   "dynamic"
  ],
  "fastapi.telemetry._api::_traced_operation": [
-  "io"
+  "dynamic",
+  "time"
  ],
  "fastapi.telemetry._api::_validation_failed": [
   "io"
  ],
+ "fastapi.telemetry._asgi::ExceptionTelemetryMiddleware.__call__": [
+  "dynamic",
+  "io"
+ ],
  "fastapi.telemetry._asgi::NativeTelemetry.__call__": [
+  "dynamic",
   "io"
  ],
- "fastapi.telemetry._asgi::NativeTelemetry._get_tracer": [
-  "io"
- ],
+ "fastapi.telemetry._asgi::NativeTelemetry._get_tracer": [],
  "fastapi.telemetry._asgi::NativeTelemetry._instruments": [
-  "io"
+  "pure"
  ],
  "fastapi.telemetry._asgi::NativeTelemetry.enabled": [
   "pure"
@@ -425,61 +578,86 @@
  "fastapi.telemetry._asgi::_HeadersGetter.get": [
   "pure"
  ],
- "fastapi.telemetry._asgi::_exception": [
-  "io"
- ],
+ "fastapi.telemetry._asgi::_exception": [],
  "fastapi.telemetry._asgi::_legacy_otel": [
   "pure"
  ],
+ "fastapi.telemetry._asgi::_server_attributes": [
+  "pure"
+ ],
  "fastapi.telemetry._asgi::finish": [
+  "time"
+ ],
+ "fastapi.telemetry._asgi::wrapped_send": [
   "dynamic"
  ],
  "fastapi.telemetry._runtime::_configure_from_environment": [
-  "dynamic"
+  "process"
  ],
  "fastapi.telemetry._runtime::_flush": [
-  "dynamic"
+  "network"
  ],
  "fastapi.telemetry._runtime::_shutdown": [
+  "io",
+  "network",
+  "time"
+ ],
+ "fastapi.telemetry._runtime::lifespan": [
+  "io",
+  "time"
+ ],
+ "fastapi.telemetry._runtime::wrapped_receive": [
   "dynamic"
  ],
  "fastapi.telemetry._runtime::wrapped_send": [
-  "dynamic"
+  "network"
+ ],
+ "fastapi.utils::generate_operation_id_for_path": [],
+ "httpx.__init__::main": [
+  "io",
+  "network"
  ],
  "httpx._api::delete": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._api::get": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._api::head": [
-  "dynamic",
   "network"
  ],
  "httpx._api::options": [
-  "dynamic",
-  "network",
-  "time"
+  "network"
  ],
  "httpx._api::patch": [
   "network"
  ],
  "httpx._api::post": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._api::put": [
   "network"
  ],
  "httpx._api::request": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._api::stream": [
   "network"
  ],
  "httpx._auth::Auth.async_auth_flow": [
-  "network"
+  "pure"
  ],
  "httpx._auth::Auth.sync_auth_flow": [
+  "pure"
+ ],
+ "httpx._auth::DigestAuth._build_auth_header": [
+  "pure"
+ ],
+ "httpx._auth::DigestAuth._get_client_nonce": [
   "network"
  ],
  "httpx._auth::DigestAuth._parse_challenge": [],
@@ -496,21 +674,25 @@
   "pure"
  ],
  "httpx._client::AsyncClient.__aenter__": [
-  "dynamic"
+  "pure"
  ],
  "httpx._client::AsyncClient.__aexit__": [
-  "dynamic"
+  "network"
  ],
- "httpx._client::AsyncClient.__init__": [],
+ "httpx._client::AsyncClient.__init__": [
+  "pure"
+ ],
  "httpx._client::AsyncClient._send_handling_auth": [
   "dynamic",
   "network"
  ],
  "httpx._client::AsyncClient._send_handling_redirects": [
+  "dynamic",
   "network"
  ],
  "httpx._client::AsyncClient._send_single_request": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._client::AsyncClient._transport_for_url": [
   "pure"
@@ -531,19 +713,15 @@
   "network"
  ],
  "httpx._client::AsyncClient.patch": [
-  "dynamic",
   "network"
  ],
  "httpx._client::AsyncClient.post": [
   "network"
  ],
  "httpx._client::AsyncClient.put": [
-  "dynamic",
-  "io",
   "network"
  ],
  "httpx._client::AsyncClient.request": [
-  "dynamic",
   "network"
  ],
  "httpx._client::AsyncClient.send": [
@@ -574,21 +752,26 @@
  ],
  "httpx._client::BaseClient.event_hooks": [],
  "httpx._client::BaseClient.headers": [],
- "httpx._client::Client.__enter__": [
+ "httpx._client::BoundAsyncStream.aclose": [
+  "dynamic"
+ ],
+ "httpx._client::BoundSyncStream.close": [
   "network"
+ ],
+ "httpx._client::Client.__enter__": [
+  "pure"
  ],
  "httpx._client::Client.__exit__": [
   "network"
  ],
  "httpx._client::Client.__init__": [
-  "pure"
+  "io"
  ],
  "httpx._client::Client._send_handling_auth": [
   "dynamic",
   "network"
  ],
  "httpx._client::Client._send_handling_redirects": [
-  "dynamic",
   "network",
   "time"
  ],
@@ -602,13 +785,14 @@
   "network"
  ],
  "httpx._client::Client.delete": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._client::Client.get": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._client::Client.head": [
-  "dynamic",
   "network"
  ],
  "httpx._client::Client.options": [
@@ -618,22 +802,18 @@
   "network"
  ],
  "httpx._client::Client.post": [
-  "dynamic",
-  "io",
-  "network",
-  "time"
+  "network"
  ],
  "httpx._client::Client.put": [
-  "network"
+  "network",
+  "time"
  ],
  "httpx._client::Client.request": [
   "dynamic",
   "network"
  ],
  "httpx._client::Client.send": [
-  "dynamic",
-  "network",
-  "time"
+  "network"
  ],
  "httpx._client::Client.stream": [
   "network"
@@ -645,7 +825,21 @@
   "io"
  ],
  "httpx._content::AsyncIteratorByteStream.__aiter__": [
-  "io"
+  "pure"
+ ],
+ "httpx._content::IteratorByteStream.__iter__": [
+  "pure"
+ ],
+ "httpx._content::encode_content": [
+  "pure"
+ ],
+ "httpx._content::encode_json": [
+  "pure"
+ ],
+ "httpx._content::encode_multipart_data": [],
+ "httpx._content::encode_request": [],
+ "httpx._content::encode_response": [
+  "pure"
  ],
  "httpx._decoders::BrotliDecoder.__init__": [
   "pure"
@@ -662,10 +856,19 @@
  "httpx._decoders::DeflateDecoder.decode": [
   "pure"
  ],
+ "httpx._decoders::DeflateDecoder.flush": [
+  "pure"
+ ],
  "httpx._decoders::GZipDecoder.__init__": [
   "pure"
  ],
  "httpx._decoders::GZipDecoder.decode": [
+  "pure"
+ ],
+ "httpx._decoders::GZipDecoder.flush": [
+  "pure"
+ ],
+ "httpx._decoders::MultiDecoder.flush": [
   "pure"
  ],
  "httpx._decoders::TextDecoder.__init__": [
@@ -677,14 +880,18 @@
  "httpx._decoders::ZStandardDecoder.decode": [
   "pure"
  ],
+ "httpx._decoders::ZStandardDecoder.flush": [
+  "pure"
+ ],
  "httpx._main::download_response": [
-  "io"
+  "io",
+  "network"
  ],
  "httpx._main::get_lexer_for_response": [
   "pure"
  ],
  "httpx._main::handle_help": [
-  "process"
+  "io"
  ],
  "httpx._main::main": [
   "io",
@@ -703,7 +910,7 @@
   "io"
  ],
  "httpx._main::trace": [
-  "network"
+  "io"
  ],
  "httpx._main::validate_auth": [
   "io"
@@ -733,24 +940,77 @@
   "pure"
  ],
  "httpx._models::Headers.values": [],
- "httpx._models::Request.__init__": [
-  "pure"
- ],
+ "httpx._models::Request.__init__": [],
+ "httpx._models::Response.__init__": [],
  "httpx._models::Response._get_content_decoder": [
   "pure"
  ],
+ "httpx._models::Response.aiter_bytes": [
+  "network"
+ ],
+ "httpx._models::Response.aiter_lines": [
+  "network"
+ ],
+ "httpx._models::Response.aiter_raw": [
+  "network"
+ ],
+ "httpx._models::Response.aiter_text": [
+  "network"
+ ],
+ "httpx._models::Response.aread": [
+  "network"
+ ],
  "httpx._models::Response.charset_encoding": [],
+ "httpx._models::Response.iter_bytes": [
+  "network"
+ ],
+ "httpx._models::Response.iter_lines": [
+  "pure"
+ ],
+ "httpx._models::Response.iter_raw": [
+  "network"
+ ],
+ "httpx._models::Response.iter_text": [
+  "network"
+ ],
+ "httpx._models::Response.json": [
+  "pure"
+ ],
  "httpx._models::Response.links": [
+  "pure"
+ ],
+ "httpx._models::Response.read": [
+  "network"
+ ],
+ "httpx._models::Response.text": [
   "pure"
  ],
  "httpx._models::_parse_content_type_charset": [
   "pure"
  ],
+ "httpx._multipart::FileField.get_length": [
+  "io"
+ ],
+ "httpx._multipart::FileField.render": [
+  "io"
+ ],
+ "httpx._multipart::FileField.render_data": [
+  "io"
+ ],
+ "httpx._multipart::MultipartStream.__aiter__": [
+  "pure"
+ ],
  "httpx._multipart::MultipartStream.__init__": [
   "pure"
  ],
- "httpx._multipart::MultipartStream.get_content_length": [
+ "httpx._multipart::MultipartStream.__iter__": [
   "io"
+ ],
+ "httpx._multipart::MultipartStream.get_content_length": [
+  "pure"
+ ],
+ "httpx._multipart::MultipartStream.get_headers": [
+  "pure"
  ],
  "httpx._multipart::MultipartStream.iter_chunks": [
   "io"
@@ -774,13 +1034,13 @@
   "pure"
  ],
  "httpx._transports.default::AsyncHTTPTransport.__aenter__": [
-  "network"
+  "pure"
  ],
  "httpx._transports.default::AsyncHTTPTransport.__aexit__": [
   "network"
  ],
  "httpx._transports.default::AsyncHTTPTransport.__init__": [
-  "network"
+  "io"
  ],
  "httpx._transports.default::AsyncHTTPTransport.aclose": [
   "network"
@@ -788,17 +1048,18 @@
  "httpx._transports.default::AsyncHTTPTransport.handle_async_request": [
   "network"
  ],
+ "httpx._transports.default::AsyncResponseStream.__aiter__": [
+  "network"
+ ],
  "httpx._transports.default::AsyncResponseStream.aclose": [
   "network"
  ],
- "httpx._transports.default::HTTPTransport.__enter__": [
-  "network"
- ],
+ "httpx._transports.default::HTTPTransport.__enter__": [],
  "httpx._transports.default::HTTPTransport.__exit__": [
   "network"
  ],
  "httpx._transports.default::HTTPTransport.__init__": [
-  "network"
+  "io"
  ],
  "httpx._transports.default::HTTPTransport.close": [
   "network"
@@ -806,11 +1067,14 @@
  "httpx._transports.default::HTTPTransport.handle_request": [
   "network"
  ],
+ "httpx._transports.default::ResponseStream.__iter__": [
+  "network"
+ ],
  "httpx._transports.default::ResponseStream.close": [
   "network"
  ],
  "httpx._transports.default::map_httpcore_exceptions": [
-  "dynamic"
+  "pure"
  ],
  "httpx._transports.mock::MockTransport.handle_async_request": [
   "dynamic"
@@ -819,6 +1083,9 @@
   "dynamic"
  ],
  "httpx._transports.wsgi::WSGIByteStream.close": [
+  "dynamic"
+ ],
+ "httpx._transports.wsgi::WSGITransport.handle_request": [
   "dynamic"
  ],
  "httpx._urlparse::ParseResult.copy_with": [],
@@ -842,6 +1109,9 @@
  ],
  "httpx._utils::get_environment_proxies": [
   "process"
+ ],
+ "httpx._utils::peek_filelike_length": [
+  "io"
  ],
  "requests.__init__::_check_cryptography": [
   "io"

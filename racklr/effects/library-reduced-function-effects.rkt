@@ -22,6 +22,8 @@
    (cons "fastapi._compat.v2" 'ModelField.serialize) 'pure
    (cons "fastapi._compat.v2" 'ModelField.serialize_json) 'pure
    (cons "fastapi._compat.v2" 'ModelField.validate) 'pure
+   (cons "fastapi._compat.v2" '_has_computed_fields) 'pure
+   (cons "fastapi._compat.v2" '_regenerate_error_with_loc) 'pure
    (cons "fastapi._compat.v2" 'copy_field_info) 'pure
    (cons "fastapi._compat.v2" 'create_body_model) 'pure
    (cons "fastapi._compat.v2" 'evaluate_forwardref) 'pure
@@ -30,11 +32,15 @@
    (cons "fastapi._compat.v2" 'get_flat_models_from_field) 'pure
    (cons "fastapi._compat.v2" 'get_missing_field_error) 'pure
    (cons "fastapi._compat.v2" 'get_model_fields) 'pure
+   (cons "fastapi._compat.v2" 'get_schema_from_model_field) 'pure
    (cons "fastapi._compat.v2" 'serialize_sequence_value) 'pure
-   (cons "fastapi.applications" 'FastAPI.__call__) 'network
+   (cons "fastapi.applications" 'FastAPI.__call__) 'dynamic
+   (cons "fastapi.applications" 'FastAPI.__init__) 'pure
    (cons "fastapi.applications" 'FastAPI.add_api_route) 'pure
    (cons "fastapi.applications" 'FastAPI.add_api_websocket_route) 'pure
+   (cons "fastapi.applications" 'FastAPI.delete) 'pure
    (cons "fastapi.applications" 'FastAPI.frontend) 'io
+   (cons "fastapi.applications" 'FastAPI.get) 'pure
    (cons "fastapi.applications" 'FastAPI.head) 'pure
    (cons "fastapi.applications" 'FastAPI.include_router) 'pure
    (cons "fastapi.applications" 'FastAPI.on_event) 'pure
@@ -46,14 +52,23 @@
    (cons "fastapi.applications" 'FastAPI.setup) 'pure
    (cons "fastapi.applications" 'FastAPI.trace) 'pure
    (cons "fastapi.applications" 'decorator) 'pure
+   (cons "fastapi.applications" 'openapi) 'pure
+   (cons "fastapi.applications" 'redoc_html) 'pure
+   (cons "fastapi.applications" 'swagger_ui_html) 'pure
    (cons "fastapi.background" 'BackgroundTasks.__call__) 'dynamic
    (cons "fastapi.background" 'BackgroundTasks.add_task) 'pure
-   (cons "fastapi.cli" 'main) 'process
+   (cons "fastapi.cli" 'main) '(io network process)
    (cons "fastapi.concurrency" 'contextmanager_in_threadpool) 'dynamic
    (cons "fastapi.datastructures" 'UploadFile.__get_pydantic_core_schema__) 'pure
    (cons "fastapi.datastructures" 'UploadFile.close) 'io
+   (cons "fastapi.datastructures" 'UploadFile.read) 'io
+   (cons "fastapi.datastructures" 'UploadFile.seek) 'io
+   (cons "fastapi.datastructures" 'UploadFile.write) 'io
+   (cons "fastapi.dependencies.models" '_get_cache_key) 'pure
+   (cons "fastapi.dependencies.models" '_uses_scopes) 'pure
    (cons "fastapi.dependencies.utils" '_add_form_union_validators) 'pure
    (cons "fastapi.dependencies.utils" '_apply_form_body_schema) 'pure
+   (cons "fastapi.dependencies.utils" '_extract_form_body) 'pure
    (cons "fastapi.dependencies.utils" '_extract_form_items) 'pure
    (cons "fastapi.dependencies.utils" '_extract_form_model) 'pure
    (cons "fastapi.dependencies.utils" '_get_body_field) 'pure
@@ -61,35 +76,65 @@
    (cons "fastapi.dependencies.utils" '_get_form_union_models) 'pure
    (cons "fastapi.dependencies.utils" '_get_model_type) 'pure
    (cons "fastapi.dependencies.utils" '_get_multidict_value) 'pure
+   (cons "fastapi.dependencies.utils" '_get_param_aliases) 'pure
+   (cons "fastapi.dependencies.utils" '_is_form_model_supplied) 'pure
+   (cons "fastapi.dependencies.utils" '_normalize_form_model) 'pure
+   (cons "fastapi.dependencies.utils" '_read_file_bytes) 'io
    (cons "fastapi.dependencies.utils" '_request_param_model_to_args) 'pure
    (cons "fastapi.dependencies.utils" '_solve_generator) 'dynamic
    (cons "fastapi.dependencies.utils" '_validate_value_with_model_field) 'pure
    (cons "fastapi.dependencies.utils" 'analyze_param) 'pure
+   (cons "fastapi.dependencies.utils" 'ensure_multipart_is_installed) 'pure
+   (cons "fastapi.dependencies.utils" 'get_dependant) 'pure
+   (cons "fastapi.dependencies.utils" 'get_flat_params) 'pure
+   (cons "fastapi.dependencies.utils" 'get_parameterless_sub_dependant) 'pure
    (cons "fastapi.dependencies.utils" 'get_stream_item_type) 'pure
+   (cons "fastapi.dependencies.utils" 'get_typed_signature) 'pure
+   (cons "fastapi.dependencies.utils" 'request_body_to_args) 'pure
+   (cons "fastapi.dependencies.utils" 'request_params_to_args) 'pure
    (cons "fastapi.dependencies.utils" 'solve_dependencies) 'dynamic
    (cons "fastapi.encoders" 'jsonable_encoder) 'dynamic
+   (cons "fastapi.exception_handlers" 'request_validation_exception_handler) 'pure
    (cons "fastapi.exception_handlers" 'websocket_request_validation_exception_handler) 'network
+   (cons "fastapi.exceptions" 'RequestValidationError.__init__) 'pure
+   (cons "fastapi.exceptions" 'ResponseValidationError.__init__) 'pure
+   (cons "fastapi.exceptions" 'ValidationException.__init__) 'pure
+   (cons "fastapi.exceptions" 'WebSocketRequestValidationError.__init__) 'pure
+   (cons "fastapi.openapi.docs" '_html_safe_json) 'pure
+   (cons "fastapi.openapi.docs" 'get_swagger_ui_html) 'pure
    (cons "fastapi.openapi.models" 'EmailStr.__get_pydantic_core_schema__) 'pure
+   (cons "fastapi.openapi.models" 'EmailStr._validate) 'pure
+   (cons "fastapi.openapi.models" 'EmailStr.validate) 'pure
+   (cons "fastapi.openapi.utils" '_get_openapi_dependency_data) 'pure
    (cons "fastapi.openapi.utils" '_get_openapi_operation_parameters) 'pure
+   (cons "fastapi.openapi.utils" '_get_openapi_security_definitions) 'pure
+   (cons "fastapi.openapi.utils" 'generate_operation_id) 'pure
+   (cons "fastapi.openapi.utils" 'get_fields_from_routes) 'pure
+   (cons "fastapi.openapi.utils" 'get_openapi) 'pure
    (cons "fastapi.openapi.utils" 'get_openapi_operation_metadata) 'pure
    (cons "fastapi.openapi.utils" 'get_openapi_operation_request_body) 'pure
+   (cons "fastapi.openapi.utils" 'get_openapi_path) 'pure
    (cons "fastapi.params" 'Body.__init__) 'pure
    (cons "fastapi.params" 'Param.__init__) 'pure
    (cons "fastapi.responses" 'ORJSONResponse.render) 'pure
    (cons "fastapi.responses" 'UJSONResponse.render) 'pure
+   (cons "fastapi.routing" 'APIRoute.__init__) 'pure
+   (cons "fastapi.routing" 'APIRoute.get_route_handler) 'pure
    (cons "fastapi.routing" 'APIRoute.handle) 'dynamic
    (cons "fastapi.routing" 'APIRoute.matches) 'pure
    (cons "fastapi.routing" 'APIRouter.__init__) 'pure
    (cons "fastapi.routing" 'APIRouter._contains_router) 'pure
+   (cons "fastapi.routing" 'APIRouter._frontend_match_is_more_specific) 'pure
    (cons "fastapi.routing" 'APIRouter._get_routes_version) 'pure
    (cons "fastapi.routing" 'APIRouter._iter_low_priority_routes) 'pure
    (cons "fastapi.routing" 'APIRouter._match_low_priority) 'pure
    (cons "fastapi.routing" 'APIRouter._shutdown) 'dynamic
    (cons "fastapi.routing" 'APIRouter._startup) 'dynamic
-   (cons "fastapi.routing" 'APIRouter.add_api_route) 'dynamic
+   (cons "fastapi.routing" 'APIRouter.add_api_route) 'pure
    (cons "fastapi.routing" 'APIRouter.add_route) 'pure
    (cons "fastapi.routing" 'APIRouter.add_websocket_route) 'pure
-   (cons "fastapi.routing" 'APIRouter.app) 'dynamic
+   (cons "fastapi.routing" 'APIRouter.app) 'pure
+   (cons "fastapi.routing" 'APIRouter.frontend) 'io
    (cons "fastapi.routing" 'APIRouter.handle) 'dynamic
    (cons "fastapi.routing" 'APIRouter.include_router) 'pure
    (cons "fastapi.routing" 'APIRouter.matches) 'pure
@@ -100,16 +145,22 @@
    (cons "fastapi.routing" '_DefaultLifespan.__aenter__) 'dynamic
    (cons "fastapi.routing" '_DefaultLifespan.__aexit__) 'dynamic
    (cons "fastapi.routing" '_EffectiveRouteContext.from_api_route) 'pure
+   (cons "fastapi.routing" '_EffectiveRouteContext.from_frontend_route_group) 'pure
    (cons "fastapi.routing" '_EffectiveRouteContext.matches) 'pure
    (cons "fastapi.routing" '_EffectiveRouteContext.url_path_for) 'pure
+   (cons "fastapi.routing" '_FrontendRoute.handle) 'dynamic
    (cons "fastapi.routing" '_FrontendRoute.matches_with_path) 'pure
+   (cons "fastapi.routing" '_FrontendRouteGroup.__init__) 'pure
    (cons "fastapi.routing" '_FrontendRouteGroup._match) 'pure
-   (cons "fastapi.routing" '_FrontendRouteGroup.handle) 'dynamic
+   (cons "fastapi.routing" '_FrontendRouteGroup._solve_dependencies) 'dynamic
+   (cons "fastapi.routing" '_FrontendRouteGroup.handle) '(dynamic io)
    (cons "fastapi.routing" '_FrontendStaticFiles.__init__) 'io
    (cons "fastapi.routing" '_FrontendStaticFiles._check_fallback_file) 'io
-   (cons "fastapi.routing" '_FrontendStaticFiles._fallback_file_exists) 'dynamic
-   (cons "fastapi.routing" '_FrontendStaticFiles._fallback_response) 'dynamic
-   (cons "fastapi.routing" '_FrontendStaticFiles._lookup_path) 'dynamic
+   (cons "fastapi.routing" '_FrontendStaticFiles._fallback_file_exists) 'io
+   (cons "fastapi.routing" '_FrontendStaticFiles._fallback_response) 'io
+   (cons "fastapi.routing" '_FrontendStaticFiles._lookup_path) 'io
+   (cons "fastapi.routing" '_FrontendStaticFiles._lookup_static_resource) 'io
+   (cons "fastapi.routing" '_FrontendStaticFiles.get_path) 'pure
    (cons "fastapi.routing" '_FrontendStaticFiles.get_response) 'io
    (cons "fastapi.routing" '_FrontendStaticFiles.get_response_for_scope) 'io
    (cons "fastapi.routing" '_IncludedRouter._build_effective_context) 'pure
@@ -118,18 +169,31 @@
    (cons "fastapi.routing" '_IncludedRouter.effective_candidates) 'pure
    (cons "fastapi.routing" '_IncludedRouter.effective_low_priority_routes) 'pure
    (cons "fastapi.routing" '_IncludedRouter.effective_route_contexts) 'pure
-   (cons "fastapi.routing" '_IncludedRouter.handle) 'network
+   (cons "fastapi.routing" '_IncludedRouter.handle) 'dynamic
    (cons "fastapi.routing" '_IncludedRouter.matches) 'pure
    (cons "fastapi.routing" '_IncludedRouter.url_path_for) 'pure
+   (cons "fastapi.routing" '_async_stream_jsonl) '(dynamic time)
+   (cons "fastapi.routing" '_async_stream_raw) 'dynamic
+   (cons "fastapi.routing" '_build_dependant_with_parameterless_dependencies) 'pure
+   (cons "fastapi.routing" '_frontend_scope_specificity) 'pure
    (cons "fastapi.routing" '_get_resolved_absolute_path) 'pure
+   (cons "fastapi.routing" '_get_scope_effective_route_context) 'pure
+   (cons "fastapi.routing" '_get_scope_included_router) 'pure
+   (cons "fastapi.routing" '_is_frontend_navigation_request) 'pure
    (cons "fastapi.routing" '_iter_accept_media_types) 'pure
    (cons "fastapi.routing" '_iter_routes_with_context) 'pure
-   (cons "fastapi.routing" '_keepalive_inserter) 'io
+   (cons "fastapi.routing" '_keepalive_inserter) '(network time)
    (cons "fastapi.routing" '_populate_api_route_state) 'pure
-   (cons "fastapi.routing" '_producer) 'pure
+   (cons "fastapi.routing" '_producer) 'dynamic
+   (cons "fastapi.routing" '_resolve_frontend_check_dir) 'io
+   (cons "fastapi.routing" '_restore_fastapi_scope_key) 'pure
    (cons "fastapi.routing" '_serialize_data) 'pure
+   (cons "fastapi.routing" '_serialize_item) 'pure
    (cons "fastapi.routing" '_serialize_sse_item) 'pure
    (cons "fastapi.routing" '_sse_producer_cm) 'dynamic
+   (cons "fastapi.routing" '_sse_with_checkpoints) '(dynamic time)
+   (cons "fastapi.routing" '_sync_stream_jsonl) 'dynamic
+   (cons "fastapi.routing" '_update_scope) 'pure
    (cons "fastapi.routing" '_wrap_gen_lifespan_context) 'pure
    (cons "fastapi.routing" 'app) 'dynamic
    (cons "fastapi.routing" 'merged_lifespan) 'dynamic
@@ -137,55 +201,76 @@
    (cons "fastapi.routing" 'run_endpoint_function) 'dynamic
    (cons "fastapi.routing" 'serialize_response) 'pure
    (cons "fastapi.routing" 'wrapper) 'dynamic
+   (cons "fastapi.security.api_key" 'APIKeyCookie.__call__) 'pure
+   (cons "fastapi.security.api_key" 'APIKeyHeader.__call__) 'pure
+   (cons "fastapi.security.api_key" 'APIKeyQuery.__call__) 'pure
+   (cons "fastapi.security.http" 'HTTPBase.__call__) 'pure
+   (cons "fastapi.security.http" 'HTTPBasic.__call__) 'pure
+   (cons "fastapi.security.http" 'HTTPBearer.__call__) 'pure
+   (cons "fastapi.security.http" 'HTTPDigest.__call__) 'pure
+   (cons "fastapi.security.oauth2" 'OAuth2.__call__) 'pure
+   (cons "fastapi.security.oauth2" 'OAuth2AuthorizationCodeBearer.__call__) 'pure
+   (cons "fastapi.security.oauth2" 'OAuth2PasswordBearer.__call__) 'pure
+   (cons "fastapi.security.open_id_connect_url" 'OpenIdConnect.__call__) 'pure
    (cons "fastapi.telemetry._api" '_get_request_telemetry) 'pure
-   (cons "fastapi.telemetry._api" '_route_selected) 'io
+   (cons "fastapi.telemetry._api" '_operation) '(dynamic time)
+   (cons "fastapi.telemetry._api" '_route_selected) 'pure
    (cons "fastapi.telemetry._api" '_run_sync_endpoint) 'dynamic
-   (cons "fastapi.telemetry._api" '_traced_operation) 'io
+   (cons "fastapi.telemetry._api" '_traced_operation) '(dynamic time)
    (cons "fastapi.telemetry._api" '_validation_failed) 'io
-   (cons "fastapi.telemetry._asgi" 'NativeTelemetry.__call__) 'io
-   (cons "fastapi.telemetry._asgi" 'NativeTelemetry._get_tracer) 'io
-   (cons "fastapi.telemetry._asgi" 'NativeTelemetry._instruments) 'io
+   (cons "fastapi.telemetry._asgi" 'ExceptionTelemetryMiddleware.__call__) '(dynamic io)
+   (cons "fastapi.telemetry._asgi" 'NativeTelemetry.__call__) '(dynamic io)
+   (cons "fastapi.telemetry._asgi" 'NativeTelemetry._get_tracer) 'pure
+   (cons "fastapi.telemetry._asgi" 'NativeTelemetry._instruments) 'pure
    (cons "fastapi.telemetry._asgi" 'NativeTelemetry.enabled) 'pure
    (cons "fastapi.telemetry._asgi" '_HeadersGetter.get) 'pure
-   (cons "fastapi.telemetry._asgi" '_exception) 'io
+   (cons "fastapi.telemetry._asgi" '_exception) 'pure
    (cons "fastapi.telemetry._asgi" '_legacy_otel) 'pure
-   (cons "fastapi.telemetry._asgi" 'finish) 'dynamic
-   (cons "fastapi.telemetry._runtime" '_configure_from_environment) 'dynamic
-   (cons "fastapi.telemetry._runtime" '_flush) 'dynamic
-   (cons "fastapi.telemetry._runtime" '_shutdown) 'dynamic
-   (cons "fastapi.telemetry._runtime" 'wrapped_send) 'dynamic
-   (cons "httpx._api" 'delete) 'network
-   (cons "httpx._api" 'get) 'network
-   (cons "httpx._api" 'head) '(dynamic network)
-   (cons "httpx._api" 'options) '(dynamic network time)
+   (cons "fastapi.telemetry._asgi" '_server_attributes) 'pure
+   (cons "fastapi.telemetry._asgi" 'finish) 'time
+   (cons "fastapi.telemetry._asgi" 'wrapped_send) 'dynamic
+   (cons "fastapi.telemetry._runtime" '_configure_from_environment) 'process
+   (cons "fastapi.telemetry._runtime" '_flush) 'network
+   (cons "fastapi.telemetry._runtime" '_shutdown) '(io network time)
+   (cons "fastapi.telemetry._runtime" 'lifespan) '(io time)
+   (cons "fastapi.telemetry._runtime" 'wrapped_receive) 'dynamic
+   (cons "fastapi.telemetry._runtime" 'wrapped_send) 'network
+   (cons "fastapi.utils" 'generate_operation_id_for_path) 'pure
+   (cons "httpx.__init__" 'main) '(io network)
+   (cons "httpx._api" 'delete) '(network time)
+   (cons "httpx._api" 'get) '(network time)
+   (cons "httpx._api" 'head) 'network
+   (cons "httpx._api" 'options) 'network
    (cons "httpx._api" 'patch) 'network
-   (cons "httpx._api" 'post) 'network
+   (cons "httpx._api" 'post) '(network time)
    (cons "httpx._api" 'put) 'network
-   (cons "httpx._api" 'request) 'network
+   (cons "httpx._api" 'request) '(network time)
    (cons "httpx._api" 'stream) 'network
-   (cons "httpx._auth" 'Auth.async_auth_flow) 'network
-   (cons "httpx._auth" 'Auth.sync_auth_flow) 'network
+   (cons "httpx._auth" 'Auth.async_auth_flow) 'pure
+   (cons "httpx._auth" 'Auth.sync_auth_flow) 'pure
+   (cons "httpx._auth" 'DigestAuth._build_auth_header) 'pure
+   (cons "httpx._auth" 'DigestAuth._get_client_nonce) 'network
    (cons "httpx._auth" 'DigestAuth._parse_challenge) 'pure
    (cons "httpx._auth" 'DigestAuth.auth_flow) 'pure
    (cons "httpx._auth" 'FunctionAuth.auth_flow) 'dynamic
    (cons "httpx._auth" 'NetRCAuth.__init__) 'io
    (cons "httpx._auth" 'digest) 'pure
-   (cons "httpx._client" 'AsyncClient.__aenter__) 'dynamic
-   (cons "httpx._client" 'AsyncClient.__aexit__) 'dynamic
+   (cons "httpx._client" 'AsyncClient.__aenter__) 'pure
+   (cons "httpx._client" 'AsyncClient.__aexit__) 'network
    (cons "httpx._client" 'AsyncClient.__init__) 'pure
    (cons "httpx._client" 'AsyncClient._send_handling_auth) '(dynamic network)
-   (cons "httpx._client" 'AsyncClient._send_handling_redirects) 'network
-   (cons "httpx._client" 'AsyncClient._send_single_request) 'network
+   (cons "httpx._client" 'AsyncClient._send_handling_redirects) '(dynamic network)
+   (cons "httpx._client" 'AsyncClient._send_single_request) '(network time)
    (cons "httpx._client" 'AsyncClient._transport_for_url) 'pure
    (cons "httpx._client" 'AsyncClient.aclose) 'network
    (cons "httpx._client" 'AsyncClient.delete) 'network
    (cons "httpx._client" 'AsyncClient.get) 'network
    (cons "httpx._client" 'AsyncClient.head) 'network
    (cons "httpx._client" 'AsyncClient.options) 'network
-   (cons "httpx._client" 'AsyncClient.patch) '(dynamic network)
+   (cons "httpx._client" 'AsyncClient.patch) 'network
    (cons "httpx._client" 'AsyncClient.post) 'network
-   (cons "httpx._client" 'AsyncClient.put) '(dynamic io network)
-   (cons "httpx._client" 'AsyncClient.request) '(dynamic network)
+   (cons "httpx._client" 'AsyncClient.put) 'network
+   (cons "httpx._client" 'AsyncClient.request) 'network
    (cons "httpx._client" 'AsyncClient.send) '(dynamic network)
    (cons "httpx._client" 'AsyncClient.stream) 'network
    (cons "httpx._client" 'BaseClient.__init__) 'pure
@@ -199,48 +284,60 @@
    (cons "httpx._client" 'BaseClient.build_request) 'pure
    (cons "httpx._client" 'BaseClient.event_hooks) 'pure
    (cons "httpx._client" 'BaseClient.headers) 'pure
-   (cons "httpx._client" 'Client.__enter__) 'network
+   (cons "httpx._client" 'BoundAsyncStream.aclose) 'dynamic
+   (cons "httpx._client" 'BoundSyncStream.close) 'network
+   (cons "httpx._client" 'Client.__enter__) 'pure
    (cons "httpx._client" 'Client.__exit__) 'network
-   (cons "httpx._client" 'Client.__init__) 'pure
+   (cons "httpx._client" 'Client.__init__) 'io
    (cons "httpx._client" 'Client._send_handling_auth) '(dynamic network)
-   (cons "httpx._client" 'Client._send_handling_redirects) '(dynamic network time)
+   (cons "httpx._client" 'Client._send_handling_redirects) '(network time)
    (cons "httpx._client" 'Client._send_single_request) 'network
    (cons "httpx._client" 'Client._transport_for_url) 'pure
    (cons "httpx._client" 'Client.close) 'network
-   (cons "httpx._client" 'Client.delete) 'network
-   (cons "httpx._client" 'Client.get) 'network
-   (cons "httpx._client" 'Client.head) '(dynamic network)
+   (cons "httpx._client" 'Client.delete) '(network time)
+   (cons "httpx._client" 'Client.get) '(network time)
+   (cons "httpx._client" 'Client.head) 'network
    (cons "httpx._client" 'Client.options) 'network
    (cons "httpx._client" 'Client.patch) 'network
-   (cons "httpx._client" 'Client.post) '(dynamic io network time)
-   (cons "httpx._client" 'Client.put) 'network
+   (cons "httpx._client" 'Client.post) 'network
+   (cons "httpx._client" 'Client.put) '(network time)
    (cons "httpx._client" 'Client.request) '(dynamic network)
-   (cons "httpx._client" 'Client.send) '(dynamic network time)
+   (cons "httpx._client" 'Client.send) 'network
    (cons "httpx._client" 'Client.stream) 'network
    (cons "httpx._client" '_is_https_redirect) 'pure
    (cons "httpx._client" '_port_or_default) 'pure
    (cons "httpx._client" '_same_origin) 'pure
    (cons "httpx._config" 'create_ssl_context) 'io
-   (cons "httpx._content" 'AsyncIteratorByteStream.__aiter__) 'io
+   (cons "httpx._content" 'AsyncIteratorByteStream.__aiter__) 'pure
+   (cons "httpx._content" 'IteratorByteStream.__iter__) 'pure
+   (cons "httpx._content" 'encode_content) 'pure
+   (cons "httpx._content" 'encode_json) 'pure
+   (cons "httpx._content" 'encode_multipart_data) 'pure
+   (cons "httpx._content" 'encode_request) 'pure
+   (cons "httpx._content" 'encode_response) 'pure
    (cons "httpx._decoders" 'BrotliDecoder.__init__) 'pure
    (cons "httpx._decoders" 'BrotliDecoder.decode) 'pure
    (cons "httpx._decoders" 'BrotliDecoder.flush) 'pure
    (cons "httpx._decoders" 'DeflateDecoder.__init__) 'pure
    (cons "httpx._decoders" 'DeflateDecoder.decode) 'pure
+   (cons "httpx._decoders" 'DeflateDecoder.flush) 'pure
    (cons "httpx._decoders" 'GZipDecoder.__init__) 'pure
    (cons "httpx._decoders" 'GZipDecoder.decode) 'pure
+   (cons "httpx._decoders" 'GZipDecoder.flush) 'pure
+   (cons "httpx._decoders" 'MultiDecoder.flush) 'pure
    (cons "httpx._decoders" 'TextDecoder.__init__) 'pure
    (cons "httpx._decoders" 'ZStandardDecoder.__init__) 'pure
    (cons "httpx._decoders" 'ZStandardDecoder.decode) 'pure
-   (cons "httpx._main" 'download_response) 'io
+   (cons "httpx._decoders" 'ZStandardDecoder.flush) 'pure
+   (cons "httpx._main" 'download_response) '(io network)
    (cons "httpx._main" 'get_lexer_for_response) 'pure
-   (cons "httpx._main" 'handle_help) 'process
+   (cons "httpx._main" 'handle_help) 'io
    (cons "httpx._main" 'main) '(io network)
    (cons "httpx._main" 'print_help) 'io
    (cons "httpx._main" 'print_request_headers) 'io
    (cons "httpx._main" 'print_response) 'io
    (cons "httpx._main" 'print_response_headers) 'io
-   (cons "httpx._main" 'trace) 'network
+   (cons "httpx._main" 'trace) 'io
    (cons "httpx._main" 'validate_auth) 'io
    (cons "httpx._main" 'validate_json) 'pure
    (cons "httpx._models" 'Cookies.__init__) 'pure
@@ -252,12 +349,31 @@
    (cons "httpx._models" 'Cookies.update) 'pure
    (cons "httpx._models" 'Headers.values) 'pure
    (cons "httpx._models" 'Request.__init__) 'pure
+   (cons "httpx._models" 'Response.__init__) 'pure
    (cons "httpx._models" 'Response._get_content_decoder) 'pure
+   (cons "httpx._models" 'Response.aiter_bytes) 'network
+   (cons "httpx._models" 'Response.aiter_lines) 'network
+   (cons "httpx._models" 'Response.aiter_raw) 'network
+   (cons "httpx._models" 'Response.aiter_text) 'network
+   (cons "httpx._models" 'Response.aread) 'network
    (cons "httpx._models" 'Response.charset_encoding) 'pure
+   (cons "httpx._models" 'Response.iter_bytes) 'network
+   (cons "httpx._models" 'Response.iter_lines) 'pure
+   (cons "httpx._models" 'Response.iter_raw) 'network
+   (cons "httpx._models" 'Response.iter_text) 'network
+   (cons "httpx._models" 'Response.json) 'pure
    (cons "httpx._models" 'Response.links) 'pure
+   (cons "httpx._models" 'Response.read) 'network
+   (cons "httpx._models" 'Response.text) 'pure
    (cons "httpx._models" '_parse_content_type_charset) 'pure
+   (cons "httpx._multipart" 'FileField.get_length) 'io
+   (cons "httpx._multipart" 'FileField.render) 'io
+   (cons "httpx._multipart" 'FileField.render_data) 'io
+   (cons "httpx._multipart" 'MultipartStream.__aiter__) 'pure
    (cons "httpx._multipart" 'MultipartStream.__init__) 'pure
-   (cons "httpx._multipart" 'MultipartStream.get_content_length) 'io
+   (cons "httpx._multipart" 'MultipartStream.__iter__) 'io
+   (cons "httpx._multipart" 'MultipartStream.get_content_length) 'pure
+   (cons "httpx._multipart" 'MultipartStream.get_headers) 'pure
    (cons "httpx._multipart" 'MultipartStream.iter_chunks) 'io
    (cons "httpx._multipart" 'replacer) 'pure
    (cons "httpx._transports.asgi" 'ASGITransport.handle_async_request) 'dynamic
@@ -265,22 +381,25 @@
    (cons "httpx._transports.asgi" 'is_running_trio) 'pure
    (cons "httpx._transports.asgi" 'receive) 'dynamic
    (cons "httpx._transports.asgi" 'send) 'pure
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.__aenter__) 'network
+   (cons "httpx._transports.default" 'AsyncHTTPTransport.__aenter__) 'pure
    (cons "httpx._transports.default" 'AsyncHTTPTransport.__aexit__) 'network
-   (cons "httpx._transports.default" 'AsyncHTTPTransport.__init__) 'network
+   (cons "httpx._transports.default" 'AsyncHTTPTransport.__init__) 'io
    (cons "httpx._transports.default" 'AsyncHTTPTransport.aclose) 'network
    (cons "httpx._transports.default" 'AsyncHTTPTransport.handle_async_request) 'network
+   (cons "httpx._transports.default" 'AsyncResponseStream.__aiter__) 'network
    (cons "httpx._transports.default" 'AsyncResponseStream.aclose) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.__enter__) 'network
+   (cons "httpx._transports.default" 'HTTPTransport.__enter__) 'pure
    (cons "httpx._transports.default" 'HTTPTransport.__exit__) 'network
-   (cons "httpx._transports.default" 'HTTPTransport.__init__) 'network
+   (cons "httpx._transports.default" 'HTTPTransport.__init__) 'io
    (cons "httpx._transports.default" 'HTTPTransport.close) 'network
    (cons "httpx._transports.default" 'HTTPTransport.handle_request) 'network
+   (cons "httpx._transports.default" 'ResponseStream.__iter__) 'network
    (cons "httpx._transports.default" 'ResponseStream.close) 'network
-   (cons "httpx._transports.default" 'map_httpcore_exceptions) 'dynamic
+   (cons "httpx._transports.default" 'map_httpcore_exceptions) 'pure
    (cons "httpx._transports.mock" 'MockTransport.handle_async_request) 'dynamic
    (cons "httpx._transports.mock" 'MockTransport.handle_request) 'dynamic
    (cons "httpx._transports.wsgi" 'WSGIByteStream.close) 'dynamic
+   (cons "httpx._transports.wsgi" 'WSGITransport.handle_request) 'dynamic
    (cons "httpx._urlparse" 'ParseResult.copy_with) 'pure
    (cons "httpx._urlparse" 'normalize_port) 'pure
    (cons "httpx._urlparse" 'quote) 'pure
@@ -293,6 +412,7 @@
    (cons "httpx._urls" 'URL.copy_add_param) 'pure
    (cons "httpx._urls" 'URL.raw) 'pure
    (cons "httpx._utils" 'get_environment_proxies) 'process
+   (cons "httpx._utils" 'peek_filelike_length) 'io
    (cons "requests.__init__" '_check_cryptography) 'io
    (cons "requests.__init__" 'check_compatibility) 'io
    (cons "requests.adapters" 'HTTPAdapter.build_connection_pool_key_attributes) 'pure
