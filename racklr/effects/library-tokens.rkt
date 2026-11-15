@@ -122,11 +122,10 @@
     ;; network / cache client libraries called as bare names
     "fetch" 'network
     "axios" 'network
-    "revalidatePath" 'cache
-    "revalidate_path" 'cache
-    "invalidate" 'cache
-    "clearCache" 'cache
-    "purgeCache" 'cache
+    ;; NOTE: Next.js cache verbs (revalidatePath/revalidate_path/invalidate/
+    ;; clearCache/purgeCache) are JS-host names, not Python; they were leaking
+    ;; into the Python/Django default and mis-classifying cache off-corpus.
+    ;; They belong in the JS lexicon, not here.
     ;; bare builtins that perform console/file I/O, plus framework logging /
     ;; deprecation-warning helpers imported bare
     ;; (`django.utils.log.log_response`).

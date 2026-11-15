@@ -78,7 +78,10 @@
      "setTimeout" 'time
      "setInterval" 'time
      "requestAnimationFrame" 'time
-     "structuredClone" 'pure)
+     "structuredClone" 'pure
+     ;; Next.js server-action cache helpers (JS-host names).
+     "revalidatePath" 'cache "revalidateTag" 'cache "revalidate_path" 'cache
+     "invalidate" 'cache "clearCache" 'cache "purgeCache" 'cache)
     ;; method effects: a dotted method name that is an effect on its own
     (hash
      "log" 'io "info" 'io "warn" 'io "error" 'io "debug" 'io "trace" 'io
