@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Autonomous effect reducer (`tools/formalize.sh`, `tools/reduce-effects.{sh,py}`,
+  `tools/classify-{effects,receivers,functions,dynamic}.sh`, `tools/fx-rows.rkt`):
+  code-to-spec discovery — run the unknown census, have the LLM correct every
+  effectful function's complete effect set (dropping coarse name-table false
+  positives and decomposing `dynamic` into concrete effects or the polymorphic
+  `callback` marker), write the generated `declared-function-effects` DATA,
+  re-census, and emit the contract. One command formalizes a library
+  (requests/httpx/fastapi reach 0 unknown, 0 db false positives).
+- `tools/emit-fizz.rkt` and `tools/emit-gherkin.rkt`: synthesize a `.fizz`
+  capability/component contract from inferred effect rows, and render it as a
+  Gherkin `.feature` where the effect row becomes a `Then effects` assertion.
+- `tools/spec2code.py` + `tools/check-spec.rkt`: spec-to-code synthesis with a
+  kernel guardrail loop — the LLM writes a component's host code constrained to
+  its `needs` row; the bridge infers and re-checks it, and every named
+  violation (effect + call site) is fed back until the kernel accepts.
+- `#:declared-function-effects` (host-neutral injection): a producer-supplied
+  per-function effect set that is AUTHORITATIVE for the function's row, grounded
+  as a declared capability, applied to the direct row so the fixpoint
+  propagates the declared domain.
+- `tools/certificate-sweep.rkt`: run every inferred function row through the
+  kernel certificate checker; the kernel's grounding verdict is cross-checked
+  against the producer's `provenance-missing` reachability.
+- Off-corpus calibration harness (`tools/dump-lexicon.rkt`, `tools/calibrate.py`):
+  blind-feed the hand-curated bare-name/method/module lexicon to the LLM
+  classifier and report per-surface accuracy and domain confusion.
+
 - Stable site origins for effect-edge provenance (nc-4A19):
   `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural
   receiver chain (from the UIR callee, never a rendered expression), and a
@@ -226,6 +252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `dynamic` deferral is now decomposed: unresolvable argument rows defer to
+  `dynamic` (tracked, modality may) rather than `unknown`, and the reducer's
+  function correction replaces `dynamic` with the concrete effect(s) or keeps
+  it as the polymorphic `callback` marker — `dynamic` means exactly
+  "effect is the caller's".
+- Aliased imports resolve as call-graph edges (`import a.b as c` binds the local
+  to the full module; `from x import y as z` then a bare `z(...)` resolves to
+  the corpus function).
 - Effect inference's fixpoint is now expressed in the algebra:
   `infer.rkt` and `whole-program.rkt` run `algebra/least-fixpoint` over
   `algebra/join`, and `rows.rkt` is the algebra adapter. The refactor is
@@ -330,6 +364,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Next.js cache verbs (`revalidatePath`/`revalidate_path`/`invalidate`/
+  `clearCache`/`purgeCache`) were leaking into the Python/Django bare-name
+  table and mis-classifying `cache` off-corpus; they now live only in the JS
+  lexicon.
+- A declared-`pure` function produced a spurious `pure` effect entry; pure is
+  the absence of an effect and now yields an empty row.
 - `json->uir` previously could not read a `typed-param` payload at all: the
   tag was missing from the JSON tag set, so any function with parameters failed
   to round-trip through JSON. The tag set is now derived from the schema
