@@ -6,18 +6,58 @@ Add Koka as a source and target language: `lower-koka.rkt` (Koka CST to UIR) and
 
 Koka is the one language in this trio with genuine first-class typed effects, which makes it the natural "native" target for racklr's effect-row work. Its `effect` declarations, `with` handlers, and `resume` map directly onto the effect layer's `uir-effect-row` and `uir-effect-entry`, but the current UIR has no representation of effect operations or handlers. This plan adds those.
 
-## Status (verified 2026-11-01)
+## Status (verified 2026-11-01, Koka 3.x modernization)
 
-**Phases 1-3 landed in earlier PRs and were re-verified for this ticket.** The
-tracked pass-1 grammar is `grammars/koka/Koka.g4`
-(`racklr-test/gen-koka-test.rkt`, observed 2/2, exit 0); lowering and emission
-are `racklr/lower-koka.rkt` and `racklr/emit-koka.rkt`, round-tripped by
-`racklr-test/lower-koka-test.rkt` (observed 10/10, exit 0). Effect
-declarations, handlers, and `uir-fn` effect rows lower there. Deeper
-effect-layer fixtures beyond the current round-trip suite remain open. The
-`Current State` section below records the pre-work survey.
+**The pass-1 grammar is replaced by a Koka 3.x port; the lowering/emission
+layer is rewritten against it.** `grammars/koka/Koka.g4` is authored from the
+authoritative upstream grammar (`koka-lang/koka` `doc/spec/grammar/parser.y`,
+`src/Syntax/Lexer.x`, `src/Syntax/Layout.hs`). Koka's layout is *not* Python
+layout: upstream inserts braces/semicolons from column positions with
+expression-continuation exceptions, so that pass is injected as data
+(`racklr/gend-parser/language-policy.rkt` `koka-layout-policy`) and selected by
+the grammar's `options { layout = koka; }` (resolved by
+`gen-and-load-layout`, so callers and tools need no extra argument). The
+parser therefore works on explicit `{ ; }` tokens exactly like upstream, and
+the front end accepts real Koka 3.x: `pub` visibility, effect handlers,
+`handler`/`handle` clauses with `fun`/`ctl`/`final`/`raw` operations,
+extern declarations and `extern import`/conditional imports, `struct`/
+`alias`/effect declarations with type parameters and `::` kinds, implicit
+`?x` parameters, trailing commas, nested block comments and multi-line raw
+strings. The pass-1/legacy spellings that the repository's own sources still
+use are accepted as a superset (`public`/`private`, `external`,
+`function`, `fun` lambdas).
+
+Lowering and emission are `racklr/lower-koka.rkt` + `racklr/lower-koka/` and
+`racklr/emit-koka.rkt` + `racklr/emit-koka/` (split by responsibility, each
+file under 400 lines; public call shapes unchanged). New additive UIR node
+kinds (`uir-struct`, `uir-fixity`, `uir-extern-value`, `uir-extern-fun`,
+`uir-extern-import`, `uir-handler`, `uir-handler-op`, `uir-mask`,
+`uir-named-arg`, `uir-char`, `uir-type-params`, `uir-import-alias`,
+`uir-ascribe`, `uir-index`, `uir-implicit-ref`) carry the modern surface that
+had no representation; no existing kind's field list changed, so no schema
+version bump is needed. Tests: `racklr-test/gen-koka-test.rkt` (grammar,
+layout, lexer, parse), `racklr-test/koka-real-world-test.rkt` (tracked
+real-world fixtures), `racklr-test/lower-koka-test.rkt` (per-construct
+lower/emit/re-parse), `racklr-test/effects-koka-annot-test.rkt` (typed effect
+rows), and `tools/koka-corpus.rkt` (capability scorer over a real Koka
+checkout).
+
+## Loss model (Koka source -> UIR -> Koka source)
+
+- Comments and doc comments are not represented in the UIR. Upstream attaches
+  doc comments to declaration metadata; they are documentation, not syntax,
+  and the emitted source is semantically identical without them.
+- String values are preserved exactly; a string that is multi-line or long is
+  emitted as a raw string (`r"..."`/`r#"..."#`) and other strings as ordinary
+  quoted strings. The source's exact raw-string delimiter (its hash count) is
+  not preserved, only the value.
+- Type expressions (types, effect rows, kind annotations) travel as normalized
+  text symbols, the same convention as the Rust front end. Effects that the
+  type grammar cannot express structurally are therefore not decomposed into
+  UIR structure.
 
 ## Effect-System Status (read this first)
+
 
 Koka is a strongly typed functional language whose central feature is effect typing. Every function type records its effects, effects are row-polymorphic, and effect handlers are a core language feature rather than a library.
 

@@ -74,10 +74,10 @@
              "(defn h [x] (f x) (g x))")]
        [uir (lower src)]
        [rows (infer-effects uir)])
-  (check-equal? (modality (hash-ref rows 'f) 'llm) 'may "f -> llm")
-  (check-equal? (modality (hash-ref rows 'g) 'db) 'may "g -> db")
-  (check-equal? (modality (hash-ref rows 'h) 'llm) 'may "h inherits llm")
-  (check-equal? (modality (hash-ref rows 'h) 'db) 'may "h inherits db"))
+  (check-equal? (modality (hash-ref rows 'f) 'llm) 'must "f -> llm")
+  (check-equal? (modality (hash-ref rows 'g) 'db) 'must "g -> db")
+  (check-equal? (modality (hash-ref rows 'h) 'llm) 'must "h inherits llm")
+  (check-equal? (modality (hash-ref rows 'h) 'db) 'must "h inherits db"))
 
 ;; ── 4. emit renders the row as metadata ──────────────────────────────
 

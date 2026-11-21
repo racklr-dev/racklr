@@ -57,12 +57,18 @@
     ;; structurally (`shape.rkt:super-call?`). It is a construct encoding, not
     ;; a runtime-dispatched function, so it is dialect data here.
     "super"
-    ;; Python structural calls and comprehensions
+    ;; Python structural calls and comprehensions. `kw-spread` is the `**expr`
+    ;; argument/dict-unpack encoding (lower-python/expr.rkt): a language
+    ;; construct that materializes a mapping, not a runtime-dispatched call, so
+    ;; it is pure like the other synthetic callees. Without it the argument
+    ;; encoding of every `f(..., **options)` counts as an `unknown` call site
+    ;; (`self._class(...)`, `super().__init__(..., **kwargs)`).
     "not" "tuple" "set" "list" "assert" "raise" "del" "global" "nonlocal"
     "list-comp" "dict-comp" "set-comp" "gen-comp" "gen-exp" "kwarg"
     ;; dict-item is the lowerer's key:value pair encoding inside a dict-comp;
     ;; it is a construct marker, not a runtime-dispatched call.
     "dict-item"
+    "kw-spread"
     ;; Clojure special forms / data constructors
     "quote" "syntax-quote" "unquote" "unquote-splicing" "deref" "var"
     "vector" "hash-set" "fn*" "with-meta" "namespace" "host-expr")
@@ -81,4 +87,10 @@
    ;; f-string literal is a `str`, a list literal a `list`, a dict literal a
    ;; `dict`. Receiver typing then resolves `xs = []; xs.append(v)` through the
    ;; builtin type table instead of leaving it `unknown`.
-   (hash 'uir-string "str" 'uir-fstring "str" 'uir-list "list" 'uir-record "dict")))
+   (hash 'uir-string "str" 'uir-fstring "str" 'uir-list "list" 'uir-record "dict")
+   ;; Callees/statements that always transfer control out of the block:
+   ;; `raise` and `sys.exit`/`exit` do not return; `break`/`continue` leave the
+   ;; loop body. Read by the must analysis, never by the classifier.
+   (set "raise" "exit" "sys.exit" "break" "continue")
+   ;; Short-circuit boolean operators: the right operand runs conditionally.
+   (set "and" "or")))

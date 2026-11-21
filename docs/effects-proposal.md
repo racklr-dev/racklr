@@ -57,7 +57,7 @@ Each entry has:
 
 ### 3.2 Semantics
 
-These bullets are **contract** semantics — what a declared capability means when it is checked. They are distinct from **inference** semantics — what the classifier records when it reads a body: a detected effect is recorded `may`, an unresolvable call is recorded `unknown` (a tracked obligation, §3.4), and a body with no recorded entries is `pure` (the empty row).
+These bullets are **contract** semantics — what a declared capability means when it is checked. **Inference** semantics are how a body's row is computed (§6): every detected effect starts as a `must` obligation at its call site, and the control-flow composition around it decides the final modality — a sequence keeps it `must`, a branch (`if`/`match`) keeps `must` only when every branch must, a loop body / comprehension / short-circuit operand weakens it to `may`, and a `try` body weakens it because an exception can skip later statements. A callee's `must` propagates through an unconditional call and is demoted through a conditional one. An unresolvable call is recorded `unknown` (a tracked obligation, §3.4) and stays `unknown` through every region; a body with no recorded entries is `pure` (the empty row).
 
 - **Absence is prohibition.** On the contract side, an effect a declared row does not list is `must-not` by default.
 - **`may` is permission, not obligation.** A function typed `<may llm>` may or may not call the LLM.
@@ -231,15 +231,32 @@ The pipeline, as built in `racklr/effects/`:
    the tracked receiver class, a manager attribute (`X.objects.Y`), or an
    imported name; (d) a direct effect root or pure stdlib name from the DATA
    lexicon; (e) otherwise `unknown`.
-4. **Whole-program fixpoint.** One monotone fixpoint over the union of every
-   component's call graph, with component-qualified `(component . name)` keys,
-   so inheritance that crosses file boundaries becomes an edge instead of
-   `unknown`. A function's row is the union of its direct entries and its
-   callees' rows; rows converge because the effect set is finite.
+4. **Whole-program fixpoint.** One monotone fixpoint over the composition of
+   every component's call graph, with component-qualified
+   `(component . name)` keys, so inheritance that crosses file boundaries
+   becomes an edge instead of `unknown`. A function's row is its body evaluated
+   through the effect algebra — `sequence` for statements, `choose` for
+   branches, `repeatable` for loop bodies/comprehensions/short-circuit
+   operands, `weaken-must` for a `try` body — with each call-graph edge
+   inserting the callee's current row. Budgets are static invocation upper
+   bounds: a direct site contributes 1, a branch takes the per-path maximum, a
+   sequence sums, and a loop or a call-graph cycle (widened per
+   strongly-connected component) is unbounded (`#f`). Rows converge because the
+   effect set is finite, obligations and scopes ascend in a finite-height
+   lattice, and cycles are widened.
 5. **Typed operations.** A method capability is `domain<Receiver>.verb`
    (e.g. `db<QuerySet>.read`), derived from where the class lives (domain) and
    what the method does (verb, via a per-domain DATA verb table). An
    unclassified verb keeps the coarse `()` ("any op in the domain").
+6. **Scope.** Inference claims a scope (`reads=<resource>` /
+   `writes=<resource>`, the encoding the runtime guards enforce) only when the
+   call chain grounds both the access direction and the resource: a typed op
+   set names the receiver class and the verb, and a coarse entry can still be
+   grounded when its receiver root is a known class and the called method has a
+   single read/write direction in the guard vocabulary. Effects compose their
+   scopes through the algebra (`scope-lub`): only an agreed, single resource
+   survives; a conflicting or ungrounded resource stays `#f` (uncharacterized,
+   never guessed).
 
 **Unknown is a tracked obligation, never a silent default and not a deferral.**
 A call that no structural or lexicon rule resolves contributes an `unknown`
@@ -249,7 +266,13 @@ when materializing concrete rows, because a runtime guard cannot enforce an
 unclassified effect — the obligation is to eliminate the leaf, not to ship it.
 
 The inferred rows are written back to `uir-fn.effects`. Hand-written annotations
-(§5) win over inference and are never overwritten.
+(§5) win over inference and are never overwritten. Write-back drops `unknown`
+entries (a checker signal, not a runtime effect) and materializes an inferred
+`must` as `may`: the obligation is an analysis fact about the inferred row,
+while a caller-installed effect handler may legitimately interpret or supply
+the effect, so the emitted runtime guard treats the inference as a permission
+(it keeps the inferred budget, ops and scope). A hand-written row keeps its
+declared modality.
 
 ### 6.1 Provenance: evidence over assertion
 

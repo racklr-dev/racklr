@@ -29,11 +29,13 @@
  dialect-method-receiver-offset dialect-init-method-name
  dialect-keyword-arg-callee dialect-annotation-callee
  dialect-literal-receiver-types
+ dialect-control-transfer-names dialect-short-circuit-callees
  ;; lexicon
  lexicon? lexicon
  lexicon-name lexicon-tokens lexicon-import-config
  lexicon-db-read-methods lexicon-db-write-methods
  lexicon-io-read-verbs lexicon-io-write-verbs lexicon-io-other-verbs
+ lexicon-domain-op-vocabulary
  lexicon-builtin-class-methods)
 
 ;; Naming/encoding conventions of a host language. Sets are sets of strings
@@ -55,7 +57,15 @@
    ;; node-kind symbol -> receiver TYPE name for a literal VALUE (`string` →
    ;; "str", `record` → "dict"). A literal's receiver type is a host-language
    ;; convention, so it is DATA here rather than a name literal in the engine.
-   literal-receiver-types) ; hash: symbol -> string
+   literal-receiver-types   ; hash: symbol -> string
+   ;; Callee/statement names that always transfer control out of the enclosing
+   ;; block (`raise`, JS `throw`, `sys.exit`, `break`, `continue`). The effect
+   ;; inference's must analysis reads this set, so the transfer vocabulary is
+   ;; host DATA, never a name literal in engine code.
+   control-transfer-names   ; set: names as strings
+   ;; Callee names whose right operands are evaluated only conditionally
+   ;; (short-circuit boolean operators): `and`/`or`, JS `&&`/`||`/`??`.
+   short-circuit-callees)   ; set: names as strings
   #:transparent)
 
 ;; The whole host lexicon: token tables, their dialect, import-tag rules, the
@@ -69,6 +79,12 @@
    io-read-verbs         ; set: method-name verbs that read a stream
    io-write-verbs        ; set: method-name verbs that write a stream
    io-other-verbs        ; set: method-name verbs that manage a stream
+   ;; The other effect domains' primitive-operation vocabulary, so a host (or a
+   ;; library family within a host) types more than db/io. A hash from domain
+   ;; symbol to a hash from method-name string to the typed-op operation
+   ;; segment: `network<Session>.read` ← 'network + "get" → "read". A domain
+   ;; absent from this table keeps the coarse `ops=()` capability.
+   domain-op-vocabulary  ; hash: domain -> (hash method-name -> op-name)
    builtin-class-methods) ; hash: class-name -> set of pure method names
   #:transparent)
 

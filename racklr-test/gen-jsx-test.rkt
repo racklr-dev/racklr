@@ -10,7 +10,7 @@
 ;; ── Load the JSX parser ─────────────────────────────────────────────
 
 (define-values (jsx-parse jsx-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 ;; ── Tokenizer smoke tests ───────────────────────────────────────────
 

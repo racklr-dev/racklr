@@ -1,9 +1,11 @@
 #lang racket
 
-(require racklr/tree)
+(require racket/string
+         racklr/tree)
 
 (provide tok? cst-kids tag-of kids-of find-kid find-list find-node-or-list
-         extract-var-kind extract-identifier-name)
+         extract-var-kind extract-identifier-name cst-source-text
+         has-token? find-descendant)
 
 ;; ── CST-walking helpers for TypeScript lowering ───────────────────────
 
@@ -22,6 +24,19 @@
 
 (define (find-list n)
   (for/or ([k (kids-of n)] #:when (pair? k)) k))
+
+;; Does this CST node directly hold a token of type `tag`? Used to detect
+;; ambient `declare` declarations, whose token is a direct child of the
+;; declaration node (functionDeclaration/classDeclaration/variableStatement).
+(define (has-token? node tk-type tag)
+  (for/or ([k (kids-of node)]) (and (tok? k tk-type) (eq? (tk-type k) tag))))
+
+(define (find-descendant node tag)
+  ;; Depth-first first descendant (including `node`) whose tag is `tag`.
+  (cond [(not (cst-node? node)) #f]
+        [(eq? (tag-of node) tag) node]
+        [else (for/or ([k (kids-of node)])
+                (and (cst-node? k) (find-descendant k tag)))]))
 
 (define (find-node-or-list n)
   (for/or ([k (kids-of n)] #:when (or (cst-node? k) (pair? k))) k))
@@ -42,3 +57,51 @@
               (let ([tok (first (kids-of ident))])
                 (and (tok? tok tk-type) (eq? (tk-type tok) 'Identifier)
                      (tk-value tok)))))))
+
+;; ── Recovering a declaration's spelling ─────────────────────────────
+;;
+;; The lowering interface receives the CST and token accessors, not the source
+;; string, so a declaration's literal text is recovered by walking its tokens
+;; in order. The lexer drops whitespace and comments, so the rendering is
+;; canonical (token order preserved) rather than byte-identical. Erased
+;; type-level declarations ride into the UIR as this text so the emitter can
+;; document them instead of dropping the file.
+
+(define (cst-source-text node tk-type tk-value)
+  (define toks
+    (let loop ([x node] [acc '()])
+      (cond [(cst-node? x)
+             (for/fold ([acc acc]) ([k (in-list (cst-node-children x))])
+               (loop k acc))]
+            [(pair? x)
+             (for/fold ([acc acc]) ([k (in-list x)]) (loop k acc))]
+            [(and (tok? x tk-type) (not (eq? (tk-type x) 'EOF)))
+             (cons (tk-value x) acc)]
+            [else acc])))
+  (normalize-whitespace (tokens->text (reverse toks))))
+
+(define (normalize-whitespace text)
+  (string-join (string-split text) " "))
+
+;; Canonical spacing: punctuation hugs its operand, so the comment reads like
+;; the declaration (`{ x: number; }`, `Array<T>`, `label?: string`).
+(define (tokens->text toks)
+  (define no-space-before '(")" "]" "." "," ";" "?" ":" ">"))
+  (define keyword-before-paren
+    '("=" "," ":" "|" "&" "=>" "extends" "?"))
+  (define (separator prev text)
+    (cond
+      [(not prev) ""]
+      [(member text no-space-before) ""]
+      [(string=? text "}") (if (string=? prev "{") "" " ")]
+      [(string=? text "[") (if (string=? prev "{") " " "")]
+      [(string=? text "<") ""]
+      [(and (string=? text ">") (string=? prev ">")) ""]
+      [(string=? text "(") (if (member prev keyword-before-paren) " " "")]
+      [(member prev '("(" "[" "." "<")) ""]
+      [else " "]))
+  (define (append-token out text)
+    (define prev (and (pair? out) (car out)))
+    (cons text (cons (separator prev text) out)))
+  (string-join (reverse (for/fold ([out '()]) ([tok (in-list toks)])
+                          (append-token out (format "~a" tok)))) ""))

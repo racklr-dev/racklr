@@ -2,12 +2,13 @@
 
 (require rackunit
          racklr/tree
-         racklr/gen-test)
+         racklr/gen-test
+         racklr/tsx-preprocess)
 
 ;; ── Load the TypeScript parser ────────────────────────────────────────
 
 (define-values (ts-parse ts-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── Tokenizer Tests ──────────────────────────────────────────────────
 
@@ -218,6 +219,34 @@
 (check-reject ts-parse "@#$%")
 (check-reject ts-parse "const x: ")
 (check-reject ts-parse "1 +")
+
+;; ── Issue #122: real-world TypeScript constructs from axios ─────────
+;; The corpus required these productions: conditional types, labeled tuple
+;; elements, ambient `declare` declarations, type predicates, full types after
+;; `as`, class members beyond plain property methods, and keyword infix
+;; operators in expressions.
+(define ts-issue-122-snippets
+  (list "type Cond<T> = T extends string ? A : B;"
+        "type Tup = [address: string, count?: number];"
+        "declare function f(x: number): void;"
+        "declare class C { x: number; }"
+        "declare const value: number;"
+        "function isString(x: unknown): x is string { return true; }"
+        "const e = err as Error & { code: string };"
+        "const v = (x as A.B[])[0];"
+        "class C { constructor() {} get x(): number { return 1; } static { init(); } }"
+        "if (a instanceof B && k in o) { consume(a); }"
+        "export { data };"))
+(for ([src (in-list ts-issue-122-snippets)])
+  (check-true (and (ts-parse src) #t) (format "parses ~s" src)))
+
+;; Multi-line `import type` / `export type` statements (erased before parse).
+(let* ([src (string-join (list "import type { A } from 'a';"
+                               "export type { B } from 'b';"
+                               "const x: number = 1;")
+                         "\n")])
+  (check-true (and (ts-parse (preprocess-imports src)) #t)
+              "multi-line type-only imports preprocess and parse"))
 
 ;; Clean up temp files
 (cleanup)

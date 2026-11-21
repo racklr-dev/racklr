@@ -16,10 +16,10 @@
 
 ;; Load parsers
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (jsx-parse jsx-tokenize jsx-tok-type jsx-tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 ;; Pipeline: TSX source → UIR
 (define (tsx->uir source)

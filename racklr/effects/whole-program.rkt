@@ -8,13 +8,16 @@
 ;; classifier lives in classify-all.rkt; the type/effect relation
 ;; materialization and its deterministic join live in type-relations.rkt; this
 ;; module is the fixpoint driver that collects the tables, joins the relations,
-;; and folds the call graph.
+;; classifies every call site (with the row-hole / dynamic refinements), and
+;; folds the call graph through the shared evaluator in invocation-row.rkt.
 
 (require racklr/uir
          racklr/effects/class-resolve
          racklr/effects/collect
          racklr/effects/walk
          racklr/effects/rows
+         racklr/effects/invocation-row
+         racklr/effects/invocation-scope
          (prefix-in alg: racklr/effects/algebra/main)
          racklr/effects/shape
          racklr/effects/receiver-type
@@ -23,7 +26,6 @@
          racklr/effects/library-tokens
          (only-in racklr/effects/library-stdlib-types declared-param-effect-rows
                   declared-function-effects-data)
-         racklr/effects/imports
          racklr/effects/imports
          racklr/effects/labels
          racklr/effects/provenance
@@ -241,9 +243,9 @@
   ;; Declared function effect: the producer (reducer) names a function's
   ;; effect domain directly when inference is structurally blind. Keyed by
   ;; (module-path . qualified-name-symbol), grounded as a declared capability
-  ;; (provenance kind 'declared), never a silent default. Applied to the
-  ;; DIRECT row so the fixpoint propagates the declared domain (inheritors
-  ;; never see the unknown it replaces).
+  ;; (provenance kind 'declared), never a silent default. It is AUTHORITATIVE:
+  ;; the named set replaces the structural inference (which can carry a coarse
+  ;; name-table false positive). `pure` means the empty row.
   (define (declared-function-fx k)
     (and declared-function-effects
          (let* ([comp (car k)] [name (cdr k)]
@@ -254,38 +256,20 @@
   (define (row-has-unknown? uir-row)
     (for/or ([e (in-list (uir-effect-row-entries uir-row))])
       (eq? (entry-effect-name e) 'unknown)))
-  (define (algebra-row-replace-unknown row fx)
-    (alg:make-algebra-row
-     (uir-effect-row
-      (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
-                      (uir-effect-row-entries (alg:algebra-row->uir row)))
-              ;; `pure` is the ABSENCE of an effect, not an entry: declaring
-              ;; a function pure replaces its unknown with an empty row.
-              (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
-                                                            (if (list? fx) fx (list fx)))))))
-     (alg:algebra-row-provenance row)))
-  ;; A declared function effect is AUTHORITATIVE: the producer (LLM) names the
-  ;; function's complete effect set, overriding the structural inference (which
-  ;; can carry a coarse name-table false positive, e.g. `get`/`set`/`pop` -> db
-  ;; on a dict). `pure` means the empty row. Every declared domain is grounded.
-  (define (declared-function-row! k row)
-    (define fx (declared-function-fx k))
-    (cond
-      [fx
-       (define domains (filter (λ (d) (not (eq? d 'pure)))
-                               (if (list? fx) fx (list fx))))
-       (when prov
-         (for ([d (in-list domains)])
-           (provenance-add-ground!
-            prov
-            (make-declared-site (function-fq k) d
-                                (list (car k) (symbol->string (cdr k))) #f
-                                #:file (car k)))))
-       (effects->algebra-row domains)]
-      [else row]))
+  ;; UIR-row replacement for a residual unknown the fixpoint joins in from a
+  ;; non-declared callee: declared domains are permissions (`may`), `pure` is
+  ;; the absence of an effect.
+  (define (uir-row-replace-unknown uir-row fx)
+    (uir-effect-row
+     (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
+                     (uir-effect-row-entries uir-row))
+             (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
+                                                           (if (list? fx) fx (list fx))))))))
 
   ;; Pass 3: classification + call-graph edges.
-  (define direct-rows (make-hash))
+  (define bodies (make-hash))       ;; key → body
+  (define class-tables (make-hash)) ;; key → (eq-hash call-node → classification)
+  (define blessed-caps (make-hash)) ;; key → declared effect-cap, if any
   (define edges (make-hash))
   ;; Row-hole wiring: the params each function bare-calls (its holes) and the
   ;; argument list at every call to a known callee (the substitution sites).
@@ -303,7 +287,8 @@
     (define rt (rt-of k))
     (define blessed (and (hash-has-key? methods k)
                         (method-cap k import-env lex)))
-    (define effects (if blessed (list blessed) '()))
+    (when blessed (hash-set! blessed-caps k blessed))
+    (define class-table (make-hash))
     ;; A blessed capability is asserted at the method definition by the DATA
     ;; config, so it is its own ground: the tokens are the module path, class,
     ;; and method the capability was derived from.
@@ -320,6 +305,17 @@
                                                 (last parts)))
                            (first parts)
                            #:file comp)))
+    ;; A declared function effect is grounded once, at its definition site.
+    (when (and prov (declared-function-fx k))
+      (for ([d (in-list (filter (λ (x) (not (eq? x 'pure)))
+                                (if (list? (declared-function-fx k))
+                                    (declared-function-fx k)
+                                    (list (declared-function-fx k)))))])
+        (provenance-add-ground!
+         prov
+         (make-declared-site (function-fq k) d
+                             (list (car k) (symbol->string (cdr k))) #f
+                             #:file (car k)))))
     (define callees '())
     (define call-sites '())
     (define param-names
@@ -385,6 +381,7 @@
                 [site (callee-site-string callee)])
            (case (car cls)
              [(edge)
+              (hash-set! class-table node cls)
               (set! callees (cons (cdr cls) callees))
               (set! call-sites (cons (cons (cdr cls) (uir-call-args node)) call-sites))
               (when prov
@@ -396,7 +393,7 @@
                                                                    #:file comp
                                                                    #:position position))))]
              [(effect)
-              (set! effects (cons (cdr cls) effects))
+              (hash-set! class-table node cls)
               (when prov
                 ;; The coverage label records what the classifier needed to
                 ;; establish this ground: no receiver dataflow (a structural
@@ -414,13 +411,14 @@
                                                tokens)
                                    #:file comp
                                    #:position position)))]
-             [(pure) (void)]
+             [(pure)
+              (hash-set! class-table node cls)]
              [(unknown)
               ;; The bare-call-to-parameter shape is the row-hole lever: a
               ;; callback param stands for "the effects of whatever is passed",
-              ;; so it becomes a hole, instantiated by callers (the edge-sites
-              ;; fixpoint below) instead of `unknown`. The same shape info feeds
-              ;; the census tally, so it is computed up front.
+              ;; so it becomes a hole, instantiated by callers (the edge
+              ;; fixpoint in invocation-row.rkt) instead of `unknown`. The same
+              ;; shape info feeds the census tally, so it is computed up front.
               (define shape (receiver-shape callee param-names tokens))
               (define rx
                 (and (member-access-callee? callee) (dotted-root callee)))
@@ -443,6 +441,9 @@
                    (hash-ref local-kinds bare-name 'unbound)]
                   [immediate-base (hash-ref local-kinds immediate-base 'unbound)]
                   [else #f]))
+              ;; `higher-order?` marks the callback-parameter lever (row holes);
+              ;; a bare call to a function-valued local is the separate
+              ;; function-value-typing lever.
               (define higher-order?
                 (and (eq? shape 'bare-call) (eq? binding-kind 'param)))
               ;; A bare-called LOCAL that holds a FUNCTION VALUE (bound from a
@@ -508,7 +509,7 @@
                      (declared-param-effect-row comp (cdr k) bare-name)))
               (cond
                 [declared-fx
-                 (set! effects (cons declared-fx effects))
+                 (hash-set! class-table node (cons 'declared declared-fx))
                  (when prov
                    (provenance-add-ground!
                     prov
@@ -518,7 +519,7 @@
                                       #:file comp
                                       #:position position)))]
                 [higher-order?
-                 (set! effects (cons (list 'hole bare-name site) effects))
+                 (hash-set! class-table node (cons 'hole bare-name))
                  (hash-update! called-params k (λ (l) (cons bare-name l)) '())
                  ;; The bare-called param becomes a row HOLE; a hole still open
                  ;; at fixpoint end materializes as `dynamic` (runtime callback),
@@ -533,7 +534,7 @@
                                       #:file comp
                                       #:position position)))]
                 [(or function-value? runtime-receiver?)
-                 (set! effects (cons 'dynamic effects))
+                 (hash-set! class-table node (cons 'dynamic #f))
                  (when prov
                    (provenance-add-ground!
                     prov
@@ -544,7 +545,7 @@
                                       #:file comp
                                       #:position position)))]
                 [else
-                 (set! effects (cons 'unknown effects))
+                 (hash-set! class-table node (cons 'unknown #f))
                  (when prov
                    (provenance-add-ground!
                     prov
@@ -566,26 +567,20 @@
                                 (unbox unknown-tally))))]))]
         [else (void)]))
     (walk-body body visit!)
-    ;; Direct row: the plain effect symbols, plus one hole per bare-called
-    ;; param (grounded by the call site that created it).
-    (define direct-row
-      (let ([base (effects->algebra-row (filter (λ (x) (not (pair? x))) effects))])
-        (for/fold ([r base]) ([item (in-list effects)] #:when (pair? item))
-          (define pname (cadr item))
-          (define hsite (caddr item))
-          (alg:join r (alg:row-hole pname (alg:provenance (list hsite) #f
-                                                       (list (symbol->string pname))))))))
-    (hash-set! direct-rows k (declared-function-row! k direct-row))
+    (hash-set! bodies k body)
+    (hash-set! class-tables k class-table)
     (hash-set! edge-sites k (reverse call-sites))
     (hash-set! edges k (sort (remove-duplicates callees) (λ (a b)
                                                             (string<? (format "~a.~a" (car a) (cdr a))
                                                                       (format "~a.~a" (car b) (cdr b)))))))
 
-  ;; Row-hole fixpoint. Each node's row is its direct row joined with, for every
-  ;; call site, the callee's row with its holes instantiated by the argument
-  ;; passed there. Instantiation is monotone in the rows, so full sweeps ascend
-  ;; to the least fixed point; holes still open at the end are the honest
-  ;; `unknown` deferral (materialized below), exactly the pre-hole result.
+  ;; The whole-program row fixpoint: recompose every body from its classified
+  ;; call sites and its callees' current rows until the table is stable. The
+  ;; shared evaluator (invocation-row.rkt) owns the control-flow composition,
+  ;; the SCC widening, and the row-hole instantiation at call sites; the
+  ;; single-file pass runs the same driver, so the two cannot drift apart.
+  (define key<? (λ (a b) (string<? (format "~a.~a" (car a) (cdr a))
+                                   (format "~a.~a" (car b) (cdr b)))))
   (define (param-name-sym p)
     (cond
       [(uir-symbol? p) (string->symbol (uir-symbol-name p))]
@@ -598,13 +593,14 @@
   (define (param-index ps name)
     (for/or ([i (in-naturals)] [p (in-list ps)])
       (and (eq? (param-name-sym p) name) i)))
-  ;; An argument's static shape in caller k's context: a pass-through hole,
-  ;; a known function, a direct-effect row, or the unknown fallback.
-  (define (arg-row k a)
+  ;; An argument's row in caller k's context, given the current fixpoint table:
+  ;; a pass-through hole (the caller bare-calls this same param), a known
+  ;; function's row, a direct-effect row, or the dynamic fallback.
+  (define (wp-arg-row k a rows)
     (define a-var (and (uir-var? a) (var-symbol a)))
     (cond
       [(and a-var (memq a-var (hash-ref called-params k '())))
-       (list 'hole a-var)]
+       (alg:row-hole a-var)]
       [else
        (define cls (classify-call-all a known methods
                                       class-defs fn-defs comp-supers self-attr
@@ -612,51 +608,39 @@
                                       (rt-of k) return-types (box 'structural)
                                       #:lexicon lex))
        (case (car cls)
-         [(edge) (list 'fn (cdr cls))]
-         [(effect) (list 'row (effects->algebra-row (list (cdr cls))))]
-         [(pure) (list 'row (alg:empty-algebra-row))]
+         [(edge) (hash-ref rows (cdr cls) (alg:empty-algebra-row))]
+         [(effect) (effects->algebra-row (list (cdr cls)))]
+         [(pure) (alg:empty-algebra-row)]
          ;; An argument that is neither an edge, an effect, nor pure is a
          ;; runtime-dispatched callback: defer to `dynamic` (tracked, modality
          ;; may), never `unknown` — the elimination obligation is only for
          ;; statically-nameable effects.
-         [else (list 'row (effects->algebra-row '(dynamic)))])]))
-  (define (arg->row k a rows)
-    (define v (arg-row k a))
-    (case (car v)
-      [(hole) (alg:row-hole (cadr v))]
-      [(fn) (hash-ref rows (cadr v) (alg:empty-algebra-row))]
-      [else (cadr v)]))
-  (define (compute-row k rows)
-    (foldl
-     (λ (site acc)
-       (define g (car site))
-       (define args (cdr site))
-       (define g-row (hash-ref rows g (alg:empty-algebra-row)))
-       (define inst
-         (for/fold ([r g-row]) ([p (in-list (hash-ref called-params g '()))])
-           (define idx (param-index (params-of g) p))
-           (define a (and idx (< idx (length args)) (list-ref args idx)))
-           (if a (alg:instantiate-row-hole r p (arg->row k a rows)) r)))
-       (alg:join acc inst))
-     (hash-ref direct-rows k (alg:empty-algebra-row))
-     (hash-ref edge-sites k '())))
-  (define rows (make-hash))
-  (for ([k (in-list all-keys)])
-    (hash-set! rows k (hash-ref direct-rows k (alg:empty-algebra-row))))
-  (let sweep ([i 0])
-    (define changed? #f)
-    (for ([k (in-list all-keys)])
-      (define new (compute-row k rows))
-      (unless (alg:same-row? (hash-ref rows k) new)
-        (set! changed? #t)
-        (hash-set! rows k new)))
-    (when changed?
-      (when (> i 400) (error 'row-holes-fixpoint "no convergence after ~a sweeps" i))
-      (sweep (add1 i))))
+         [else (effects->algebra-row '(dynamic))])]))
+  (define rows
+    (inference-rows (sort all-keys key<?)
+                    ;; A declared function effect is authoritative: its body is
+                    ;; suppressed inside the fixpoint and the seed supplies the
+                    ;; declared row, so callers inherit the declared domain
+                    ;; (never the unknown or false positive it replaces).
+                    (λ (k) (if (declared-function-fx k) (uir-block '()) (hash-ref bodies k)))
+                    (λ (k)
+                      (define table (hash-ref class-tables k))
+                      (λ (node) (hash-ref table node (cons 'unknown #f))))
+                    #:tokens tokens
+                    #:known-class? (λ (s) (hash-has-key? class-defs s))
+                    #:params-of params-of
+                    #:arg-row wp-arg-row
+                    #:seed (λ (k)
+                             (define fx (declared-function-fx k))
+                             (cond
+                               [fx (declared-domain-row fx)]
+                               [(hash-ref blessed-caps k #f) => capability-row]
+                               [else (alg:empty-algebra-row)]))))
   (when rec-box (set-box! rec-box prov))
+
   ;; Summary: a polymorphic function's own row is the join of its
   ;; instantiations at every call site; a hole with no resolving site stays
-  ;; open and materializes as the honest `unknown`.
+  ;; open and materializes as the honest `dynamic` (a runtime callback).
   (define incoming (make-hash))
   (for ([(c sites) (in-hash edge-sites)])
     (for ([site (in-list sites)])
@@ -671,23 +655,14 @@
           (define args (cdr in))
           (define idx (param-index (params-of k) p))
           (define a (and idx (< idx (length args)) (list-ref args idx)))
-          (alg:join acc (if a (arg->row c a rows) (alg:empty-algebra-row)))))
+          (alg:join acc (if a (wp-arg-row c a rows) (alg:empty-algebra-row)))))
       ;; A hole with incoming sites is instantiated by them even when every
       ;; passed arg classifies pure (instantiate-with-empty closes it); only a
-      ;; hole with no incoming site stays open for the dynamic/unknown deferral.
+      ;; hole with no incoming site stays open for the dynamic deferral.
       (if (null? (hash-ref incoming k '()))
           r
           (alg:instantiate-row-hole r p inst))))
-  ;; UIR-row sibling of algebra-row-replace-unknown, for the materialization
-  ;; fallback below (a residual unknown that the fixpoint joins in from a
-  ;; non-declared callee).
-  (define (uir-row-replace-unknown uir-row fx)
-    (uir-effect-row
-     (append (filter (λ (e) (not (eq? (entry-effect-name e) 'unknown)))
-                     (uir-effect-row-entries uir-row))
-             ;; `pure` is the ABSENCE of an effect, not an entry.
-             (uir-effect-row-entries (effects->row (filter (λ (x) (not (eq? x 'pure)))
-                                                           (if (list? fx) fx (list fx))))))))
+
   ;; Materialize the algebra rows back to the UIR row contract; holes still
   ;; open become tracked `dynamic` (a runtime callback, surfaced in the graph),
   ;; never a ?-entry and no longer the `unknown` elimination obligation. A

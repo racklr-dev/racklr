@@ -21,6 +21,7 @@
          racklr/effects/shape
          racklr/effects/class-resolve
          racklr/effects/receiver-type
+         racklr/effects/receiver-module
          racklr/effects/effect-roots
          racklr/effects/library-tokens
          racklr/effects/lexicon)
@@ -98,9 +99,14 @@
 ;; unresolvable or its module untagged (falls through to the name heuristics).
 ;; A bare call to an imported FUNCTION from an unscanned module
 ;; (`get_migration_name_timestamp()` from django.db.migrations.utils): resolve
-;; the module's effect domain. The fn handle is synthesized only for external
+;; the module's effect domain. The handle is synthesized only for external
 ;; bindings; a scanned module's functions resolve as corpus edges earlier, and
 ;; a class handle never reaches here (bare class calls are pure constructors).
+;; A lowercase external binding is a MODULE handle on the dotted submodule path
+;; (resolve-exports binds `from xml.dom import pulldom` that way), so a bare
+;; call resolves by trying that path and its dotted parents against the
+;; injected import-tag rules; a legacy fn handle (path = source module, name =
+;; member) resolves the same way through its `path.name` candidate.
 (define (imported-fn-effect nm comp import-env [lex default-lexicon])
   (and import-env nm
        (let* ([config (lexicon-import-config lex)]
@@ -108,7 +114,7 @@
               [e (and modpath (hash-ref (import-env-exports import-env) modpath #f))]
               [h (and e (hash-ref e (symbol->string nm) #f))])
          (and (handle? h)
-              (eq? (handle-kind h) 'fn)
+              (memq (handle-kind h) '(fn module))
               (handle-path h)
               (let ([dom (handle-effect-domain (handle-path h)
                                                (handle-name h)
@@ -127,13 +133,9 @@
 ;; Returns an effect-cap or #f (not a module receiver).
 (define (module-receiver-effect rcls [tokens default-effect-tokens])
   (and rcls
-       (let* ([s (symbol->string rcls)]
-              [m (regexp-match #rx"^([^.]+)" s)]
-              [mod (and m (cadr m))]
-              [domain (or (hash-ref (effect-tokens-receiver-modules tokens) s #f)
-                          (and mod
-                               (hash-ref (effect-tokens-receiver-modules tokens)
-                                         mod #f)))])
+       (let* ([root (module-receiver-root rcls tokens)]
+              [domain (and root (hash-ref (effect-tokens-receiver-modules tokens)
+                                          root #f))])
          (and domain (effect-cap domain '())))))
 
 ;; Effect domain of a module-PATH marker — a dotted symbol like `django.db`

@@ -1,16 +1,18 @@
 #lang racket
 
 (require rackunit
+         racket/file
          racklr/tree
          racklr/uir
          racklr/gen-test
          racklr/lower-typescript
-         racklr/emit-javascript)
+         racklr/emit-javascript
+         racklr/tsx-preprocess)
 
 ;; ── Load the TypeScript parser ──────────────────────────────────────
 
 (define-values (ts-parse ts-tokenize tok-type tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── Test helper ─────────────────────────────────────────────────────
 
@@ -77,19 +79,47 @@
   (check-true (string-contains? emitted "function"))
   (check-true (string-contains? emitted "identity")))
 
-;; ── Interface — should be elided (no runtime equivalent) ────────────
+;; ── Interface — erased, documented as a comment ─────────────────────
+;; A type-only file used to lower to an empty block and emit the empty
+;; string, silently dropping the whole module.
 
 (let-values ([(uir emitted) (check-ts "interface Point { x: number; y: number; }")])
   (check-equal? (uir-tag uir) 'block)
-  (check-false (string-contains? emitted "interface"))
-  (check-false (string-contains? emitted "Point")))
+  (check-true (string-contains? emitted "erased TypeScript type declaration"))
+  (check-true (string-contains? emitted "interface Point"))
+  (check-true (string-contains? emitted "x: number"))
+  ;; The declaration is documentation, not executable JavaScript.
+  (check-true (regexp-match? #rx"^/[*]" emitted))
+  (check-false (regexp-match? #rx";\\s*$" emitted)))
 
-;; ── Type Alias — should be elided ───────────────────────────────────
+;; ── Type Alias — erased, documented as a comment ────────────────────
 
 (let-values ([(uir emitted) (check-ts "type ID = string | number;")])
   (check-equal? (uir-tag uir) 'block)
-  (check-false (string-contains? emitted "type"))
-  (check-false (string-contains? emitted "ID")))
+  (check-true (string-contains? emitted "erased TypeScript type declaration"))
+  (check-true (string-contains? emitted "type ID = string | number"))
+  (check-true (regexp-match? #rx"^/[*]" emitted)))
+
+;; ── Exported type alias — the #113 repro shape ──────────────────────
+;; `docs/examples/test-apps/with-typescript/interfaces/index.ts` is exactly
+;; this: a module whose body is one exported type declaration.
+
+(let-values ([(uir emitted) (check-ts "export type User = { id: number; name: string; };")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-false (string=? emitted ""))
+  (check-true (string-contains? emitted "export type User"))
+  (check-true (string-contains? emitted "erased TypeScript type declaration")))
+
+;; ── Erased type declarations beside runtime code ────────────────────
+;; The runtime statements still emit and the erased declaration is recorded in
+;; source order.
+
+(let-values ([(uir emitted)
+              (check-ts "interface P { x: number; } const answer = 42; type ID = string;")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-true (string-contains? emitted "const answer = 42;"))
+  (check-true (string-contains? emitted "interface P"))
+  (check-true (string-contains? emitted "type ID = string")))
 
 ;; ── Enum — lowered to a call ────────────────────────────────────────
 
@@ -261,6 +291,68 @@
 (let-values ([(uir emitted) (check-ts "a[0]--;")])
   (check-true (string-contains? emitted "a[0]--"))
   (check-false (string-contains? emitted "postfix")))
+
+;; ── B112: non-identifier object keys keep their key text ────────────
+;; The TS object-literal lowering mirrors the JavaScript one; keys such as
+;; 'accent-1', '5xl', and 28 must survive into the UIR and be quoted on emit.
+(let-values ([(uir emitted)
+              (check-ts "const x = { 'accent-1': 1, 28: '7rem', '5xl': '2.5rem', plain: true };")])
+  (check-equal? (uir-tag uir) 'block)
+  (check-true (string-contains? emitted "\"accent-1\": 1"))
+  (check-true (string-contains? emitted "\"28\": \"7rem\""))
+  (check-true (string-contains? emitted "\"5xl\": \"2.5rem\""))
+  (check-true (string-contains? emitted "plain: true"))
+  (check-false (string-contains? emitted "?")))
+
+;; ── B112: ambient `declare module` (.d.ts) lowers without error ─────
+;; The reported failure: the vendored TS grammar cannot parse an ambient module
+;; declaration, so preprocess-imports erases it (ambient declarations have no
+;; runtime form) and the file lowers like an empty type-only module.
+(define remark-html-dts
+  (build-path (current-directory) ".." "docs" "examples" "test-apps"
+              "blog-starter" "@types" "remark-html.d.ts"))
+(let* ([src (file->string remark-html-dts)]
+       [cleaned (preprocess-imports src)]
+       [cst (ts-parse cleaned)]
+       [uir (and cst (lower-program cst tok-type tok-value))])
+  (check-false (string-contains? cleaned "declare")
+               "B112: ambient module declaration stripped")
+  (check-true (and cst #t) "B112: remark-html.d.ts parses after preprocessing")
+  (check-true (and uir #t) "B112: remark-html.d.ts lowers")
+  (check-true (string? (emit-javascript uir)) "B112: remark-html.d.ts emits"))
+
+;; ── Issue #122: real-world TypeScript lowering from axios ───────────
+;; Ambient declarations erase instead of emitting invalid JS.
+(let-values ([(uir emitted) (check-ts "declare const value: number;\ndeclare function f(x: number): void;")])
+  (check-true (string? emitted) "ambient declare lowers")
+  ;; Ambient declarations are replaced by the documented erased-type marker
+  ;; comment, not by executable `declare` JavaScript.
+  (check-true (string-contains? emitted "erased TypeScript type declaration")
+              "ambient declare is erased to the marker")
+  (check-false (regexp-match? #rx"(^|\n)declare " emitted)
+               "ambient declare emits no executable declaration"))
+
+;; A statement-if keeps if/else form (not `cond ? return ... : null`).
+(let-values ([(uir emitted) (check-ts "function f(x: number): number { if (x) { return 1; } else { return 2; } }")])
+  (check-true (string-contains? emitted "if (x) { return 1; }")
+              "statement-if emits as if")
+  (check-false (string-contains? emitted "? return") "statement-if does not emit a ternary"))
+
+;; `instanceof` / `in` are infix, not pseudo-calls.
+(let-values ([(uir emitted) (check-ts "const ok = a instanceof B && k in o;")])
+  (check-true (string-contains? emitted "a instanceof B") "instanceof is infix")
+  (check-true (string-contains? emitted "k in o") "in is infix"))
+
+;; Class members beyond plain property methods lower without crashing.
+(let-values ([(uir emitted) (check-ts "class C { constructor() { this.x = 1; } get x(): number { return 1; } }")])
+  (check-true (string? emitted) "class with accessors lowers"))
+
+;; Named export keeps its name (was emitted as `export { data: data }`).
+(let-values ([(uir emitted) (check-ts "export { data };")])
+  (check-true (string-contains? emitted "export { data }")
+              "named export re-emits as an export")
+  (check-false (string-contains? emitted "data: data")
+               "named export does not become an object literal"))
 
 ;; ── Clean up temp files ─────────────────────────────────────────────
 

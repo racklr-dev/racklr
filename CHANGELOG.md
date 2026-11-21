@@ -34,6 +34,192 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-corpus calibration harness (`tools/dump-lexicon.rkt`, `tools/calibrate.py`):
   blind-feed the hand-curated bare-name/method/module lexicon to the LLM
   classifier and report per-surface accuracy and domain confusion.
+- Module-receiver tracking: memcache / redis client handles and their methods
+  resolve to `cache` instead of `db` / `unknown`. `racklr/effects/receiver-module.rkt`
+  (new) is the MODULE half of receiver dataflow: a tracked module receiver
+  (`pylibmc` / `pymemcache` / `memcache` / `redis`) resolves a module-qualified
+  class read to the module's class-ref DATA type (`self._lib.Redis` → `Redis`,
+  `self._lib.DriverInfo` → `DriverInfo`) and falls back to the dotted module
+  marker so the module domain still classifies; `classify-all.rkt` treats such a
+  construction as pure construction, and `receiver-type.rkt`'s
+  `value-class-of` / `call-result-type` project it. `library-stdlib-types.rkt`
+  adds the redis `Pipeline` receiver type plus the `Redis.pipeline` result
+  projection (pipeline command calls are cache round trips). In the same
+  increment `library-dialect.rkt` declares `kw-spread` (the `**expr`
+  argument/dict-unpack encoding) a synthetic callee: it is a language construct,
+  not a runtime-dispatched call, so `f(..., **options)` no longer counts as an
+  unknown call site. Measured on the pinned `django/django/core` probe: unknown
+  call sites 305 -> 202, unknown functions 292 -> 223, unknown files 73 -> 62
+  (100 `kw-spread` sites + 3 module-receiver projections resolved, 0 rows
+  added). The full package goes 4947 -> 3764 call sites / 4000 -> 3549
+  functions / 478 -> 453 files, with no site gaining `unknown`. `db` falls
+  (core 165 -> 164 functions) as `RedisCacheClient`'s spurious `db` class
+  capability and `RedisCacheClient.set_many`'s `db` entry are removed; `cache`
+  is unchanged because earlier increments already classified these methods
+  `cache`. The four residual memcache/redis unknowns are caller-supplied
+  `serializer` / `pool_class` OR-fallback receivers and stay fail-closed. The
+  type-graph baseline is re-pinned to the reduced graph
+  (`sha256:f96a641b...` -> `sha256:291dca50...`); the gate still answers
+  `baseline COVERAGE-FAILED` with the Phase-0.3 obligation open.
+- JS/TS front-end real-world hardening (issue #122): the JavaScript and
+  TypeScript front ends now round-trip real express/axios source without
+  absorb/emit/re-parse failures (one large-file parser timeout is quarantined
+  and never counted as ok; issue #133). The
+  front ends' grammars are tracked (`grammars/javascript/`,
+  `grammars/typescript/`, `grammars/jsx/` — same layout as `grammars/python3/`
+  and `grammars/koka/`), replacing the untracked, locally-edited
+  `grammars-v4/javascript/*-cleaned/` copies the tests used to depend on, and
+  `tools/js-ts-corpus.rkt` (+ `tools/js-ts-corpus-lib.rkt`) is the committed
+  corpus scorer: for every `.js`/`.mjs`/`.ts`/`.tsx`/`.json` file it runs
+  tokenize -> parse -> lower -> emit -> re-parse and classifies the first
+  blocking stage (`ok`, `tokenize-error`, `parse-fail`, `lower-error`,
+  `fallback`, `emit-error`, `emit-empty`, `reparse-fail`, `timeout`), with a
+  per-file watchdog, `--parse-only` and `--json` modes. Grammar fixes: class
+  elements no longer swallow a plain method/field name in the greedy optional
+  prefix; `obj?.()` (optional call), `&&=`/`||=` (logical assignment),
+  `import.meta` and `#name in obj` (private-name brand check) parse; the
+  generated lexer's template-literal bookkeeping is a per-nesting frame stack
+  so nested templates tokenize (`` `a${`b${c}`}` ``), and the generator no
+  longer lists `fragment` rules as token candidates inside lexer modes (digits
+  in template text were tokenized as numeric literals). Lowering fixes:
+  destructuring declarations and for-in/for-of bindings lower to structural
+  patterns (`racklr/lower-javascript/pattern.rkt`) that the JavaScript emitter
+  renders back as binding syntax instead of a `?` placeholder (the largest
+  fallback class); named-function parameters after the first are no longer
+  dropped (repetition groups); statement-`if`s keep statement form instead of
+  emitting invalid `cond ? return x : null`; reserved-word property names
+  (`p.catch`, `x.new`), anonymous class expressions, block-bodied arrow
+  functions (the body no longer mis-parses as an object literal) and empty
+  `catch` blocks lower correctly;
+  `import.meta`, dynamic `import()` and `#field` brand checks lower instead of
+  crashing or being dropped; `?.`, `??`, `in`, `instanceof`, `&`, `^`, `|`,
+  `<<`, `>>`, `>>>` and every compound assignment are emitted as operators;
+  and `for-of`/`for-in` binding kinds are preserved. TypeScript/TSX: the
+  preprocess that inserts type separators no longer corrupts type sources
+  (declaration-body-targeted, comment/string-safe, continuation-aware,
+  bracket-depth-aware member separators), type-only imports are erased, and the
+  grammar/lowering add conditional types, labeled tuple elements, `declare`
+  declarations, type predicates, full types after `as`, class members beyond
+  property methods, named exports and `instanceof`/`in` infix lowering. Corpus
+  result: express JavaScript 91/142 -> 142/142 ok and axios JavaScript
+  103/226 -> 225/226 ok, plus one quarantined 120 s watchdog timeout
+  (`axios/tests/unit/adapters/http.test.js`, parse alone > 120 s; a
+  failing bucket, never counted as ok, tracked as issue #133), axios
+  TypeScript 13/30 -> 22/30; the before/after tables and the remaining gaps are
+  recorded in `docs/js-ts-real-world-battery.md`.
+- Call-result projection through the whole-program type relations:
+  `racklr/effects/return-type.rkt` adds `call-result-return-class` (a call's
+  result class from the corpus return relation, then the receiver-type-dataflow
+  half `x.m()` for a receiver whose class the relations track, then the
+  constructor/stdlib/imported result type), `call-target-keys` (method targets
+  resolved through tracked receivers, complementing the syntactic
+  `self.m()`/`super().m()`/`KnownClass.m()` resolution) and `return-class-of`
+  (moved from `receiver-type.rkt`; a returned call now projects too). The
+  assign, parameter and return relations and the receiver chain share one rule,
+  and `infer-receiver-types` gains an injectable `#:call-result-class`
+  callback so an assignment from a method on a tracked receiver projects
+  without a require cycle. `receiver-type.rkt` also seeds stdlib/module-marker
+  receiver types the relations propagate (a relation-derived `open` result must
+  seed like an annotation). The projection fails closed on a mixed return and a
+  method call projects only its most-derived dispatch key, so an unprojected
+  override is never shadowed by a superclass projection. The relation join
+  keeps #118's widening driver: the return round still reads a previous-round
+  snapshot, and termination comes from the widening, not a round cap. On
+  current `main` this reduces Django-core unknown call sites 316 -> 305,
+  unknown functions 304 -> 292, unknown files 75 -> 73, and the full package
+  4969 -> 4947 call sites / 4018 -> 4000 functions (22 removed rows, none
+  added); the type-graph baseline is re-pinned to the reduced graph
+  (`sha256:78cc470a...` -> `sha256:995a25ab...`). Full-package numbers and the
+  remaining levers are recorded in `docs/unknown-census.md`.
+- Non-Django Python effect generalization: the Python lexicon now carries the
+  non-Django web-framework surface as DATA, and the import graph canonicalizes
+  modules by their package chain rather than by the scan root.
+  - `racklr/effects/imports/resolve.rkt` derives a scanned file's dotted module
+    name from its `__init__.py` package chain, so a repository checkout whose
+    package lives under `src/` (`…/flask/src/flask/app.py`) lowers as
+    `flask.app` and the corpus's own imports resolve. A scan root that is itself
+    a package directory keeps the historical dotted name, so the pinned Django
+    type-graph baseline is unchanged (verified: same sha256, same counters).
+  - `racklr/effects/imports/library-config.rkt` adds the Flask, Requests,
+    Werkzeug, Click, Jinja2, `itsdangerous`, `blinker`, `markupsafe`,
+    `urllib3`, `charset_normalizer`, `idna`, `certifi` and `dotenv` import-tag
+    rules with a documented fail-closed split (network/io/pure per module, plus
+    public re-export member rules for `from flask import …` / `from requests
+    import …`), and pure rules for the generic Python helpers they import
+    (`typing`, `functools`, `platform`, `urllib.parse`). `requests.models`
+    stays untagged on purpose: the receiver-TYPE table types `Response` body
+    parsing (pure) vs stream consumption (io) precisely.
+  - The lexicon gains a per-domain operation vocabulary
+    (`lexicon-domain-op-vocabulary`, supplied by the host lexicon), and
+    `method-ops` derives typed operations for more than db/io from it. The
+    Python lexicon supplies network read/write/neutral verbs, so receiver-type
+    dataflow now yields `network<Session>.read` / `network<Flask>.wsgi_app`
+    instead of the coarse `ops=()`. The JavaScript lexicon supplies an empty
+    table, proving the injection seam is host data, not a Python special case.
+  - `racklr-test/effects-non-django-python-test.rkt` gates the package-chain
+    module paths (src-layout checkout, package-root scan, docs/script fallback),
+    the framework/pure rules, the injected network vocabulary, typed ops through
+    receiver-type dataflow for `requests.Session` and `flask.Flask`, and a
+    whole-pipeline run of real source using both frameworks.
+- Inference-side modality, budget and grounded scope for effect rows (issue
+  #111): a body's row is now composed through the effect algebra instead of a
+  flat union. A direct classified effect is a `must` obligation at its call
+  site; `sequence` keeps it, `choose` keeps it only when every branch must,
+  and loop bodies/comprehensions/short-circuit operands demote it to `may`
+  (`repeatable`), a `try` body demotes it (`weaken-must`), and a callee's
+  `must` propagates only through an unconditional call. Budgets are static
+  invocation upper bounds (direct site 1, branches max, sequences sum, loops and
+  call-graph cycles unbounded via SCC widening). Scope is inferred
+  (`reads=<resource>` / `writes=<resource>`) only when the call chain grounds
+  the direction (typed op verb or the guard vocabulary's DATA verb tables) and
+  the resource (typed op receiver class, or a known-class receiver root),
+  composing through the algebra's `scope-lub`. The shared evaluator
+  (`racklr/effects/invocation-row.rkt`, `invocation-scope.rkt`) drives both
+  single-file and whole-program inference; declared whole-program method
+  capabilities seed the fixpoint. On the `django/django/core` probe the effect
+  set and the unknown counts are unchanged (231 unknown functions / 64 files,
+  1238 entries), while modalities now include `must`, 321 entries carry a
+  finite budget and 15 carry a grounded scope. Write-back keeps its existing
+  runtime behavior: an inferred `must` is emitted as `may` (an analysis
+  obligation is not a runtime obligation when a caller-installed handler may
+  interpret the effect), while a hand-written row keeps its declared modality;
+  budget/ops/scope still guard.
+
+- `racklr-test/effects-modality-budget-test.rkt` covering guaranteed vs
+  conditional modality, early-return reachability, sequential/loop/branch
+  budgets, `must` propagation, recursive SCC widening, `unknown` preservation,
+  grounded/conflicting/unrooted scopes, and the new region combinators.
+
+ (P0.3))
+
+- Koka 3.x front end rebuilt for real-world source. `grammars/koka/Koka.g4` is
+  an authored port of the Koka compiler's own grammar
+  (`doc/spec/grammar/parser.y`) and lexer (`src/Syntax/Lexer.x`), and Koka's
+  layout pass (`src/Syntax/Layout.hs`) is injected as data: `koka-layout-policy`
+  in `racklr/gend-parser/language-policy.rkt`, selected by a grammar
+  declaration `options { layout = koka; }` that `gen-and-load-layout` resolves
+  (an unknown policy name is an error). The grammar covers `pub` visibility,
+  modules and conditional/target-guarded/`@open` imports, extern
+  declarations/imports/includes, type/struct/alias/effect declarations with
+  type parameters and `::` kinds, fixity, functions and lambdas with pattern
+  parameters, implicit `?x` parameters, `match` with guards and arrowless case
+  bodies, `if`/`elif`/`else`, effect handlers (`handler`/`handle`/`named`/
+  `override`/`scoped`, `fun`/`ctl`/`final`/`raw`/`return`/`finally`/
+  `initially` clauses), `mask`/`inject` (multi-effect lists), `ctx`/`hole`,
+  named arguments, multi-line raw strings and nested block comments. Lowering
+  and emission are rewritten against the new CST (`racklr/lower-koka/`,
+  `racklr/emit-koka/`; public call shapes unchanged) with additive UIR node
+  kinds (`struct`, `fixity`, `extern-value/fun/import`, `handler`,
+  `handler-op`, `mask`, `named-arg`, `char`, `type-params`, `import-alias`,
+  `ascribe`, `index`, `implicit-ref`) and no existing-kind field change or
+  schema-version bump. The committed `tools/koka-corpus.rkt` scorer plus
+  `racklr-test/koka-fixtures/` and `koka-real-world-test.rkt` measure the front
+  end over a real checkout; on koka-lang/koka 3.3.0 dev (1144 `.kk` files) the
+  full absorb -> emit -> re-parse battery goes from 12/1144 `ok` to 1031/1144
+  and parse-only coverage from 12/1144 to 1035/1144, with no tokenizer or
+  lowering failures. Remaining limits and the before/after taxonomy are
+  recorded in `docs/koka-real-world-battery.md` and the loss model in
+  `docs/plans/koka-pipeline.md`.
 
 - Stable site origins for effect-edge provenance (nc-4A19):
   `racklr/effects/origin.rkt` defines `prov-origin` — file, owner, structural

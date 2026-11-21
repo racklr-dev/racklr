@@ -20,7 +20,7 @@
          (prefix-in ts: racklr/lower-typescript))
 
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define (ts->uir source)
   (ts:lower-program (ts-parse source) ts-tok-type ts-tok-value))

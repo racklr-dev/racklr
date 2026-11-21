@@ -16,8 +16,8 @@ Two diagnostics can count unknowns, and they disagree by an order of magnitude:
 - **Real context** (`tools/unknown-census.rkt`): builds the module table,
   export graph, derived `Class.method` capabilities, type relations, and MRO,
   then runs the whole-program effect fixpoint (`infer-effects-all`). Only sites
-  the real context cannot resolve are counted: 215 call sites on the same
-  corpus at the same revision.
+  the real context cannot resolve are counted: 202 call sites on the same
+  corpus at the current revision.
 
 The empty-context number overcounts the surface and cannot aim work; a lever
 chosen against it would be chosen against phantoms. This census is the real
@@ -43,9 +43,12 @@ Options:
 - `--sites` — print per-site lines
 - `--tsv PATH` — write the deterministic per-site TSV
 
-The tool derives each corpus root's dotted package name by walking the
-`__init__.py` chain (`django/django` -> `django`), so module paths match the
-import sources in the scanned files.
+A module's dotted name comes from its PACKAGE CHAIN, not from the scan root:
+`path->module-path` walks the `__init__.py` chain up from each file, so a
+repository checkout whose package lives under `src/` (`…/flask/src/flask/app.py`)
+resolves as `flask.app` and the corpus's own imports resolve, while a scan root
+that is itself a package directory (`django/django/core`) keeps the historical
+dotted name (`django.core…`) and the pinned Django baseline is unchanged.
 
 ## The lever taxonomy
 
@@ -96,26 +99,32 @@ TSV fields are **space-normalized, not escaped**: every control character in a
 field (tab, newline, carriage return, ...) is replaced by a space. The file is
 a diff artifact, not a lossless serialization of arbitrary identifiers.
 
-## Baseline (observed 2026-11-01, racklr `11eb4a2` + this change)
+## Baseline (observed 2026-11-02, racklr `ddb2915` + this change)
 
-`django/django/core`:
+The last increment is the module-receiver `drg-module` change (memcache /
+redis client handles and their methods, plus the `**kwargs` lowering). Its
+measurement is below; the numbers before it were 305 sites / 292 functions /
+73 files on the core probe and 4947 / 4000 / 478 on the full package.
+
+`django/django/core` (the pinned baseline probe):
 
 ```
 files scanned: 112   parsed: 112   failed: 0
 functions: 979 (in 101 files with inferred functions)
-unknown call sites: 215   unknown functions: 236   unknown files: 65
+unknown call sites: 202   unknown functions: 223   unknown files: 62
+(this change: 305 -> 202 call sites, 292 -> 223 functions, 73 -> 62 files)
 
-receiver shapes: local 63, bare-call 53, param 36, self-attr 23,
-                 chained 18, call-result 11, self-method 11
-local binding kinds (of 63): call-result 32, loop-var 12, attr 10,
+receiver shapes: bare-call 59, local 59, param 32, self-attr 23,
+                 chained 13, call-result 10, self-method 6
+local binding kinds (of 59): call-result 28, loop-var 12, attr 10,
                  literal 6, comp-var 2, unbound 1
 
 levers:
-  return-type-projection   55   parameter-dataflow       36
-  self-attr-typing         23   element-type-dataflow    22
-  multi-level-chain        18   attribute-alias-typing   15
-  higher-order-row-hole    15   mro-edge-resolution      11
-  literal-constructor-typing 10 bare-call-lexicon         9
+  return-type-projection    50   parameter-dataflow        32
+  self-attr-typing          23   element-type-dataflow     22
+  bare-call-lexicon         16   higher-order-row-hole     15
+  attribute-alias-typing    14   multi-level-chain         13
+  literal-constructor-typing 10  mro-edge-resolution        6
   unbound-binding-resolution 1
 ```
 
@@ -124,42 +133,75 @@ levers:
 ```
 files scanned: 907   parsed: 907   failed: 0
 functions: 9503 (in 570 files with inferred functions)
-unknown call sites: 3911   unknown functions: 3612   unknown files: 449
-
-receiver shapes: local 1108, param 733, self-attr 639, bare-call 503,
-                 chained 327, call-result 312, self-method 285, other 4
-local binding kinds (of 1108): call-result 437, unbound 231, loop-var 192,
-                 attr 155, comp-var 59, literal 21, exception 9, alias 4
-
-levers:
-  return-type-projection    811    parameter-dataflow        733
-  self-attr-typing          639    multi-level-chain         327
-  bare-call-lexicon         299    mro-edge-resolution       285
-  element-type-dataflow     272    unbound-binding-resolution 231
-  attribute-alias-typing    226    higher-order-row-hole      41
-  literal-constructor-typing 34    exception-type-dataflow     9
-  unclassified                4
+unknown call sites: 3764   unknown functions: 3549   unknown files: 453
+(this change: 4947 -> 3764 call sites, 4000 -> 3549 functions,
+ 478 -> 453 files)
 ```
 
-One full-corpus run takes on the order of 8-15 min wall including parser
-generation (452-908 s observed on this machine) and peaks at ~275 MB RSS, so
-the census fits a small harness memory budget.
+What moved, and what did not:
 
-The independently pinned `effervesce/tools/unknown-shapes.rkt` reports the
-same 215 sites / 236 functions / 65 files and the same shape histogram on
-`django/django/core`, and the same 3911 / 3612 / 449 and the same shape and
-local-binding-kind histograms on `django/django`, so the census agrees with
-the diagnostic already used by the loop.
+- The dominant family was the `**expr` argument/dict-unpack encoding
+  (`kw-spread`), which the lowerer emits as a synthetic call node. Once the
+  dialect declares it a synthetic callee (a language construct, not a
+  runtime-dispatched call) the encoding stops counting as an unknown site:
+  100 of the 103 removed core sites (1180 full-package rows) are `kw-spread`.
+  This is also the ticket's "memcached kwargs chain": `self._class(..., **options)`
+  in the memcache backends and `_pool_options = {..., **options}` in redis.
+- The remaining 3 core sites are the module-receiver projections:
+  `(self._lib.DriverInfo).add_upstream_driver` (module → class-ref DATA →
+  pure `DriverInfo` method table) and `pipeline.expire` / `pipeline.mset`
+  (`Redis.pipeline` result projection to the `Pipeline` cache type).
+- The type-graph receiver alphabet moves `db` (core 165 -> 164 functions)
+  because `RedisCacheClient`'s spurious `db` class capability and
+  `RedisCacheClient.set_many`'s `db` entry are gone (the full-package graph now
+  records db 4514 functions / 365 files). **`cache` does not rise** (core
+  143 functions / 8 files, unchanged; the full-package graph records
+  147 / 12): earlier increments had already classified these methods `cache`,
+  so this change removes the `unknown` and the bogus `db` rather than
+  re-classifying a non-cache row.
+- The full-package TSV diff is 1183 removed rows and **no added rows**: no
+  site gains `unknown`. The pinned-probe snapshot diff agrees: 70 changed
+  `fn-effect-row` atoms (69 lose `unknown`, 1 keeps an already-present
+  `unknown`), 11 file-level `unknown` links removed, and the only capability
+  diff is the removal of `(RedisCacheClient) db`. No row gained any effect.
+- Residual memcache/redis unknowns are exactly 4 core sites, all inside
+  `RedisCacheClient`: `self._pool_class.from_url` and `self._serializer.dumps`
+  / `loads`. Both attributes are OR-fallback defaults (`x or Default()`), so
+  an explicitly passed `pool_class` / `serializer` is a genuinely
+  caller-supplied receiver whose effects cannot be projected; they stay
+  fail-closed `unknown` rather than borrowing the default's type.
 
-The effect-graph gate is unchanged by this diagnostic. On
-`django/django/core`, `racket tools/baseline-check.rkt` reports
-`baseline COVERAGE-FAILED sha256:94fcb2b2b58254f4162c4ebf80bb3ee6876048d4c61e12b6e65c86f5d7d11263`:
-the graph **matches the pin** (the pass/fail half is green — no drift) while the
-Phase-0.3 unknown-elimination obligation is still open (236 unknown functions /
-65 unknown files, `<= 0` required). The census in this document is the aiming
-instrument for that open obligation, not a claim that it is discharged. The
-same run reports 112 parsed / 0 failed, 979 named functions, db 169/54,
-network 9/6, inherits 126, fn-effect-row 979.
+The pinned baseline is re-pinned deliberately to the new graph:
+`racket tools/baseline-check.rkt --update` -> `sha256:291dca50674fd1e45eb246e9cd794227d87ea7e21a39f6922d611ee8c6f6a1ed`
+(4704 -> 4692 atom lines, 112 files). The gate answers
+`baseline COVERAGE-FAILED sha256:291dca50…`: the graph matches the re-pinned
+snapshot (the pass/fail half is green) while the Phase-0.3 unknown-elimination
+obligation is still open (223 unknown functions / 62 unknown files, 3549 / 453
+on the full package, `<= 0` required). The census in this document is the
+aiming instrument for that open obligation, not a claim that it is discharged.
+
+### Remaining surface after this lever
+
+`bare-call-lexicon` falls from 116 to 16 core sites (1484 -> ~300 full
+package) now that the `kw-spread` lowering is no longer counted. The largest
+core families are `return-type-projection` (50), `parameter-dataflow` (32),
+`self-attr-typing` (23) and `element-type-dataflow` (22). Within
+`return-type-projection` the largest unresolved groups are `super().m()`
+results (out-of-corpus parent-method classification, not return projection),
+receiver-method returns limited by an unprojected receiver, imported/module
+result-type DATA entries, and function values. `parameter-dataflow` is largely
+outside call-chain reach: most of its sites have no statically visible
+in-corpus call site (framework/dispatch-invoked callbacks and protocol
+methods); the visible residual call sites pass locals/attributes, i.e.
+upstream dataflow.
+
+Two deliberate conservatisms: a method call projects only its most-derived
+dispatch key, so an unprojected override fails closed instead of inheriting a
+superclass projection, and the relation projection is not compositional
+through call-result receivers (`x = f().m()` is not projected in the relations;
+the classification-time receiver chain does handle `f().m()`). The
+`class-self-attrs` seed path keeps the older skip-missing corpus lookup
+(pre-existing).
 
 Re-run the two commands above to reproduce the numbers; a lever PR should
 update this block (or the committed baseline it points at) in the same change

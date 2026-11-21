@@ -13,7 +13,7 @@
          racklr/emit-javascript)
 
 (define-values (ts-parse ts-tokenize tok-type tok-value)
-  (gen-and-load-comments "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load-comments "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── helpers ─────────────────────────────────────────────────────────
 

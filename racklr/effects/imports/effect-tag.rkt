@@ -22,7 +22,7 @@
   (all-from-out racklr/effects/imports/effect-tag-types)
   effect-tag-config
   db-read-methods db-write-methods io-read-verbs io-write-verbs io-other-verbs
-  builtin-class-methods
+  domain-op-vocabulary builtin-class-methods
   resolve-effect-tag
   module-effect-tag
   handle-effect-domain
@@ -42,6 +42,7 @@
 (define io-read-verbs (lexicon-io-read-verbs default-lexicon))
 (define io-write-verbs (lexicon-io-write-verbs default-lexicon))
 (define io-other-verbs (lexicon-io-other-verbs default-lexicon))
+(define domain-op-vocabulary (lexicon-domain-op-vocabulary default-lexicon))
 (define builtin-class-methods (lexicon-builtin-class-methods default-lexicon))
 
 ;; An effect is a structured capability, not a bare category atom. It is a
@@ -86,12 +87,11 @@
   (module-effect-tag path config))
 
 ;; Dotted candidates for a call resolved through an import handle, most-specific
-;; first: the imported object's own path (package.obj), the called member's path
-;; (package.member — for module handles), and the bare package path. This is the
-;; re-export follow: `from django.utils import autoreload` synthesizes a handle
-;; whose path is the package (`django.utils`) but whose object actually lives in
-;; `django.utils.autoreload`; trying each candidate against the ordered DATA
-;; rules lets a specific submodule rule win without the engine knowing any name.
+;; first: the called member's path under the binding, the binding's own path,
+;; and — for a legacy fn handle whose path is the parent package and whose name
+;; is the member (`from django.utils import autoreload`) — the parent-relative
+;; candidates too. Trying each candidate against the ordered DATA rules lets a
+;; specific submodule rule win without the engine knowing any name.
 (define (dotted-candidates path name mname)
   (filter (λ (s) (and s (not (string=? s ""))))
           (list (and path name mname (string-append path "." name "." mname))
@@ -134,7 +134,14 @@
             [(set-member? (lexicon-io-other-verbs lex) mname)
              (list (typed-op domain cname mname))]
             [else '()])]
-    [else '()]))
+    ;; Any other domain is typed from the injected operation vocabulary (the
+    ;; network/process/cache/... verb tables), so a framework method resolves to
+    ;; a family-typed op instead of staying coarse. A domain with no vocabulary
+    ;; keeps the coarse () capability.
+    [else
+     (define vocab (hash-ref (lexicon-domain-op-vocabulary lex) domain #f))
+     (define op (and vocab (hash-ref vocab mname #f)))
+     (if op (list (typed-op domain cname op)) '())]))
 
 ;; Derive Class.method → effect-cap for every class in a tagged module. Pure
 ;; modules (domain 'pure) and untagged modules contribute nothing; methods

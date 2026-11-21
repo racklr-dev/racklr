@@ -56,7 +56,12 @@
    "__withEffects"
    ;; JS literal receiver types are not modeled yet (no String/Array type
    ;; tables in this lexicon).
-   (hash)))
+   (hash)
+   ;; Callees/statements that always transfer control out of the block:
+   ;; `throw` does not return; `break`/`continue` leave the loop body.
+   (set "throw" "break" "continue")
+   ;; Short-circuit boolean operators: the right operand runs conditionally.
+   (set "&&" "||" "??")))
 
 ;; ── token tables ────────────────────────────────────────────────────
 (define javascript-lexicon
@@ -201,6 +206,9 @@
    (set "read" "readFile" "readFileSync" "readdir" "readdirSync")
    (set "write" "writeFile" "writeFileSync" "appendFile" "appendFileSync")
    (set "close" "flush" "seek" "tell")
+   ;; other-domain operation vocabulary: the JS host types only io/network
+   ;; roots by name for now, so it supplies no method→op tables
+   (hash)
    ;; builtin receiver method tables
    (hash
     "Array" (set "push" "pop" "shift" "unshift" "slice" "splice" "concat"

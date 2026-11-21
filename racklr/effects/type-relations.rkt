@@ -13,11 +13,13 @@
 ;;   return    : (comp . fn)         -> class
 ;;
 ;; `materialize-type-relations` seeds the syntax-visible self-attr relation
-;; (class fields + `self.attr = ...` in method bodies). `close-type-relations!`
-;; then runs the deterministic join: a monotone fixpoint that closes assign,
-;; self-attr, param and return over the whole program. Iteration is over sorted
-;; keys and every fold is a strict single-class fold, so the fixed point does
-;; not depend on hash iteration order.
+;; (class fields + `self.attr = ...` in method bodies); `close-type-relations!`
+;; closes the four relations deterministically (sorted keys, single-class folds).
+;;
+;; The single-class projection is not monotone, so the relations can oscillate.
+;; `type-relations-widen.rkt` detects a repeated full state and widens exactly
+;; the entries that moved in the cycle to unresolved, then freezes them; a
+;; converging input never widens. Each widening prints a diagnostic line.
 
 (require racklr/uir
          racklr/effects/class-resolve
@@ -25,8 +27,10 @@
          racklr/effects/walk
          racklr/effects/shape
          racklr/effects/receiver-type
+         racklr/effects/return-type
          racklr/effects/library-tokens
          racklr/effects/library-stdlib-types
+         racklr/effects/type-relations-widen
          racklr/effects/imports
          racklr/effects/lexicon)
 
@@ -52,9 +56,8 @@
 (define (key<? a b)
   (string<? (format "~a.~a" (car a) (cdr a)) (format "~a.~a" (car b) (cdr b))))
 
-;; Class name of a class-body field initializer (`attr = KnownClass` /
-;; `attr = KnownClass(...)`); #f when the initializer does not name a known
-;; class. (was field-init-class in whole-program.rkt)
+;; Class name of a class-body field initializer (`attr = KnownClass`), #f when
+;; the initializer does not name a known class. (was field-init-class.)
 (define (field-class init class-defs import-env comp [tokens default-effect-tokens])
   (cond
     [(bare-class-value init class-defs tokens import-env comp)]
@@ -269,10 +272,8 @@
                   (make-hash)
                   seed-safn))
 
-;; Deterministic join: close assign / self-attr / param / return to a fixed
-;; point. Each round recomputes all four relations from the current others;
-;; sorted key iteration + strict single-class folds make the result
-;; independent of hash order. Terminates by construction up to a cap.
+;; Deterministic join of assign/self-attr/param/return; see
+;; type-relations-widen.rkt for the widening that guarantees termination.
 (define (close-type-relations! tr
                                #:comp-programs comp-programs
                                #:class-defs class-defs
@@ -288,7 +289,15 @@
                                #:declared-returns [declared-returns #f]
                                #:element-types [element-types #f]
                                #:param-element-types [param-element-types #f]
-                               #:tokens [tokens default-effect-tokens])
+                               #:tokens [tokens default-effect-tokens]
+                               ;; #:max-rounds is a diagnostic budget only (#f =
+                               ;; no budget): #:widen? proves termination.
+                               #:max-rounds [max-rounds #f]
+                               ;; #:widen? #f is diagnosis-only (raw iteration).
+                               #:widen? [widen? #t]
+                               ;; Optional box: (list count by-rel) per widening.
+                               #:widening-report [widening-report #f]
+                               #:trace? [trace? (and (getenv "TYPE_RELATIONS_TRACE") #t)])
   ;; Declared tables default to the library-stdlib-types DATA, the same way the
   ;; reference architecture did; an explicit #:declared-* arg (a caller-injected
   ;; lexicon) overrides it, so a non-Python host supplies its own instead of
@@ -399,10 +408,8 @@
               (hash))))
       (define rt (infer-receiver-types (body-of k) class-defs base-attrs import-env comp
                                        (seed-params (params-of k) k param) owner
-                                       #:tokens tokens
-                                       #:return-types return
-                                       #:methods methods
-                                       #:fn-defs fn-defs
+                                       #:tokens tokens #:return-types return
+                                       #:methods methods #:fn-defs fn-defs
                                        #:known known
                                        #:comp-supers comp-supers
                                        #:element-types element-types*
@@ -429,11 +436,16 @@
       (define comp (car k))
       (define owner (owner-of k))
       (define rt (rt-of k))
-      (define (arg-class a) (value-class-of a rt class-defs tokens import-env comp owner))
+      ;; A call argument projects through the shared call-result rule.
+      (define (arg-class a)
+        (or (and (uir-call? a) return
+                 (call-result-return-class (uir-call-callee a) comp class-defs
+                                           owner rt methods fn-defs known
+                                           comp-supers return tokens import-env))
+            (value-class-of a rt class-defs tokens import-env comp owner)))
       ;; Split a call's argument list into positional values and keyword
-      ;; bindings (name-symbol . value). A keyword argument is lowered as
-      ;; (call "kwarg" (list (var name) value)); anything else is positional
-      ;; (`*`/`**` spread included, matching the previous index-based walk).
+      ;; bindings (name-symbol . value); anything else is positional (`*`/`**`
+      ;; spread included, matching the previous index-based walk).
       (define (split-args args)
         (define positional '())
         (define kwargs '())
@@ -490,8 +502,9 @@
              (note-positional! fk 0 positional)
              (note-kwargs! fk kwargs)]
             [else
-             (define mks (method-callee-keys callee comp owner methods class-defs
-                                             comp-supers tokens))
+             ;; Syntactic keys plus the receiver-type-dataflow half.
+             (define mks (call-target-keys callee comp owner rt methods class-defs
+                                           comp-supers tokens))
              (cond
                [(pair? mks)
                 (define offset (tokens-method-receiver-offset tokens))
@@ -566,12 +579,14 @@
            (if (and (pair? defs) (> (length defs) 1)) #f r))))
 
   (define (collect-returns!)
+    ;; Snapshot the previous round so every key reads one relation (simultaneous update).
+    (define prev-return (hash-copy return))
     (for ([k (in-list all-keys)])
       (define comp (car k))
       (define owner (owner-of k))
       (define r (return-class-of (body-of k) (rt-of k) class-defs
                                  tokens import-env comp owner
-                                 #:return-types return
+                                 #:return-types prev-return
                                  #:methods methods
                                  #:fn-defs fn-defs
                                  #:known known
@@ -579,29 +594,25 @@
       (hash-set! return k (or (usable-return-class r) (declared-return-of k))))
     (set-type-relations-return! tr return))
 
-  (let loop ([round 0])
-    (define prev-assign (hash-copy assign))
-    (define prev-self-attr (hash-copy self-attr))
-    (define prev-param (hash-copy param))
-    (define prev-return (hash-copy return))
-    (define prev-elem-specs (hash-copy elem-specs))
-    (rebuild-self-attrs!)
-    (rebuild-assign!)
-    (set! param (collect-params!))
-    ;; Declared fallback fills only call-chain gaps (call-chain evidence wins).
-    (set! param (seed-declared-params param all-keys params-of import-env
-                                     declared-params*))
-    (set-type-relations-param! tr param)
-    (collect-returns!)
-    (set! return (type-relations-return tr))
-    (cond
-      [(and (equal? prev-assign assign)
-            (equal? prev-self-attr self-attr)
-            (equal? prev-param param)
-            (equal? prev-return return)
-            (equal? prev-elem-specs elem-specs))
-       tr]
-      [(>= round 100)
-       (eprintf "type-relations: join did not converge in ~a rounds\n" round)
-       tr]
-      [else (loop (add1 round))])))
+  (define-values (assign* self-attr* param* return*)
+    (run-join!
+     (λ ()
+       (rebuild-self-attrs!)
+       (rebuild-assign!)
+       (set! param (collect-params!))
+       ;; Declared fallback fills only call-chain gaps (call-chain evidence wins).
+       (set! param (seed-declared-params param all-keys params-of import-env
+                                        declared-params*))
+       (set-type-relations-param! tr param)
+       (collect-returns!)
+       (set! return (type-relations-return tr))
+       (values assign self-attr param return))
+     #:max-rounds max-rounds
+     #:widen? widen?
+     #:trace? trace?
+     #:widening-report widening-report))
+  (set-type-relations-assign! tr assign*)
+  (set-type-relations-self-attr! tr self-attr*)
+  (set-type-relations-param! tr param*)
+  (set-type-relations-return! tr return*)
+  tr)

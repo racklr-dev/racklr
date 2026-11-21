@@ -3,7 +3,8 @@
 (require racklr/tree
          racklr/uir
          "helpers.rkt"
-         "expr.rkt")
+         "expr.rkt"
+         "pattern.rkt")
 
 (provide lower-program)
 
@@ -112,10 +113,6 @@
   (define assignable (find-kid node 'assignable))
   (define ident-node
     (and assignable (find-kid assignable 'identifier)))
-  (define var-name
-    (if ident-node
-        (uir-symbol (tk-value (first (kids-of ident-node))))
-        (uir-symbol "?")))
   (define group (find-kid node 'group))
   (define rhs
     (if group
@@ -124,9 +121,19 @@
               (lower-single-expression se tk-type tk-value)
               (uir-null)))
         (uir-null)))
-  (if (uir-null? rhs)
-      (uir-var var-name)
-      (uir-set! var-name rhs)))
+  (cond
+    [ident-node
+     (define var-name (uir-symbol (tk-value (first (kids-of ident-node)))))
+     (if (uir-null? rhs)
+         (uir-var var-name)
+         (uir-set! var-name rhs))]
+    [assignable
+     ;; Destructuring declaration: `const {a, b: c = 1} = o`, `let [x, y]`.
+     (define pattern (lower-binding-pattern assignable tk-type tk-value))
+     (if (and pattern (not (uir-null? rhs)))
+         (uir-set! pattern rhs)
+         (uir-null))]
+    [else (uir-null)]))
 
 (define (lower-fn-decl node tk-type tk-value)
   (define kids (kids-of node))
@@ -158,23 +165,19 @@
   (if se (lower-source-elements se tk-type tk-value) (uir-block '())))
 
 (define (lower-formal-params fpl tk-type tk-value)
-  (define params '())
-  (define (extract-param k)
+  (define (param-name k)
     (define assignable (find-kid k 'assignable))
-    (when assignable
-      (define ident (find-kid assignable 'identifier))
-      (when ident
-        (set! params (cons (uir-symbol (tk-value (first (kids-of ident)))) params)))))
-  (let loop ([ks (kids-of fpl)])
-    (cond [(null? ks) (void)]
-          [(and (cst-node? (car ks)) (eq? (tag-of (car ks)) 'formalParameterArg))
-           (extract-param (car ks)) (loop (cdr ks))]
-          [(pair? (car ks))
-           (for ([g (car ks)] #:when (cst-node? g))
-             (when (eq? (tag-of g) 'formalParameterArg) (extract-param g)))
-           (loop (cdr ks))]
-          [else (loop (cdr ks))]))
-  (reverse params))
+    (define ident (and assignable (find-kid assignable 'identifier)))
+    (and ident (uir-symbol (tk-value (first (kids-of ident))))))
+  (define (rest-param k)
+    (define se (find-kid k 'singleExpression))
+    (define ident (and se (find-kid se 'identifier)))
+    (if ident
+        (uir-spread (uir-symbol (tk-value (first (kids-of ident)))))
+        (uir-spread (if se (lower-single-expression se tk-type tk-value) (uir-null)))))
+  (append
+   (filter-map param-name (rule-elements fpl 'formalParameterArg))
+   (filter-map rest-param (rule-elements fpl 'lastFormalParameterArg))))
 
 (define (lower-return-stmt node tk-type tk-value)
   (define grp (find-kid node 'group))
@@ -190,14 +193,21 @@
             (uir-null)))
       (uir-null)))
 
+;; A statement-if is a uir-if whose branches are statements. The emitter tells
+;; a statement-if from an expression ternary by block wrapping (a ternary's
+;; branches are expressions), so every statement branch is wrapped: emitting
+;; `test ? return x : null` instead of `if (test) { return x; }` is invalid JS.
+(define (statement-branch uir)
+  (if (uir-block? uir) uir (uir-block (list uir))))
+
 (define (lower-if-stmt node tk-type tk-value)
   (define kids (kids-of node))
   (define test (lower-expression-sequence (third kids) tk-type tk-value))
-  (define consequent (lower-statement (fifth kids) tk-type tk-value))
+  (define consequent (statement-branch (lower-statement (fifth kids) tk-type tk-value)))
   (define group (find-kid node 'group))
   (define alternate
     (if group
-        (lower-statement (second (kids-of group)) tk-type tk-value)
+        (statement-branch (lower-statement (second (kids-of group)) tk-type tk-value))
         (uir-null)))
   (uir-if test consequent alternate))
 
@@ -211,12 +221,14 @@
   (define group (find-kid node 'group))
   (define catch-var (uir-null))
   (define catch-body (uir-null))
+  (define catch-present? #f)
   (define finally-body (uir-null))
   (when group
     (for ([k (kids-of group)])
       (when (cst-node? k)
         (case (tag-of k)
           [(catchProduction)
+           (set! catch-present? #t)
            (define catch-group (find-kid k 'group))
            (when catch-group
              (define assignable (find-kid catch-group 'assignable))
@@ -227,6 +239,10 @@
            (set! catch-body (lower-block (find-kid k 'block) tk-type tk-value))]
           [(finallyProduction)
            (set! finally-body (lower-block (find-kid k 'block) tk-type tk-value))]))))
+  ;; An empty catch body lowers to uir-null; keep an empty block instead so the
+  ;; emitter knows the catch clause exists (a `try` needs catch or finally).
+  (when (and catch-present? (uir-null? catch-body))
+    (set! catch-body (uir-block '())))
   (uir-call (uir-symbol "try") (list try-body catch-var catch-body finally-body)))
 
 (define (lower-class-decl node tk-type tk-value)
@@ -301,7 +317,7 @@
             (define left-expr
               (if (cst-node? k2)
                   (case (tag-of k2)
-                    [(group) (lower-for-var k2 tk-type tk-value)]
+                    [(group) (or (lower-for-var k2 tk-type tk-value) (uir-null))]
                     [(expressionSequence) (lower-expression-sequence k2 tk-type tk-value)]
                     [else (uir-null)])
                   (uir-null)))
@@ -316,7 +332,7 @@
             (define left-expr
               (if (cst-node? lk)
                   (case (tag-of lk)
-                    [(group) (lower-for-var lk tk-type tk-value)]
+                    [(group) (or (lower-for-var lk tk-type tk-value) (uir-null))]
                     [(expressionSequence) (lower-expression-sequence lk tk-type tk-value)]
                     [else (uir-null)])
                   (uir-null)))
@@ -333,18 +349,22 @@
     [else (uir-null)]))
 
 (define (lower-for-var group-node tk-type tk-value)
-  ;; Extract variable name from a for-in/for-of group containing singleVariableDeclaration
+  ;; Extract the binding from a for-in/for-of group containing
+  ;; singleVariableDeclaration: an identifier or a destructuring pattern, with
+  ;; the declaration kind (var/let/const) preserved so the emitted loop keeps
+  ;; its binding kind and re-lowers to the same structure.
   (define svd (find-kid group-node 'singleVariableDeclaration))
-  (if svd
-      (let ([vd (find-kid svd 'variableDeclaration)])
-        (if vd
-            (let ([assignable (find-kid vd 'assignable)])
-              (define ident (and assignable (find-kid assignable 'identifier)))
-              (if ident
-                  (uir-var (uir-symbol (tk-value (first (kids-of ident)))))
-                  (uir-symbol "?")))
-            (uir-symbol "?")))
-      (uir-symbol "?")))
+  (and svd
+       (let ([vd (find-kid svd 'variableDeclaration)])
+         (and vd
+              (let* ([assignable (find-kid vd 'assignable)]
+                     [vm (find-kid svd 'varModifier)]
+                     [kind (uir-symbol (if vm (extract-var-kind vm tk-type) "var"))]
+                     [ident (and assignable (find-kid assignable 'identifier))]
+                     [target (or (and ident (uir-symbol (tk-value (first (kids-of ident)))))
+                                 (and assignable (lower-binding-pattern assignable tk-type tk-value)))])
+                (and target
+                     (uir-call (uir-symbol "for-binding") (list kind target))))))))
 
 ;; ── ES Modules (import/export) ───────────────────────────────────────
 

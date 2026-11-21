@@ -123,6 +123,13 @@
 ;; round trip is compared on runtime structure; the model's `types` rule
 ;; records that the erasure is intentional.
 (define (erase-js-types x)
+  ;; An erased declaration is a statement-level record the emitter documents as
+  ;; a comment. It contributes no runtime structure, so the comparison drops it
+  ;; entirely instead of leaving a null in its place.
+  (define (erased-type-decl-node? n)
+    (and (list-tag? n 'call)
+         (list-tag? (cadr n) 'symbol)
+         (equal? (sym-name (cadr n)) "erased-type-decl")))
   (define (erase-param p)
     (cond [(typed-param-node? p)
            ;; Erase only the type slot: a default value and any parameter-kind
@@ -137,6 +144,12 @@
      (fn-node-map x #:params (λ (ps) (map erase-param ps))
                     #:body erase-js-types
                     #:ret (λ (_) #f))]
+    [(list-tag? x 'block)
+     (list* 'block
+            (for/list ([s (in-list (cadr x))] #:unless (erased-type-decl-node? s))
+              (erase-js-types s))
+            (drop x 2))]
+    [(erased-type-decl-node? x) '(null)]
     [(list-tag? x 'interface) '(null)]
     [(list-tag? x 'enum) '(null)]
     [(list-tag? x 'type-alias) '(null)]

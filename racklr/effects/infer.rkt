@@ -34,6 +34,7 @@
          racklr/effects/effect-roots
          racklr/effects/collect
          racklr/effects/rows
+         racklr/effects/invocation-row
          racklr/effects/classify
          racklr/effects/labels
          racklr/effects/provenance
@@ -84,7 +85,11 @@
                              #:lexicon [lex default-lexicon]
                              #:source-file [source-file #f])
   (define tokens (lexicon-tokens lex))
-  (define direct-rows (make-hash))  ;; name → algebra-row (direct entries only)
+  (define bodies (make-hash))       ;; name → body
+  ;; Per-function classification table, keyed by call-node identity: the body
+  ;; evaluator recomposes the row from these classifications each fixpoint
+  ;; round without re-running the classifier.
+  (define class-tables (make-hash)) ;; name → (eq-hash call-node → classification)
   (define edges (make-hash))        ;; name → (listof name-symbol)
   (define direct-prov (and prov-box (make-hash)))  ;; name → hash effect → sites
   (define prov (and rec-box (make-provenance)))
@@ -103,7 +108,7 @@
     ;; so its implicit receiver (self/cls/this) dispatches through that class.
     (define owner (or (owner-of-name methods n)
                       (fn-owner-class n (λ (x) (hash-ref fn-parents x #f)))))
-    (define effects '())
+    (define class-table (make-hash))
     (define callees '())
     ;; The stable positional discriminator of a site: the ordinal of the call
     ;; node in this body's pre-order walk. It resets per function, is derived
@@ -118,6 +123,7 @@
                 [cls (classify-call callee known owner class-names supers
                                     #:lexicon lex)]
                 [site (callee-site-string callee)])
+           (hash-set! class-table node cls)
            (case (car cls)
              [(edge)
               (set! callees (cons (cdr cls) callees))
@@ -130,10 +136,10 @@
                                                                    #:file source-file
                                                                    #:position position))))]
              [(effect)
-              ;; (cdr cls) is the effect-name symbol (effects->row builds the
-              ;; entry), so it keys both provenance views directly.
+              ;; (cdr cls) keys both provenance views: the classifier's effect
+              ;; payload (a typed capability or a domain symbol) and, for the
+              ;; legacy table, the rendered call-site string.
               (define e (cdr cls))
-              (set! effects (cons e effects))
               (when direct-prov
                 (sites-add! (hash-ref! direct-prov n make-hash) e site))
               (when prov
@@ -143,7 +149,6 @@
                                                           #:position position)))]
              [(pure) (void)]
              [(unknown)
-              (set! effects (cons 'unknown effects))
               (when direct-prov
                 (sites-add! (hash-ref! direct-prov n make-hash) 'unknown site))
               (when prov
@@ -161,15 +166,22 @@
                                                           #:position position)))]))]
         [else (void)]))
     (walk-body body visit!)
-    (hash-set! direct-rows n (effects->algebra-row effects))
+    (hash-set! bodies n body)
+    (hash-set! class-tables n class-table)
     (hash-set! edges n (sort (remove-duplicates callees) symbol<?)))
 
-  ;; The fixpoint is the algebra's: iterate `join` (the least upper bound over
-  ;; rows) from the direct rows until the table stops changing. This is exactly
-  ;; the implicit union the pass used to fold by hand, now the algebra's
-  ;; monotone operation, so the result is the least fixed point over the call
-  ;; graph and inference results are unchanged.
-  (define rows (alg:least-fixpoint direct-rows edges))
+  ;; The row fixpoint: recompose every body from its classified call sites and
+  ;; its callees' current rows until the table is stable. The evaluator owns the
+  ;; control-flow composition (sequence/choose/repeatable) and the SCC widening
+  ;; that keeps budgets finite; single-file and whole-program inference share it.
+  (define rows
+    (inference-rows (sort all-names symbol<?)
+                    (λ (n) (hash-ref bodies n))
+                    (λ (n)
+                      (define table (hash-ref class-tables n))
+                      (λ (node) (hash-ref table node (cons 'unknown #f))))
+                    #:tokens tokens
+                    #:known-class? (λ (s) (hash-has-key? class-names s))))
 
   ;; Legacy table: a second monotone fixpoint over the rendered call-site
   ;; strings, independent of the rows. A propagated entry keeps the callee's
@@ -249,10 +261,20 @@
   ;; ("could not verify"), not a runtime effect, and the runtime guards reject
   ;; the 'unknown modality. So it is dropped here; an all-unknown row becomes
   ;; empty and the function stays unannotated.
+  ;;
+  ;; An inferred `must` is an analysis fact (every path performs the effect),
+  ;; not a runtime obligation to enforce: a caller-installed handler may
+  ;; legitimately interpret or supply the effect, so the emitted guard treats
+  ;; the inference as a permission (`may`) and keeps its budget/ops/scope.
+  ;; Hand-written rows are never rewritten by this pass, so their modality is
+  ;; preserved.
   (define (concrete-row r)
     (uir-effect-row
-     (filter (λ (e) (not (eq? (effect-name-symbol e) 'unknown)))
-             (uir-effect-row-entries r))))
+     (for/list ([e (in-list (uir-effect-row-entries r))]
+                #:unless (eq? (effect-name-symbol e) 'unknown))
+       (if (eq? (uir-effect-entry-modality e) 'must)
+           (struct-copy uir-effect-entry e [modality 'may])
+           e))))
   ;; The concrete (runtime-guardable) inferred row for a named function, or #f
   ;; when there is nothing to emit (no inference, an empty row, or an
   ;; all-'unknown row).

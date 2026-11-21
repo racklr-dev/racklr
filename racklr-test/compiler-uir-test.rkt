@@ -198,14 +198,14 @@
 (for ([(k row) (in-hash ROWS)])
   (for ([e (in-list (uir-effect-row-entries row))])
     (set! entry-count (add1 entry-count))
-    (if (memq (uir-effect-entry-modality e) '(unknown may))
+    (if (memq (uir-effect-entry-modality e) '(unknown may must))
         (void)
         (set! bad-modalities (add1 bad-modalities)))
     (if (uir-symbol? (uir-effect-entry-name e))
         (void)
         (set! bad-entry-names (add1 bad-entry-names)))))
 
-(check-true! "every row entry has a tracked modality ('unknown or 'may)"
+(check-true! "every row entry has a tracked modality ('unknown, 'may or 'must)"
              (zero? bad-modalities))
 (check-true! "every row entry names its effect with a uir-symbol"
              (zero? bad-entry-names))

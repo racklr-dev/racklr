@@ -21,6 +21,7 @@
          racklr/effects/effect-roots
          racklr/effects/receiver-assign
          racklr/effects/receiver-element
+         racklr/effects/receiver-module
          racklr/effects/type-projection
          racklr/effects/lexicon)
 
@@ -35,7 +36,6 @@
   imported-fn-result-type
   call-result-type
   value-class-of
-  return-class-of
   corpus-projected-value-class
   dynamic-class-marker dynamic-class-marker?
   class-union-marker class-union-marker?
@@ -80,14 +80,6 @@
          (and (set-member? (effect-tokens-pure-stdlib-bare-names tokens) s)
               (or (set-member? (effect-tokens-builtin-type-roots tokens) s)
                   (hash-has-key? (effect-tokens-stdlib-type-methods tokens) s))))))
-
-;; A receiver value is a MODULE (not a class) when its name names an external
-;; module in the receiver-modules token table (pylibmc / pymemcache / memcache /
-;; redis). Module receivers resolve their method calls to the module's effect
-;; domain in classify-all, keeping engine code free of library names.
-(define (module-receiver? nm [tokens default-effect-tokens])
-  (and nm (hash-has-key? (effect-tokens-receiver-modules tokens)
-                         (symbol->string nm))))
 
 ;; Class name (symbol) tracked for a receiver expression `base`, or #f. `base`
 ;; is either a local variable (`qs`), a `self`/`cls` attribute (`self.cursor`),
@@ -323,6 +315,15 @@
         (and nm comp import-env (imported-class-ref nm comp import-env)))
       (let ([nm (callee-name callee)])
         (and nm comp import-env (imported-fn-result-type nm comp import-env tokens)))
+      ;; A module-qualified CLASS value constructed through a tracked module
+      ;; receiver (`self._lib.DriverInfo(...)` where `self._lib = redis`): the
+      ;; module-class-ref table names the constructed class, whose method table
+      ;; (stdlib-type-methods-data) then classifies the calls on the result.
+      (and rt (member-access-callee? callee)
+           (let* ([base (member-access-base callee)]
+                  [attr (member-access-field callee)])
+             (module-class-ref-type (and base (receiver-class-of rt base tokens))
+                                    attr tokens)))
       (method-result-type callee
                           (λ (base)
                             (or (receiver-class-of rt base tokens)
@@ -504,13 +505,12 @@
           ;; resolve to the module-qualified class marker (pylibmc.Client),
           ;; whose domain is the module's domain in classify-all.
           [else
-           (define bm (receiver-class-of rt (uir-get-base value)))
+           (define bm (receiver-class-of rt (uir-get-base value) tokens))
            (cond
              ;; `module.Class` where `module` is an imported module handle:
              ;; the class table names the attribute (smtplib.SMTP → SMTP).
              [(imported-module-class-ref value comp import-env tokens)]
-          [(and attr bm (module-receiver? bm tokens))
-           (string->symbol (format "~a.~a" bm attr))]
+          [(module-receiver-attr-type bm attr tokens)]
              ;; A tracked framework class's attribute VALUE type
              ;; (`response.cookies` -> SimpleCookie, `connection.ops` ->
              ;; DatabaseOperations): the DATA table names a sub-handle the
@@ -557,7 +557,7 @@
 ;; the fixpoint over declared + body-projected returns, so a method whose body
 ;; is `return self._root.resolve(...)` (InMemoryStorage._resolve) projects
 ;; InMemoryDirNode exactly as the assignment-tracking closure in
-;; infer-receiver-types does. Shared so return-class-of and the closure agree.
+;; infer-receiver-types does. Shared with the assignment-tracking closure below.
 (define (corpus-projected-value-class value rt class-defs owner return-types
                                       methods fn-defs known comp-supers
                                       [tokens default-effect-tokens]
@@ -575,25 +575,6 @@
                                   (value-class-of base rt class-defs tokens
                                                   import-env comp owner)))))
 
-(define (return-class-of body rt class-defs [tokens default-effect-tokens]
-                         [import-env #f] [comp #f] [owner #f]
-                         #:return-types [return-types #f]
-                         #:methods [methods #f]
-                         #:fn-defs [fn-defs #f]
-                         #:known [known #f]
-                         #:comp-supers [comp-supers #f])
-  (define classes '())
-  (walk-body body (λ (n)
-                    (when (uir-return? n)
-                      (define v (uir-return-value n))
-                      (define c (or (corpus-projected-value-class
-                                     v rt class-defs owner return-types methods
-                                     fn-defs known comp-supers tokens import-env comp)
-                                    (value-class-of v rt class-defs
-                                                    tokens import-env comp owner)))
-                      (when c (set! classes (cons c classes))))))
-  (define uniq (remove-duplicates classes))
-  (and (pair? uniq) (= (length uniq) 1) (car uniq)))
 
 ;; Build the receiver-type environment for one function body. Assignments are
 ;; processed in source (pre-order) order; `class-defs` is the set of known class

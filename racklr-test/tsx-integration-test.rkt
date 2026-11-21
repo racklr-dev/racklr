@@ -16,10 +16,10 @@
 
 ;; Load parsers
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (jsx-parse jsx-tokenize jsx-tok-type jsx-tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 (define (tsx->uir source)
   (define cleaned (preprocess-imports source))
@@ -303,7 +303,7 @@ export { App };"
 ;; lower-program so a JSDoc @effects row attaches to the declaration that
 ;; follows it, then emit-javascript renders the __withEffects guard.
 (define-values (ts-parse-c ts-tokenize-c ts-tok-type-c ts-tok-value-c)
-  (gen-and-load-comments "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load-comments "../grammars/typescript/TypeScriptParser.g4"))
 
 (define emit-pages-jsdoc
   (make-emit-pages-html ts-parse-c ts-tokenize-c ts-tok-type-c ts-tok-value-c
@@ -787,6 +787,57 @@ export default () => (<div><Head><title>My Custom Title</title></Head><p>Hello</
             }")])
   (check-true (string-contains? js "function Page") "B63d: type with semicolons lowers correctly")
   (check-true (string-contains? js "props.title") "B63d: props access works"))
+
+;; ── B112: ambient `declare module` declarations are erased ──────────
+;; The vendored TS grammar has no moduleDeclaration rule, so the usual body of
+;; a .d.ts file fails to parse. Ambient declarations have no runtime form, so
+;; preprocess-imports strips them before parsing.
+
+;; B112a: bare ambient module declaration (the reported remark-html.d.ts case)
+(let ([processed (preprocess-imports "declare module 'remark-html'")])
+  (check-false (string-contains? processed "declare")
+               "B112a: bare ambient module stripped")
+  (check-equal? (string-trim processed) "" "B112a: nothing else survives"))
+
+;; B112b: terminated declaration with surrounding runtime code
+(let ([processed (preprocess-imports
+                  "declare module 'remark-html';\nexport const x = 1;")])
+  (check-false (string-contains? processed "declare")
+               "B112b: terminated ambient module stripped")
+  (check-true (string-contains? processed "export const x = 1;")
+              "B112b: surrounding code kept"))
+
+;; B112c: ambient module with a body; code after the body must survive
+(let ([processed (preprocess-imports
+                  (string-append
+                   "declare module 'styled-components' {\n"
+                   "  export default function styled(tag: string): any;\n"
+                   "}\n"
+                   "export const x = 1;"))])
+  (check-false (string-contains? processed "declare")
+               "B112c: ambient module body stripped")
+  (check-true (string-contains? processed "export const x = 1;")
+              "B112c: code after the body kept"))
+
+;; B112d: declaration text inside comments and strings is not touched
+(let* ([source (string-append
+                "/*\n"
+                "declare module 'commented-out';\n"
+                "*/\n"
+                "const s = \"; declare module 'in-a-string';\";\n"
+                "export const x = 1;")]
+       [processed (preprocess-imports source)])
+  (check-equal? processed source
+                "B112d: comment/string occurrences of declare module left intact"))
+
+;; B112e: the reported .d.ts lowers and emits instead of throwing
+(define remark-html-dts
+  (build-path (current-directory) ".." "docs" "examples" "test-apps"
+              "blog-starter" "@types" "remark-html.d.ts"))
+(let* ([cleaned (preprocess-imports (file->string remark-html-dts))]
+       [cst (ts-parse cleaned)]
+       [js (emit-javascript (ts-lower:lower-program cst ts-tok-type ts-tok-value))])
+  (check-true (string? js) "B112e: remark-html.d.ts lowers to UIR and emits"))
 
 ;; ── B68: next/image <Image> → <img> with loading (eager/lazy) ───────
 

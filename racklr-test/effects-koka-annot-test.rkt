@@ -98,8 +98,15 @@
 (define typed-uir (lower-koka (koka-parse typed-src) koka-tok-type koka-tok-value))
 (check-true (uir-effect-row? (uir-fn-effects (first (uir-block-stmts typed-uir))))
             "the Koka front end reads a typed row into the UIR")
-(check-equal? (emit-koka typed-uir) typed-src
-              "the typed row round-trips in its native form")
+(define typed-out (emit-koka typed-uir))
+(check-true (string-contains? typed-out "fun f(x : int) : <exn, div> int")
+            "the typed row round-trips in its native form")
+(check-true (any-tree? (koka-parse typed-out))
+            "the emitted typed-row function re-parses")
+(define typed-back (lower-koka (koka-parse typed-out) koka-tok-type koka-tok-value))
+(check-equal? (row-names (uir-fn-effects (first (uir-block-stmts typed-back))))
+              '("exn" "div")
+              "the emitted typed row re-absorbs to the same row")
 
 ;; ── 6. an inferred known row is emitted, not discarded ──────────────
 

@@ -62,13 +62,13 @@
 (define py-mod-path (*last-module-path*))  ; capture before later loads overwrite it
 
 (define-values (js-parse js-tokenize js-tok-type js-tok-value)
-  (gen-and-load "../grammars-v4/javascript/javascript-cleaned/JavaScriptParser.g4"))
+  (gen-and-load "../grammars/javascript/JavaScriptParser.g4"))
 
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (jsx-parse jsx-tokenize jsx-tok-type jsx-tok-value)
-  (gen-and-load "../grammars-v4/javascript/jsx-cleaned/JSXParser.g4"))
+  (gen-and-load "../grammars/jsx/JSXParser.g4"))
 
 (define-values (clj-parse clj-tokenize clj-tok-type clj-tok-value)
   (gen-and-load "../grammars-v4/clojure/Clojure.g4"))
@@ -94,8 +94,8 @@
 (define (assert-parsed cst)
   (if (not cst) (error "parse returned #f") cst))
 
-(define (assert-emitted out #:allow-empty? [allow? #f])
-  (if (or (not (string? out)) (and (not allow?) (equal? out "")))
+(define (assert-emitted out)
+  (if (or (not (string? out)) (equal? out ""))
       (error "emit returned non-string or empty")
       out))
 
@@ -130,8 +130,9 @@
 
 (define (pipeline-ts src)
   (define uir (lower-ts-src src))
-  ;; A type-only module erases to empty JS, which is valid.
-  (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
+  ;; Type-only declarations have no runtime form, but the emitter documents
+  ;; each erased one as a comment, so no TypeScript module may emit empty.
+  (define out (assert-emitted (emit-javascript uir)))
   ;; one-way: emitted JS must re-parse as JavaScript
   (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
@@ -148,7 +149,8 @@
 
 (define (pipeline-tsx src)
   (define uir (tsx->uir src))
-  (define out (assert-emitted (emit-javascript uir) #:allow-empty? #t))
+  ;; As for TypeScript: erased type declarations are documented, never empty.
+  (define out (assert-emitted (emit-javascript uir)))
   (list uir out (lower-program (assert-parsed (js-parse out)) js-tok-type js-tok-value)))
 
 ;; ── Dispatch by extension ───────────────────────────────────────────

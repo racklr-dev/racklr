@@ -184,9 +184,10 @@
                    (body
                     (mcall (var "parts") "append" (list print-line))
                     (assign "i" (op "+" (list (var "i") (num 1))))))
-       ;; "\n".join(parts); the UIR string carries the two characters \ and n so
-       ;; the emitted Python source is a valid newline escape.
-       (ret (mcall (str "\\n") "join" (list (var "parts"))))))))
+       ;; "\n".join(parts); the UIR string holds the decoded content (one real
+       ;; newline character), which the Python emitter re-encodes as the escape
+       ;; `\n` in the generated source.
+       (ret (mcall (str "\n") "join" (list (var "parts"))))))))
 
 ;; ── compile_source: tokenize, parse every top-level form, emit ─────
 ;;

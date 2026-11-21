@@ -14,10 +14,10 @@
 ;; ── Load the TypeScript parser, with and without comment preservation ──
 
 (define-values (ts-parse ts-tokenize ts-tok-type ts-tok-value)
-  (gen-and-load "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load "../grammars/typescript/TypeScriptParser.g4"))
 
 (define-values (tsc-parse tsc-tokenize tsc-tok-type tsc-tok-value)
-  (gen-and-load-comments "../grammars-v4/javascript/typescript-cleaned/TypeScriptParser.g4"))
+  (gen-and-load-comments "../grammars/typescript/TypeScriptParser.g4"))
 
 ;; ── CST shape (tag-only, positions stripped) ──────────────────────────
 
