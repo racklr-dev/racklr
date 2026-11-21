@@ -204,7 +204,7 @@
   (check-equal? (handle-kind p) 'module)
   (check-equal? (handle-path p) "xml.dom.pulldom")
   (check-false (handle-name p))
-  (check-equal? (handle-effect-domain (handle-path p) #f "parse") 'io)
+  (check-equal? (handle-effect-domain (handle-path p) #f "parse") 'fs)
   (define d (hash-ref e "datetime"))
   (check-equal? (handle-kind d) 'fn)
   (check-equal? (handle-path d) "datetime")
@@ -250,7 +250,7 @@
                 "asgiref.sync"))
 
 (define (test-module-effect-tag)
-  (check-equal? (module-effect-tag "django.db.models.query") 'db)
+  (check-equal? (module-effect-tag "django.db.models.query") 'sql)
   (check-equal? (module-effect-tag "django.http.response") 'io)
   (check-equal? (module-effect-tag "django.core.mail.message") 'email)
   (check-equal? (module-effect-tag "django.core.cache.backends.base") 'cache)
@@ -259,7 +259,7 @@
 (define (test-effect-tag-config)
   ;; sqlparse is mostly pure, but its CLI entry point does real I/O.
   (check-equal? (module-effect-tag "sqlparse.lexer") 'pure)
-  (check-equal? (module-effect-tag "sqlparse.cli") 'io)
+  (check-equal? (module-effect-tag "sqlparse.cli") 'stdio)
   ;; tzdata is version constants + data — definitely effect-free.
   (check-equal? (module-effect-tag "tzdata.zoneinfo") 'pure)
   ;; an unconfigured library stays untagged.
@@ -294,16 +294,16 @@
                                                         (list (mth "get") (mth "filter") (mth "update") (mth "bulk_create")))) '())))
   (define eff (derive-class-method-effects mods))
   ;; operation-level, not coarse: read verbs vs write verbs, TYPED by receiver.
-  (check-equal? (hash-ref eff "QuerySet.get") (effect-cap 'db '(db<QuerySet>.read)))
-  (check-equal? (hash-ref eff "QuerySet.filter") (effect-cap 'db '(db<QuerySet>.read)))
-  (check-equal? (hash-ref eff "QuerySet.update") (effect-cap 'db '(db<QuerySet>.write)))
-  (check-equal? (hash-ref eff "QuerySet.bulk_create") (effect-cap 'db '(db<QuerySet>.write)))
+  (check-equal? (hash-ref eff "QuerySet.get") (effect-cap 'sql '(sql<QuerySet>.read)))
+  (check-equal? (hash-ref eff "QuerySet.filter") (effect-cap 'sql '(sql<QuerySet>.read)))
+  (check-equal? (hash-ref eff "QuerySet.update") (effect-cap 'sql '(sql<QuerySet>.write)))
+  (check-equal? (hash-ref eff "QuerySet.bulk_create") (effect-cap 'sql '(sql<QuerySet>.write)))
   ;; an unclassified db verb stays coarse within the domain (sound, not silent).
   (define mods2
     (hash "django.db.models" (harvest-module "django.db.models"
                                              (prog (cls "QuerySet" #f (list (mth "as_manager")))) '())))
   (check-equal? (hash-ref (derive-class-method-effects mods2) "QuerySet.as_manager")
-                (effect-cap 'db '())))
+                (effect-cap 'sql '())))
 
 (define (test-io-operation-decomposition)
   ;; Same domain (io), different resource + verb from the class's module path.
@@ -315,11 +315,11 @@
           "django.core.management.base" (harvest-module "django.core.management.base"
                                                         (prog (cls "OutputWrapper" #f (list (mth "write") (mth "flush")))) '())))
   (define eff (derive-class-method-effects mods))
-  (check-equal? (hash-ref eff "File.write") (effect-cap 'io '(io<File>.write)))
-  (check-equal? (hash-ref eff "File.read") (effect-cap 'io '(io<File>.read)))
+  (check-equal? (hash-ref eff "File.write") (effect-cap 'fs '(fs<File>.write)))
+  (check-equal? (hash-ref eff "File.read") (effect-cap 'fs '(fs<File>.read)))
   (check-equal? (hash-ref eff "HttpResponse.write") (effect-cap 'io '(io<HttpResponse>.write)))
-  (check-equal? (hash-ref eff "OutputWrapper.write") (effect-cap 'io '(io<OutputWrapper>.write)))
-  (check-equal? (hash-ref eff "OutputWrapper.flush") (effect-cap 'io '(io<OutputWrapper>.flush))))
+  (check-equal? (hash-ref eff "OutputWrapper.write") (effect-cap 'stdio '(stdio<OutputWrapper>.write)))
+  (check-equal? (hash-ref eff "OutputWrapper.flush") (effect-cap 'stdio '(stdio<OutputWrapper>.flush))))
 
 (define (test-collision-resolves-by-class)
   ;; Same method name `get`, different class, different effect: the class is
@@ -328,7 +328,7 @@
   (define mods (hash "django.db.models"
                      (harvest-module "django.db.models" (prog (cls "QuerySet" #f (list (mth "get")))) '())))
   (define eff (derive-class-method-effects mods))
-  (check-equal? (hash-ref eff "QuerySet.get") (effect-cap 'db '(db<QuerySet>.read))))
+  (check-equal? (hash-ref eff "QuerySet.get") (effect-cap 'sql '(sql<QuerySet>.read))))
 
 (define (test-typed-op-parts)
   (check-equal? (typed-op-parts 'db<QuerySet>.read) '(db "QuerySet" "read"))
@@ -347,24 +347,24 @@
   ;; Re-export follow: `from django.utils import autoreload` synthesizes an fn
   ;; handle whose path is the package, but the object lives in the submodule
   ;; that already carries the domain rule.
-  (check-equal? (handle-effect-domain "django.utils" "autoreload" "run_with_reloader") 'io)
+  (check-equal? (handle-effect-domain "django.utils" "autoreload" "run_with_reloader") 'fs)
   (check-equal? (handle-effect-domain "django.utils" "termcolors" "make_style") 'pure)
-  (check-equal? (handle-effect-domain "django.utils" "archive" "extract") 'io)
+  (check-equal? (handle-effect-domain "django.utils" "archive" "extract") 'fs)
   ;; Per-object method rules: `settings` is a lazy registry (pure queries, io
   ;; setup); the most-specific `_setup` rule wins over the general `settings`.
   (check-equal? (handle-effect-domain "django.conf" "settings" "configure") 'pure)
   (check-equal? (handle-effect-domain "django.conf" "settings" "is_overridden") 'pure)
   (check-equal? (handle-effect-domain "django.conf" "settings" "_setup") 'io)
   ;; Module-handle member rules (name is #f): `from django.core import checks`.
-  (check-equal? (handle-effect-domain "django.core.checks" #f "run_checks") 'io)
+  (check-equal? (handle-effect-domain "django.core.checks" #f "run_checks") 'stdio)
   (check-equal? (handle-effect-domain "django.core.checks" #f "tag_exists") 'pure)
   ;; External package granularity: Parser is in-memory, Image.init loads
   ;; plugins; asgiref.sync wrapper constructors are pure.
   (check-equal? (handle-effect-domain "PIL" "ImageFile" "Parser") 'pure)
-  (check-equal? (handle-effect-domain "PIL" "Image" "init") 'io)
+  (check-equal? (handle-effect-domain "PIL" "Image" "init") 'fs)
   (check-equal? (handle-effect-domain "asgiref.sync" "async_to_sync" "async_to_sync") 'pure)
   ;; The coarse module domain is still the fallback when no member rule fires.
-  (check-equal? (handle-effect-domain "django.db" "connections" "cursor") 'db))
+  (check-equal? (handle-effect-domain "django.db" "connections" "cursor") 'sql))
 
 (module+ main
   (test-extract-import-name)

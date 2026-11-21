@@ -31,46 +31,46 @@
                           (effect-rule "django.conf.settings._setup" 'io)
                           (effect-rule "django.conf.settings" 'pure)
                           (effect-rule "django.apps.apps.check_models_ready" 'pure)
-                          (effect-rule "django.core.checks.run_checks" 'io)
+                          (effect-rule "django.core.checks.run_checks" 'stdio)
                           (effect-rule "django.core.checks.tag_exists" 'pure)
-                          (effect-rule "django.core.management.color.supports_color" 'io)
-                          (effect-rule "django.middleware.csrf._get_failure_view" 'io)
-                          (effect-rule "django.utils.archive" 'io)
-                          (effect-rule "django.views.debug" 'io)
-                          (effect-rule "django.test.client" 'network)
+                          (effect-rule "django.core.management.color.supports_color" 'stdio)
+                          (effect-rule "django.middleware.csrf._get_failure_view" 'stdio)
+                          (effect-rule "django.utils.archive" 'fs)
+                          (effect-rule "django.views.debug" 'stdio)
+                          (effect-rule "django.test.client" 'http)
                           (effect-rule "django.core.mail" 'email)
                           (effect-rule "django.core.cache" 'cache)
-                          (effect-rule "django.core.management.base" 'io)
-                          (effect-rule "django.core.files" 'io)
+                          (effect-rule "django.core.management.base" 'stdio)
+                          (effect-rule "django.core.files" 'fs)
                           (effect-rule "django.http" 'io)
                           ;; The request/response handler classes: a middleware
                           ;; chain (`self._middleware_chain(request)`) runs the
                           ;; full request pipeline (network/response io).
-                          (effect-rule "django.core.handlers.base" 'io)
-                          (effect-rule "django.db" 'db)
+                          (effect-rule "django.core.handlers.base" 'stdio)
+                          (effect-rule "django.db" 'sql)
                           ;; GIS: GEOS geometry is in-memory C math (pure); GDAL/OGR
                           ;; read and write raster/vector files (io); measure classes
                           ;; are pure arithmetic.
                           (effect-rule "django.contrib.gis.geos" 'pure)
-                          (effect-rule "django.contrib.gis.gdal" 'io)
+                          (effect-rule "django.contrib.gis.gdal" 'fs)
                           (effect-rule "django.contrib.gis.measure" 'pure)
                           ;; Utilities: formatting/translation/signing are in-memory
                           ;; (fail-closed io for serializers, which write streams).
                           (effect-rule "django.utils.formats" 'pure)
                           (effect-rule "django.utils.translation" 'pure)
                           ;; timezone.now/localtime read the clock; make_aware is pure
-                          ;; but fail-closed 'time is safe (spurious, never hidden).
-                          (effect-rule "django.utils.timezone" 'time)
-                          (effect-rule "django.template.loader" 'io)
-                          (effect-rule "django.template.loaders" 'io)
-                          (effect-rule "django.template.backends" 'io)
+                          ;; but fail-closed 'clock is safe (spurious, never hidden).
+                          (effect-rule "django.utils.timezone" 'clock)
+                          (effect-rule "django.template.loader" 'fs)
+                          (effect-rule "django.template.loaders" 'fs)
+                          (effect-rule "django.template.backends" 'fs)
                           ;; Template parsing/rendering is in-memory (pure); the
                           ;; file-reading loader + engine backends are io above.
                           (effect-rule "django.template" 'pure)
                           (effect-rule "django.contrib.admindocs.utils" 'pure)
                           (effect-rule "django.core.signals" 'pure)
                           (effect-rule "django.core.signing" 'pure)
-                          (effect-rule "django.core.serializers" 'io)
+                          (effect-rule "django.core.serializers" 'fs)
                           ;; Utils: in-memory helpers (string/url/introspection).
                           (effect-rule "django.utils.crypto" 'pure)
                           (effect-rule "django.utils.encoding" 'pure)
@@ -83,76 +83,76 @@
                           (effect-rule "django.utils.asyncio" 'pure)
                           (effect-rule "django.utils.termcolors" 'pure)
                           ;; Utils that touch the filesystem / console / logging.
-                          (effect-rule "django.utils._os" 'io)
-                          (effect-rule "django.utils.log" 'io)
-                          (effect-rule "django.utils.module_loading" 'io)
-                          (effect-rule "django.utils.autoreload" 'io)
+                          (effect-rule "django.utils._os" 'fs)
+                          (effect-rule "django.utils.log" 'stdio)
+                          (effect-rule "django.utils.module_loading" 'fs)
+                          (effect-rule "django.utils.autoreload" 'fs)
                           ;; URL resolution is in-memory.
                           (effect-rule "django.urls" 'pure)
                           (effect-rule "django.core.checks.registry" 'pure)
                           (effect-rule "django.test.runner" 'process)
                           ;; auth.authenticate/login hit the DB; fail-closed db.
-                          (effect-rule "django.contrib.auth" 'db)))
+                          (effect-rule "django.contrib.auth" 'sql)))
    (effect-library "sqlparse"
-                    (list (effect-rule "sqlparse.cli" 'io)
+                    (list (effect-rule "sqlparse.cli" 'stdio)
                           (effect-rule "sqlparse" 'pure)))
    (effect-library "tzdata" (list (effect-rule "tzdata" 'pure)))
    ;; Stdlib top modules used bare in the corpus (fail-closed where mixed).
    (effect-library "inspect" (list (effect-rule "inspect" 'pure)))
    (effect-library "random" (list (effect-rule "random" 'pure)))
    (effect-library "uuid" (list (effect-rule "uuid" 'pure)))
-   (effect-library "logging" (list (effect-rule "logging" 'io)))
+   (effect-library "logging" (list (effect-rule "logging" 'stdio)))
    (effect-library "zoneinfo" (list (effect-rule "zoneinfo" 'pure)))
    (effect-library "mimetypes" (list (effect-rule "mimetypes" 'pure)))
-   (effect-library "getpass" (list (effect-rule "getpass" 'io)))
+   (effect-library "getpass" (list (effect-rule "getpass" 'stdio)))
    (effect-library "signal" (list (effect-rule "signal" 'process)))
    ;; stdlib / third-party modules used bare in the corpus. Fail-closed where a
    ;; module mixes in-memory and stream operations: io is the safe direction
    ;; (spurious, never hidden).
-   (effect-library "json" (list (effect-rule "json" 'io)))
-   (effect-library "pickle" (list (effect-rule "pickle" 'io)))
-   (effect-library "yaml" (list (effect-rule "yaml" 'io)))
-   (effect-library "ssl" (list (effect-rule "ssl" 'network)))
+   (effect-library "json" (list (effect-rule "json" 'fs)))
+   (effect-library "pickle" (list (effect-rule "pickle" 'fs)))
+   (effect-library "yaml" (list (effect-rule "yaml" 'fs)))
+   (effect-library "ssl" (list (effect-rule "ssl" 'socket)))
    (effect-library "stat" (list (effect-rule "stat" 'pure)))
    (effect-library "fnmatch" (list (effect-rule "fnmatch" 'pure)))
-   (effect-library "code" (list (effect-rule "code" 'io)))
-   (effect-library "pkgutil" (list (effect-rule "pkgutil" 'io)))
-   (effect-library "fcntl" (list (effect-rule "fcntl" 'io)))
+   (effect-library "code" (list (effect-rule "code" 'stdio)))
+   (effect-library "pkgutil" (list (effect-rule "pkgutil" 'fs)))
+   (effect-library "fcntl" (list (effect-rule "fcntl" 'fs)))
    (effect-library "winreg" (list (effect-rule "winreg" 'io)))
    (effect-library "select" (list (effect-rule "select" 'io)))
    (effect-library "traceback" (list (effect-rule "traceback" 'pure)))
    (effect-library "difflib" (list (effect-rule "difflib" 'pure)))
    (effect-library "itertools" (list (effect-rule "itertools" 'pure)))
-   (effect-library "shutil" (list (effect-rule "shutil" 'io)))
+   (effect-library "shutil" (list (effect-rule "shutil" 'fs)))
    (effect-library "email" (list (effect-rule "email" 'pure)))
-   (effect-library "pathlib" (list (effect-rule "pathlib" 'io)))
-   (effect-library "importlib" (list (effect-rule "importlib.util" 'io)))
-   (effect-library "urllib" (list (effect-rule "urllib.request" 'network)))
+   (effect-library "pathlib" (list (effect-rule "pathlib" 'fs)))
+   (effect-library "importlib" (list (effect-rule "importlib.util" 'fs)))
+   (effect-library "urllib" (list (effect-rule "urllib.request" 'http)))
    ;; urllib3 (HTTP client): connection pools/response objects do network I/O;
    ;; its util.* helpers (URL/retry parsing) are pure. Most-specific first.
    (effect-library "urllib3"
                    (list (effect-rule "urllib3.util.retry" 'pure)
                          (effect-rule "urllib3.util.url" 'pure)
-                         (effect-rule "urllib3" 'network)))
+                         (effect-rule "urllib3" 'http)))
    ;; stdlib modules whose members are pure or read the clock/entropy (reducer
    ;; stage-2 output): os.urandom reads entropy (io), time.ctime reads the clock
    ;; (time) while time.strptime parses (pure), threading.local / platform info /
    ;; codecs / chardet / http.cookiejar construct or analyze in memory (pure).
-   (effect-library "os" (list (effect-rule "os.urandom" 'io)))
+   (effect-library "os" (list (effect-rule "os.urandom" 'rng)))
    (effect-library "time" (list (effect-rule "time.strptime" 'pure)
-                                (effect-rule "time" 'time)))
+                                (effect-rule "time" 'clock)))
    (effect-library "threading" (list (effect-rule "threading" 'pure)))
    (effect-library "platform" (list (effect-rule "platform" 'pure)))
-   (effect-library "zipfile" (list (effect-rule "zipfile" 'io)))
+   (effect-library "zipfile" (list (effect-rule "zipfile" 'fs)))
    (effect-library "codecs" (list (effect-rule "codecs" 'pure)))
    (effect-library "chardet" (list (effect-rule "chardet" 'pure)))
    (effect-library "http.cookiejar" (list (effect-rule "http.cookiejar" 'pure)))
-   (effect-library "xml" (list (effect-rule "xml.dom" 'io)
-                                (effect-rule "xml.sax" 'io)))
-   (effect-library "readline" (list (effect-rule "readline" 'io)))
+   (effect-library "xml" (list (effect-rule "xml.dom" 'fs)
+                                (effect-rule "xml.sax" 'fs)))
+   (effect-library "readline" (list (effect-rule "readline" 'stdio)))
    (effect-library "rlcompleter" (list (effect-rule "rlcompleter" 'pure)))
-   (effect-library "bpython" (list (effect-rule "bpython" 'io)))
-   (effect-library "IPython" (list (effect-rule "IPython" 'io)))
+   (effect-library "bpython" (list (effect-rule "bpython" 'stdio)))
+   (effect-library "IPython" (list (effect-rule "IPython" 'stdio)))
    ;; contextlib's exports are in-memory context-manager helpers.
    (effect-library "contextlib" (list (effect-rule "contextlib" 'pure)))
    ;; concurrent.futures is MIXED: as_completed / wait iterate in-memory over
@@ -175,7 +175,7 @@
    ;; Pillow: Parser parses an in-memory buffer; Image.init imports plugin
    ;; modules from disk (io). Tagged at member granularity so Image.open/
    ;; ImageFile.load stay unclassified rather than being hidden as pure.
-   (effect-library "PIL" (list (effect-rule "PIL.Image.init" 'io)
+   (effect-library "PIL" (list (effect-rule "PIL.Image.init" 'fs)
                                 (effect-rule "PIL.ImageFile.Parser" 'pure)))
    ;; asyncio.TaskGroup construction is in-memory; the module is otherwise mixed.
    (effect-library "asyncio" (list (effect-rule "asyncio.TaskGroup" 'pure)))
@@ -195,14 +195,14 @@
    ;; lifecycle; helper/templating/console modules touch files and streams;
    ;; registration, configuration, contexts, sessions and signals are in-memory.
    (effect-library "flask"
-     (list (effect-rule "flask.app" 'network)
-           (effect-rule "flask.testing" 'network)
-           (effect-rule "flask.helpers" 'io)
-           (effect-rule "flask.templating" 'io)
-           (effect-rule "flask.cli" 'io)
-           (effect-rule "flask.logging" 'io)
-           (effect-rule "flask.debughelpers" 'io)
-           (effect-rule "flask.wrappers" 'io)
+     (list (effect-rule "flask.app" 'http)
+           (effect-rule "flask.testing" 'http)
+           (effect-rule "flask.helpers" 'stdio)
+           (effect-rule "flask.templating" 'fs)
+           (effect-rule "flask.cli" 'stdio)
+           (effect-rule "flask.logging" 'stdio)
+           (effect-rule "flask.debughelpers" 'stdio)
+           (effect-rule "flask.wrappers" 'stdio)
            (effect-rule "flask.sansio" 'pure)
            (effect-rule "flask.blueprints" 'pure)
            (effect-rule "flask.config" 'pure)
@@ -217,12 +217,12 @@
            ;; attribute is one import away from an unscanned module, so the
            ;; member rules carry the same domains as the submodule rules above.
            ;; `flask.Flask` is the request/response lifecycle object.
-           (effect-rule "flask.Flask" 'network)
-           (effect-rule "flask.Request" 'io)
-           (effect-rule "flask.Response" 'io)
-           (effect-rule "flask.send_file" 'io)
-           (effect-rule "flask.send_from_directory" 'io)
-           (effect-rule "flask.render_template" 'io)
+           (effect-rule "flask.Flask" 'http)
+           (effect-rule "flask.Request" 'stdio)
+           (effect-rule "flask.Response" 'stdio)
+           (effect-rule "flask.send_file" 'fs)
+           (effect-rule "flask.send_from_directory" 'fs)
+           (effect-rule "flask.render_template" 'fs)
            (effect-rule "flask.render_template_string" 'pure)
            (effect-rule "flask.url_for" 'pure)
            (effect-rule "flask.redirect" 'pure)
@@ -240,40 +240,40 @@
            (effect-rule "flask.Config" 'pure)
            (effect-rule "flask.Session" 'pure)
            (effect-rule "flask.BlueprintSetupState" 'pure)
-           (effect-rule "flask.FlaskGroup" 'io)))
+           (effect-rule "flask.FlaskGroup" 'stdio)))
    ;; Werkzeug (Flask's HTTP/WSGI toolkit): server and test client are network,
    ;; stream/middleware/reloader plumbing is io, the data/routing/parsing
    ;; surface is in-memory.
    (effect-library "werkzeug"
-     (list (effect-rule "werkzeug.serving" 'network)
-           (effect-rule "werkzeug.test" 'network)
-           (effect-rule "werkzeug.wsgi" 'io)
-           (effect-rule "werkzeug.middleware" 'io)
-           (effect-rule "werkzeug.formparser" 'io)
-           (effect-rule "werkzeug.debug" 'io)
-           (effect-rule "werkzeug._reloader" 'io)
+     (list (effect-rule "werkzeug.serving" 'http)
+           (effect-rule "werkzeug.test" 'http)
+           (effect-rule "werkzeug.wsgi" 'stdio)
+           (effect-rule "werkzeug.middleware" 'stdio)
+           (effect-rule "werkzeug.formparser" 'stdio)
+           (effect-rule "werkzeug.debug" 'stdio)
+           (effect-rule "werkzeug._reloader" 'stdio)
            (effect-rule "werkzeug" 'pure)))
    ;; Click (Flask's CLI toolkit): terminal output/prompting and command
    ;; invocation are effects; decorators, parameter types and parsing are
    ;; in-memory value construction.
    (effect-library "click"
-     (list (effect-rule "click.echo" 'io)
-           (effect-rule "click.secho" 'io)
-           (effect-rule "click.prompt" 'io)
-           (effect-rule "click.confirm" 'io)
-           (effect-rule "click.pause" 'io)
-           (effect-rule "click.edit" 'io)
-           (effect-rule "click.getchar" 'io)
-           (effect-rule "click.get_binary_stream" 'io)
-           (effect-rule "click.get_text_stream" 'io)
-           (effect-rule "click.open_file" 'io)
+     (list (effect-rule "click.echo" 'stdio)
+           (effect-rule "click.secho" 'stdio)
+           (effect-rule "click.prompt" 'stdio)
+           (effect-rule "click.confirm" 'stdio)
+           (effect-rule "click.pause" 'stdio)
+           (effect-rule "click.edit" 'stdio)
+           (effect-rule "click.getchar" 'stdio)
+           (effect-rule "click.get_binary_stream" 'stdio)
+           (effect-rule "click.get_text_stream" 'stdio)
+           (effect-rule "click.open_file" 'stdio)
            (effect-rule "click.launch" 'process)
-           (effect-rule "click.termui" 'io)
-           (effect-rule "click.utils" 'io)
-           (effect-rule "click._termui_impl" 'io)
-           (effect-rule "click.testing" 'io)
-           (effect-rule "click.core" 'io)
-           (effect-rule "click.shell_completion" 'io)
+           (effect-rule "click.termui" 'stdio)
+           (effect-rule "click.utils" 'stdio)
+           (effect-rule "click._termui_impl" 'stdio)
+           (effect-rule "click.testing" 'stdio)
+           (effect-rule "click.core" 'stdio)
+           (effect-rule "click.shell_completion" 'stdio)
            (effect-rule "click.decorators" 'pure)
            (effect-rule "click.exceptions" 'pure)
            (effect-rule "click.formatting" 'pure)
@@ -283,29 +283,29 @@
    ;; Jinja2 (Flask's template engine): template LOADING hits the filesystem;
    ;; rendering compiled templates is in-memory.
    (effect-library "jinja2"
-     (list (effect-rule "jinja2.Environment.get_template" 'io)
-           (effect-rule "jinja2.Environment.select_template" 'io)
-           (effect-rule "jinja2.Environment.get_or_select_template" 'io)
-           (effect-rule "jinja2.environment.Environment.get_template" 'io)
-           (effect-rule "jinja2.environment.Environment.select_template" 'io)
-           (effect-rule "jinja2.loaders" 'io)
+     (list (effect-rule "jinja2.Environment.get_template" 'fs)
+           (effect-rule "jinja2.Environment.select_template" 'fs)
+           (effect-rule "jinja2.Environment.get_or_select_template" 'fs)
+           (effect-rule "jinja2.environment.Environment.get_template" 'fs)
+           (effect-rule "jinja2.environment.Environment.select_template" 'fs)
+           (effect-rule "jinja2.loaders" 'fs)
            (effect-rule "jinja2" 'pure)))
    ;; Flask's remaining dependency surface: signing, events, string markup,
    ;; and .env loading.
    (effect-library "itsdangerous" (list (effect-rule "itsdangerous" 'pure)))
    (effect-library "blinker" (list (effect-rule "blinker" 'pure)))
    (effect-library "markupsafe" (list (effect-rule "markupsafe" 'pure)))
-   (effect-library "dotenv" (list (effect-rule "dotenv" 'io)))
+   (effect-library "dotenv" (list (effect-rule "dotenv" 'env)))
    ;; Requests: sessions/adapters/the top-level API send and receive HTTP;
    ;; cookies, structures, hooks, auth preparation and compatibility shims are
    ;; in-memory. `requests.models` is deliberately UNTAGGED: its data objects
    ;; mix pure body parsing (`Response.json`) with stream consumption
    ;; (`Response.iter_content`), which the receiver-TYPE table types precisely.
    (effect-library "requests"
-     (list (effect-rule "requests.sessions" 'network)
-           (effect-rule "requests.adapters" 'network)
-           (effect-rule "requests.api" 'network)
-           (effect-rule "requests.utils" 'io)
+     (list (effect-rule "requests.sessions" 'http)
+           (effect-rule "requests.adapters" 'http)
+           (effect-rule "requests.api" 'http)
+           (effect-rule "requests.utils" 'stdio)
            (effect-rule "requests.cookies" 'pure)
            (effect-rule "requests.structures" 'pure)
            (effect-rule "requests.hooks" 'pure)
@@ -319,7 +319,7 @@
            ;; The public re-export surface (`from requests import Session`).
            ;; Sessions are the HTTP client; Request/PreparedRequest are
            ;; in-memory data objects.
-           (effect-rule "requests.Session" 'network)
+           (effect-rule "requests.Session" 'http)
            (effect-rule "requests.Request" 'pure)
            (effect-rule "requests.PreparedRequest" 'pure)
            (effect-rule "requests.packages" 'pure)
@@ -327,12 +327,12 @@
    ;; urllib3 (Requests' transport): pools/connections/responses are network;
    ;; its configuration/value utilities are in-memory.
    (effect-library "urllib3"
-     (list (effect-rule "urllib3.connectionpool" 'network)
-           (effect-rule "urllib3.connection" 'network)
-           (effect-rule "urllib3.poolmanager" 'network)
-           (effect-rule "urllib3.response" 'network)
+     (list (effect-rule "urllib3.connectionpool" 'http)
+           (effect-rule "urllib3.connection" 'http)
+           (effect-rule "urllib3.poolmanager" 'http)
+           (effect-rule "urllib3.response" 'http)
            (effect-rule "urllib3.util" 'pure)
-           (effect-rule "urllib3" 'network)))
+           (effect-rule "urllib3" 'http)))
    ;; Requests' encoding/identity dependencies: pure in-memory transforms.
    (effect-library "charset_normalizer" (list (effect-rule "charset_normalizer" 'pure)))
    (effect-library "idna" (list (effect-rule "idna" 'pure)))
@@ -346,7 +346,7 @@
    (effect-library "platform" (list (effect-rule "platform" 'pure)))
    (effect-library "urllib"
      (list (effect-rule "urllib.parse" 'pure)
-           (effect-rule "urllib.request" 'network)))))
+           (effect-rule "urllib.request" 'http)))))
 
 ;; ── primitive-operation vocabulary (per domain) ─────────────────────
 ;; The db/io verb tables and the builtin-receiver seed environment. This is
@@ -419,5 +419,12 @@
               #:combine (λ (a b) a)))
 
 (define domain-op-vocabulary
-  (hash 'network (verbs->typed-ops network-read-verbs network-write-verbs
-                                   network-other-verbs)))
+  (hash 'sql    (verbs->typed-ops db-read-methods db-write-methods (set))
+        'fs     (verbs->typed-ops io-read-verbs io-write-verbs io-other-verbs)
+        'stdio  (verbs->typed-ops io-read-verbs io-write-verbs io-other-verbs)
+        'http   (verbs->typed-ops network-read-verbs network-write-verbs
+                                 network-other-verbs)
+        'socket (verbs->typed-ops (set "recv" "recvfrom" "read")
+                                  (set "send" "sendall" "write")
+                                  (set "connect" "accept" "bind" "close"
+                                        "listen" "shutdown"))))

@@ -1034,9 +1034,9 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'must)
-  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (modality r 'sql) 'must)
+  (check-equal? (entry-ops (row-lookup r 'sql)) '(sql<QuerySet>.read)))
 
 (define (test-imported-class-ctor-pure)
   ;; `MigrationLoader(...)` — a class imported bare from an unscanned module —
@@ -1070,8 +1070,8 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'must)
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (modality r 'sql) 'must)
   (define env-legacy
     (import-env (hash "app.py" "app")
                 (hash "app" (hash "get_migration_name_timestamp"
@@ -1081,7 +1081,7 @@
   (define r-legacy (hash-ref (infer-effects-all (list (cons "app.py" p))
                                                 #:import-env env-legacy)
                              (cons "app.py" 'run)))
-  (check-equal? (row-names r-legacy) '(db)))
+  (check-equal? (row-names r-legacy) '(sql)))
 
 (define (test-external-singleton-method-domain)
   ;; `router.allow_migrate_model(...)` where `router` is a lowercase external
@@ -1096,8 +1096,8 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'must))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (modality r 'sql) 'must))
 
 (define (test-external-class-receiver-dataflow)
   ;; `loader = MigrationLoader(...)` then `loader.get_migration(...)`: the
@@ -1116,8 +1116,8 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p)) #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (modality r 'db) 'must))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (modality r 'sql) 'must))
 
 (define (test-param-type-propagation-unannotated-method)
   ;; `handle(self)` passes its tracked `loader` to `self.handle_merge(loader)`;
@@ -1150,7 +1150,7 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'Command.handle_merge)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 (define (test-method-name-collides-with-pure-bare-name)
   ;; `get_migration_by_prefix` is a pure BARE helper name, but as a METHOD on a
@@ -1175,7 +1175,7 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'Command.find_migration)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 (define (test-imported-module-pure)
   ;; `sqlmod.parse(...)` where `sqlmod` resolves to module `sqlparse` (tagged
@@ -1230,8 +1230,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (entry-ops (row-lookup r 'sql)) '(sql<QuerySet>.read)))
 
 (define (test-receiver-type-self-attr)
   ;; `self.qs = QuerySet(); self.qs.filter(...)` in the same method: the
@@ -1253,8 +1253,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'Repo.run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (entry-ops (row-lookup r 'sql)) '(sql<QuerySet>.read)))
 
 (define (test-receiver-type-pure-class)
   ;; A receiver tracked to a class in a pure module is pure even when its
@@ -1297,8 +1297,8 @@
   (define r (hash-ref (infer-effects-all (list (cons "io.py" io) (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'Command.handle)))
-  (check-equal? (row-names r) '(io))
-  (check-equal? (entry-ops (row-lookup r 'io)) '(io<OutputWrapper>.write)))
+  (check-equal? (row-names r) '(stdio))
+  (check-equal? (entry-ops (row-lookup r 'stdio)) '(stdio<OutputWrapper>.write)))
 
 (define (test-receiver-type-class-attr-cross-file)
   ;; BaseCommand.__init__ (one file) sets self.stdout; Command.handle (another
@@ -1324,8 +1324,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'Command.handle)))
-  (check-equal? (row-names r) '(io))
-  (check-equal? (entry-ops (row-lookup r 'io)) '(io<OutputWrapper>.write)))
+  (check-equal? (row-names r) '(stdio))
+  (check-equal? (entry-ops (row-lookup r 'stdio)) '(stdio<OutputWrapper>.write)))
 
 (define (test-receiver-type-manager-attr)
   ;; `User.objects.filter(...)`: `objects` is set by the framework metaclass, not
@@ -1344,8 +1344,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'q)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (entry-ops (row-lookup r 'db)) '(db<User>.read)))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (entry-ops (row-lookup r 'sql)) '(sql<User>.read)))
 
 (define (test-receiver-type-manager-attr-pure)
   ;; A class in a pure module used as a manager root is pure even though the
@@ -1393,8 +1393,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'Command.handle)))
-  (check-equal? (row-names r) '(io))
-  (check-equal? (entry-ops (row-lookup r 'io)) '(io<File>.write)))
+  (check-equal? (row-names r) '(fs))
+  (check-equal? (entry-ops (row-lookup r 'fs)) '(fs<File>.write)))
 
 (define (py-class/field name fields methods)
   (uir-class (uir-symbol name) '() fields methods))
@@ -1418,8 +1418,8 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
-  (check-equal? (entry-ops (row-lookup r 'db)) '(db<QuerySet>.read)))
+  (check-equal? (row-names r) '(sql))
+  (check-equal? (entry-ops (row-lookup r 'sql)) '(sql<QuerySet>.read)))
 
 (define (test-receiver-type-class-field-initializer)
   ;; Class-level `build_file_class = BuildFile` flows to methods: a call
@@ -1528,7 +1528,7 @@
     (infer-effects-all (list (cons "app.py" app))
                        #:import-env (import-env (hash "app.py" "django.core.files")
                                                 (hash) (hash))))
-  (check-equal? (row-names (hash-ref tagged (cons "app.py" 'Storage.open))) '(io))
+  (check-equal? (row-names (hash-ref tagged (cons "app.py" 'Storage.open))) '(fs))
   (define untagged
     (infer-effects-all (list (cons "app.py" app))
                        #:import-env (import-env (hash "app.py" "untagged.module")
@@ -1634,7 +1634,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
+  (check-equal? (row-names r) '(sql))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-imported-class-bare-ref-receiver)
@@ -1656,7 +1656,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 (define (test-param-annotation-receiver)
   ;; A typed parameter annotation (`def f(qs: QuerySet)`) seeds the receiver-type
@@ -1676,7 +1676,7 @@
                                                (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'run)))
-  (check-equal? (row-names r) '(db))
+  (check-equal? (row-names r) '(sql))
   (check-false (row-lookup r 'unknown))
   ;; The same seeding must reach METHODS, not only bare functions: a typed
   ;; `self`-less method param (`def handle(self, qs: QuerySet)`) resolves the
@@ -1694,7 +1694,7 @@
                                                                         "app2.py" "app2")
                                                                   (hash) (hash)))
                        (cons "app2.py" 'Command.handle)))
-  (check-equal? (row-names r2) '(db)))
+  (check-equal? (row-names r2) '(sql)))
 
 (define (test-imported-module-result-type)
   ;; `r = httpx.get(...)` then `r.json()`: the imported module function's result
@@ -2030,7 +2030,7 @@
   (define rows (infer-effects-all (list (cons "m.rkt" p))))
   (check-equal? (hash-ref rows (cons "m.rkt" 'f)) (empty-row))
   (check-equal? (hash-ref rows (cons "m.rkt" 'g)) (empty-row))
-  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'h)) 'io) 'must)
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'h)) 'fs) 'must)
   (check-equal? (hash-ref rows (cons "m.rkt" 'i)) (empty-row)))
 
 (define (test-self-stdlib-parent-fallback)
@@ -2081,7 +2081,7 @@
                                                         '()))))))
   (define rows (infer-effects-all (list (cons "m.rkt" p))))
   (check-equal? (hash-ref rows (cons "m.rkt" 'BadHeader.__init__)) (empty-row))
-  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'SingleZip.__init__)) 'io) 'must))
+  (check-equal? (modality (hash-ref rows (cons "m.rkt" 'SingleZip.__init__)) 'fs) 'must))
 
 (define (test-super-alias-import-typing)
   ;; A superclass written as an import alias (`class JSerializer(PySer)`) must
@@ -2147,7 +2147,7 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'open)))
-  (check-equal? (row-names r) '(network))
+  (check-equal? (row-names r) '(email))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-module-function-result)
@@ -2183,7 +2183,7 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'render)))
-  (check-equal? (row-names r) '(io))
+  (check-equal? (row-names r) '(fs))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-method-result-path)
@@ -2202,7 +2202,7 @@
                      (uir-call (dot (v "m") "stat") '()))))))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)))
                       (cons "app.py" 'pair)))
-  (check-equal? (row-names r) '(io))
+  (check-equal? (row-names r) '(fs))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-with-as-binding)
@@ -2382,10 +2382,10 @@
   (define rows
     (infer-effects-all (list (cons "app.py" backend)) #:import-env env))
   (define open-row (hash-ref rows (cons "app.py" 'EmailBackend.open)))
-  (check-equal? (row-names open-row) '(network))
+  (check-equal? (row-names open-row) '(email))
   (check-false (row-lookup open-row 'unknown))
   (define send-row (hash-ref rows (cons "app.py" 'EmailBackend._send)))
-  (check-equal? (row-names send-row) '(network))
+  (check-equal? (row-names send-row) '(email))
   (check-false (row-lookup send-row 'unknown)))
 
 (define (test-projection-submodule-module-function)
@@ -2405,7 +2405,7 @@
                 (hash)))
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app)) #:import-env env)
                       (cons "app.py" 'read)))
-  (check-equal? (row-names r) '(io))
+  (check-equal? (row-names r) '(fs stdio))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-projection-lowercase-imported-class)
@@ -2450,7 +2450,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
                                          #:import-env env)
                       (cons "app.py" 'sql_flush)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 (define (test-project-state-apps-attr)
   ;; ProjectState.apps crosses the external class-attr boundary to the Apps
@@ -2472,7 +2472,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
                                          #:import-env env)
                       (cons "app.py" 'reload)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 
 (define (test-module-marker-param-seeding)
@@ -2500,7 +2500,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" p))
                                          #:import-env env)
                       (cons "app.py" 'sql_flush)))
-  (check-equal? (row-names r) '(db)))
+  (check-equal? (row-names r) '(sql)))
 
 
 (define (test-for-loop-tuple-destructure)
@@ -2762,7 +2762,7 @@
          #:params (list (uir-typed-param (sym "x") #f #f #f)))
      (fn "run" (uir-call (v "h") (list (uir-call (v "g") '()))))))
   (define rows (infer-effects-all (list (cons "app.py" app))))
-  (check-equal? (row-names (hash-ref rows (cons "app.py" 'h))) '(io))
+  (check-equal? (row-names (hash-ref rows (cons "app.py" 'h))) '(fs))
   (check-false (row-lookup (hash-ref rows (cons "app.py" 'run)) 'unknown)))
 
 (define (test-projection-param-typed-receiver-call-target)

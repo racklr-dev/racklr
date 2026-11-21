@@ -45,31 +45,31 @@
                 "parts" 'pure "suffix" 'pure "suffixes" 'pure "name" 'pure
                 "stem" 'pure "parent" 'pure "parents" 'pure "drive" 'pure
                 "root" 'pure "anchor" 'pure "as_posix" 'pure "as_uri" 'pure
-                "match" 'pure "is_dir" 'io "is_file" 'io "is_symlink" 'io
-                "exists" 'io "resolve" 'io "absolute" 'io "stat" 'io "lstat" 'io
-                "read_text" 'io "read_bytes" 'io "write_text" 'io "write_bytes" 'io
-                "open" 'io "iterdir" 'io "glob" 'io "rglob" 'io "expanduser" 'io
-                "unlink" 'io "mkdir" 'io "rmdir" 'io "rename" 'io "replace" 'io
-                "touch" 'io "chmod" 'io "hardlink_to" 'io "symlink_to" 'io
-                "samefile" 'io "cwd" 'io "home" 'io "readlink" 'io)
+                "match" 'pure "is_dir" 'fs "is_file" 'fs "is_symlink" 'fs
+                "exists" 'fs "resolve" 'fs "absolute" 'fs "stat" 'fs "lstat" 'fs
+                "read_text" 'fs "read_bytes" 'fs "write_text" 'fs "write_bytes" 'fs
+                "open" 'fs "iterdir" 'fs "glob" 'fs "rglob" 'fs "expanduser" 'fs
+                "unlink" 'fs "mkdir" 'fs "rmdir" 'fs "rename" 'fs "replace" 'fs
+                "touch" 'fs "chmod" 'fs "hardlink_to" 'fs "symlink_to" 'fs
+                "samefile" 'fs "cwd" 'fs "home" 'fs "readlink" 'fs)
    "PurePath" (hash "is_absolute" 'pure "joinpath" 'pure "with_name" 'pure
                     "with_suffix" 'pure "relative_to" 'pure "parts" 'pure
                     "suffix" 'pure "name" 'pure "stem" 'pure "parent" 'pure
                     "parents" 'pure "drive" 'pure "root" 'pure "anchor" 'pure
-                    "as_posix" 'pure "as_uri" 'pure "match" 'pure "is_dir" 'io
-                    "is_file" 'io "is_symlink" 'io "exists" 'io "resolve" 'io
-                    "stat" 'io "lstat" 'io)
+                    "as_posix" 'pure "as_uri" 'pure "match" 'pure "is_dir" 'fs
+                    "is_file" 'fs "is_symlink" 'fs "exists" 'fs "resolve" 'fs
+                    "stat" 'fs "lstat" 'fs)
    "PosixPath" (hash "is_absolute" 'pure "joinpath" 'pure "with_name" 'pure
                     "parts" 'pure "suffix" 'pure "name" 'pure "parent" 'pure
-                    "as_posix" 'pure "match" 'pure "is_dir" 'io "is_file" 'io
-                    "exists" 'io "resolve" 'io "read_text" 'io "read_bytes" 'io
-                    "write_text" 'io "write_bytes" 'io "open" 'io "iterdir" 'io
-                    "glob" 'io "rglob" 'io)
+                    "as_posix" 'pure "match" 'pure "is_dir" 'fs "is_file" 'fs
+                    "exists" 'fs "resolve" 'fs "read_text" 'fs "read_bytes" 'fs
+                    "write_text" 'fs "write_bytes" 'fs "open" 'fs "iterdir" 'fs
+                    "glob" 'fs "rglob" 'fs)
    "WindowsPath" (hash "is_absolute" 'pure "joinpath" 'pure "with_name" 'pure
                       "parts" 'pure "suffix" 'pure "name" 'pure "parent" 'pure
-                      "match" 'pure "is_dir" 'io "is_file" 'io "exists" 'io
-                      "resolve" 'io "read_text" 'io "read_bytes" 'io "write_text" 'io
-                      "write_bytes" 'io "open" 'io "iterdir" 'io "glob" 'io "rglob" 'io)
+                      "match" 'pure "is_dir" 'fs "is_file" 'fs "exists" 'fs
+                      "resolve" 'fs "read_text" 'fs "read_bytes" 'fs "write_text" 'fs
+                      "write_bytes" 'fs "open" 'fs "iterdir" 'fs "glob" 'fs "rglob" 'fs)
    ;; hashlib (pure value objects)
    "md5" (hash "hexdigest" 'pure "digest" 'pure "update" 'pure "copy" 'pure
                "digest_size" 'pure "block_size" 'pure "name" 'pure)
@@ -99,17 +99,17 @@
    "Signature" (hash "bind" 'pure "bind_partial" 'pure "parameters" 'pure
                      "return_annotation" 'pure "replace" 'pure)
    ;; builtins.open -> file object (io)
-   "open" (hash "close" 'io "read" 'io "write" 'io "seek" 'io "tell" 'io
-                "flush" 'io "fileno" 'io "readline" 'io "readlines" 'io
-                "writelines" 'io "truncate" 'io "readable" 'io "writable" 'io
-                "seekable" 'io "isatty" 'io
+   "open" (hash "close" 'fs "read" 'fs "write" 'fs "seek" 'fs "tell" 'fs
+                "flush" 'fs "fileno" 'fs "readline" 'fs "readlines" 'fs
+                "writelines" 'fs "truncate" 'fs "readable" 'fs "writable" 'fs
+                "seekable" 'fs "isatty" 'fs
                 ;; context-manager protocol on a tracked file object:
                 ;; __enter__ returns self (pure), __exit__ closes it (io)
-                "__enter__" 'pure "__exit__" 'io)
+                "__enter__" 'pure "__exit__" 'fs)
    ;; zipfile (constructing one reads the archive header -> io)
-   "ZipFile" (hash "__init__" 'io "read" 'io "open" 'io "extract" 'io
-                   "extractall" 'io "close" 'io "namelist" 'io "infolist" 'io
-                   "getinfo" 'io "printdir" 'io "testzip" 'io)
+   "ZipFile" (hash "__init__" 'fs "read" 'fs "open" 'fs "extract" 'fs
+                   "extractall" 'fs "close" 'fs "namelist" 'fs "infolist" 'fs
+                   "getinfo" 'fs "printdir" 'fs "testzip" 'fs)
    ;; urllib3 URL and pool receivers (reducer stage-2 return types).
    "Url" (hash "geturl" 'pure "_replace" 'pure "host" 'pure "port" 'pure
                 "scheme" 'pure "path" 'pure "netloc" 'pure)
@@ -122,9 +122,9 @@
                         "path" 'pure "query" 'pure "fragment" 'pure)
    ;; netrc object: pure reads of the parsed netrc entries.
    "netrc" (hash "authenticators" 'pure "hosts" 'pure)
-   "ProxyManager" (hash "connection_from_url" 'network
-                         "connection_from_host" 'network
-                         "clear" 'pure "urlopen" 'network)
+   "ProxyManager" (hash "connection_from_url" 'http
+                         "connection_from_host" 'http
+                         "clear" 'pure "urlopen" 'http)
    ;; json encoder (pure)
    "JSONEncoder" (hash "__init__" 'pure "default" 'pure "encode" 'pure
                        "iterencode" 'pure)
@@ -135,35 +135,35 @@
                          "add_mutually_exclusive_group" 'pure "add_argument_group" 'pure
                           "parse_args" 'pure "parse_known_args" 'pure
                           "format_help" 'pure "format_usage" 'pure
-                          "print_help" 'io "print_usage" 'io "error" 'io "exit" 'process)
+                          "print_help" 'stdio "print_usage" 'stdio "error" 'stdio "exit" 'process)
    ;; pyexpat (constructing is pure; parsing a file is io)
-   "_ExpatParser" (hash "__init__" 'pure "Parse" 'pure "ParseFile" 'io
+   "_ExpatParser" (hash "__init__" 'pure "Parse" 'pure "ParseFile" 'fs
                         "SetBase" 'pure "GetBase" 'pure)
    ;; xml.sax.saxutils / django.utils.xmlutils SimplerXMLGenerator: the
    ;; writer wraps a destination stream, so its callbacks emit to it.
-   "SimplerXMLGenerator" (hash "startDocument" 'io "endDocument" 'io
-                               "startElement" 'io "endElement" 'io
-                               "characters" 'io "ignorableWhitespace" 'io
-                               "processingInstruction" 'io "skippedEntity" 'io
-                               "startPrefixMapping" 'io "endPrefixMapping" 'io
-                               "startDTD" 'io "endDTD" 'io
-                               "startCDATA" 'io "endCDATA" 'io)
+   "SimplerXMLGenerator" (hash "startDocument" 'stdio "endDocument" 'stdio
+                               "startElement" 'stdio "endElement" 'stdio
+                               "characters" 'stdio "ignorableWhitespace" 'stdio
+                               "processingInstruction" 'stdio "skippedEntity" 'stdio
+                               "startPrefixMapping" 'stdio "endPrefixMapping" 'stdio
+                               "startDTD" 'stdio "endDTD" 'stdio
+                               "startCDATA" 'stdio "endCDATA" 'stdio)
    ;; socketserver / wsgiref (thread and socket bookkeeping)
    "ThreadingMixIn" (hash "__init__" 'pure "process_request" 'pure
-                          "process_request_thread" 'pure "server_close" 'io)
-   "WSGIServer" (hash "__init__" 'pure "close_request" 'io
-                      "process_request_thread" 'pure "get_request" 'io
-                      "handle_error" 'io "serve_forever" 'process
+                          "process_request_thread" 'pure "server_close" 'socket)
+   "WSGIServer" (hash "__init__" 'pure "close_request" 'http
+                      "process_request_thread" 'pure "get_request" 'http
+                      "handle_error" 'http "serve_forever" 'process
                       "set_app" 'pure "get_app" 'pure)
    ;; wsgiref request/server handlers Django's basehttp subclasses; their
    ;; methods live outside the scanned corpus, so self/super calls resolve
    ;; here by the external parent's bare class name.
    "WSGIRequestHandler" (hash "log_date_time_string" 'pure "get_stderr" 'pure
-                              "parse_request" 'io "send_error" 'io
+                              "parse_request" 'http "send_error" 'http
                               "get_environ" 'pure)
-   "ServerHandler" (hash "__init__" 'pure "cleanup_headers" 'io "get_stdin" 'pure
-                         "send_headers" 'io "finish_response" 'io "close" 'io
-                         "run" 'io)
+   "ServerHandler" (hash "__init__" 'pure "cleanup_headers" 'http "get_stdin" 'pure
+                         "send_headers" 'http "finish_response" 'http "close" 'http
+                         "run" 'http)
    ;; builtin `object` base: every class without another base inherits these
    ;; protocol dunders, so `super().__init__` on `object` is pure.
    "object" (hash "__init__" 'pure "__new__" 'pure "__str__" 'pure "__repr__" 'pure
@@ -222,12 +222,12 @@
                    "cookies" 'pure "elapsed" 'pure "reason" 'pure "history" 'pure
                    "request" 'pure "apparent_encoding" 'pure "raise_for_status" 'pure
                    "is_redirect" 'pure "is_permanent_redirect" 'pure
-                   "iter_content" 'io "iter_lines" 'io "iter_bytes" 'io "iter_raw" 'io
-                   "raw" 'io "close" 'io "read" 'io)
-   "HTTPResponse" (hash "read" 'io "readline" 'io "readlines" 'io "readinto" 'io
+                   "iter_content" 'http "iter_lines" 'http "iter_bytes" 'http "iter_raw" 'http
+                   "raw" 'http "close" 'http "read" 'http)
+   "HTTPResponse" (hash "read" 'http "readline" 'http "readlines" 'http "readinto" 'http
                         "getheader" 'pure "getheaders" 'pure "geturl" 'pure
                         "getcode" 'pure "status" 'pure "info" 'pure "msg" 'pure
-                        "version" 'pure "reason" 'pure "closed" 'pure "close" 'io)
+                        "version" 'pure "reason" 'pure "closed" 'pure "close" 'http)
    ;; ── type-projection chains (P0.3) ───────────────────────────────
    ;; Objects whose CONSTRUCTION is resolved through the import graph
    ;; (`smtplib.SMTP()` is a module-qualified class reference, `re.match(...)`
@@ -235,25 +235,25 @@
    ;; that preserves the receiver type). The method table below is what turns
    ;; that tracked receiver type into an effect, so `self.connection.sendmail`
    ;; classifies network instead of `unknown`.
-   "SMTP" (hash "starttls" 'network "login" 'network "sendmail" 'network
-                "quit" 'network "close" 'network "ehlo" 'network "noop" 'network
-                "connect" 'network "mail" 'network "rcpt" 'network
-                "data" 'network "docmd" 'network "send_message" 'network
-                "has_extn" 'network "rset" 'network "set_debuglevel" 'pure)
-   "SSLContext" (hash "load_cert_chain" 'io "load_verify_locations" 'io
-                     "set_default_verify_paths" 'io "wrap_socket" 'network
+   "SMTP" (hash "starttls" 'email "login" 'email "sendmail" 'email
+                "quit" 'email "close" 'email "ehlo" 'email "noop" 'email
+                "connect" 'email "mail" 'email "rcpt" 'email
+                "data" 'email "docmd" 'email "send_message" 'email
+                "has_extn" 'email "rset" 'email "set_debuglevel" 'pure)
+   "SSLContext" (hash "load_cert_chain" 'fs "load_verify_locations" 'fs
+                     "set_default_verify_paths" 'fs "wrap_socket" 'socket
                      "set_ciphers" 'pure "check_hostname" 'pure
                      "set_alpn_protocols" 'pure "set_ecdh_curve" 'pure
                      "verify_mode" 'pure "minimum_version" 'pure
                      "maximum_version" 'pure)
-   "socket" (hash "close" 'io "send" 'network "sendall" 'network "recv" 'network
-                  "recv_into" 'network "connect" 'network "connect_ex" 'network
-                  "listen" 'network "accept" 'network "shutdown" 'network
-                  "bind" 'io "setsockopt" 'pure "settimeout" 'pure
+   "socket" (hash "close" 'socket "send" 'socket "sendall" 'socket "recv" 'socket
+                  "recv_into" 'socket "connect" 'socket "connect_ex" 'socket
+                  "listen" 'socket "accept" 'socket "shutdown" 'socket
+                  "bind" 'socket "setsockopt" 'pure "settimeout" 'pure
                   "gettimeout" 'pure "fileno" 'pure "makefile" 'pure
                   "getsockname" 'pure "getpeername" 'pure "detach" 'pure)
-   "Logger" (hash "debug" 'io "info" 'io "warning" 'io "warn" 'io "error" 'io
-                 "critical" 'io "fatal" 'io "exception" 'io "log" 'io
+   "Logger" (hash "debug" 'stdio "info" 'stdio "warning" 'stdio "warn" 'stdio "error" 'stdio
+                 "critical" 'stdio "fatal" 'stdio "exception" 'stdio "log" 'stdio
                  "setLevel" 'pure "getEffectiveLevel" 'pure "isEnabledFor" 'pure
                  "addHandler" 'pure "removeHandler" 'pure "hasHandlers" 'pure)
    "Match" (hash "group" 'pure "groups" 'pure "groupdict" 'pure "start" 'pure
@@ -262,7 +262,7 @@
                    "findall" 'pure "finditer" 'pure "split" 'pure
                    "sub" 'pure "subn" 'pure)
    ;; email.generator writes the MIME tree to its destination stream.
-   "Generator" (hash "flatten" 'io "write" 'io "clone" 'pure "close" 'io)
+   "Generator" (hash "flatten" 'fs "write" 'fs "clone" 'pure "close" 'fs)
    ;; builtin in-memory containers: mutation touches no external resource.
    "OrderedDict" (hash "get" 'pure "keys" 'pure "values" 'pure "items" 'pure
                        "update" 'pure "pop" 'pure "popitem" 'pure
@@ -293,8 +293,8 @@
    "TaskGroup" (hash "create_task" 'pure "__aenter__" 'pure "__aexit__" 'pure)
    ;; xml.dom.pulldom streams events from an already-open source: reading the
    ;; stream is io, expanding a parsed node is in-memory work.
-   "DOMEventStream" (hash "getEvent" 'io "expandNode" 'pure "next" 'io)
-   "Document" (hash "toxml" 'pure "toprettyxml" 'pure "writexml" 'io
+   "DOMEventStream" (hash "getEvent" 'stdio "expandNode" 'pure "next" 'stdio)
+   "Document" (hash "toxml" 'pure "toprettyxml" 'pure "writexml" 'stdio
                     "getElementsByTagName" 'pure "appendChild" 'pure)
    ;; redis-py client objects: every command is a cache round trip.
    "Redis" (hash "set" 'cache "get" 'cache "delete" 'cache "expire" 'cache
@@ -312,7 +312,7 @@
                     "keys" 'cache "ttl" 'cache "setex" 'cache
                     "watch" 'cache "multi" 'cache "reset" 'cache
                     "sadd" 'cache "zadd" 'cache)
-   "ConnectionPool" (hash "from_url" 'pure "disconnect" 'io "reset" 'io)
+   "ConnectionPool" (hash "from_url" 'pure "disconnect" 'http "reset" 'http)
    "DriverInfo" (hash "add_upstream_driver" 'pure)
    ;; django.http.request.HttpRequest methods inherited by WSGIRequest
    ;; (_mark_post_parse_error sets an in-memory flag; pure)
@@ -341,8 +341,8 @@
                         "reason_phrase" 'pure "set_cookie" 'pure "delete_cookie" 'pure
                         "get" 'pure "items" 'pure "has_header" 'pure
                         "serialize" 'pure "serialize_headers" 'pure "make_bytes" 'pure
-                        "close" 'io "write" 'io "writelines" 'io "flush" 'io
-                        "tell" 'io "read" 'io)
+                        "close" 'fs "write" 'fs "writelines" 'fs "flush" 'fs
+                        "tell" 'fs "read" 'fs)
    ;; email.charset.Charset (pure charset name/codec lookups)
    "Charset" (hash "get_output_charset" 'pure "body_encode" 'pure "header_encode" 'pure
                     "header_encode_lines" 'pure "get_body_encoding" 'pure)
@@ -387,14 +387,14 @@
    "Migration" (hash "suggest_name" 'pure)
    ;; django.db.models.options.Options: can_migrate consults the DB router
    ;; (db); get_fields/value_to_string read the in-memory registry (pure).
-   "django.db.models.options.Options" (hash "get_fields" 'pure "can_migrate" 'db
+   "django.db.models.options.Options" (hash "get_fields" 'pure "can_migrate" 'sql
                                              "value_to_string" 'pure)
    ;; django.db.migrations.state.ProjectState (external): in-memory migration
    ;; state mutation (pure).
    "ProjectState" (hash "clone" 'pure "clear_delayed_apps_cache" 'pure)
    ;; django.apps.registry.Apps (external): model-registry mutation is the
    ;; migrate command's model reloading (db domain).
-   "Apps" (hash "unregister_model" 'db "render_multiple" 'db "bulk_update" 'db)
+   "Apps" (hash "unregister_model" 'sql "render_multiple" 'sql "bulk_update" 'sql)
    ;; django.db.models.expressions.Expression (external): get_db_converters
    ;; returns field converter functions (pure; DB access happens at the cursor).
    "Expression" (hash "get_db_converters" 'pure "resolve_expression" 'pure)
@@ -412,17 +412,17 @@
    ;; django.db.models.base.Model (external): natural_key/_is_pk_set read the
    ;; already-loaded instance state in memory.
    "Model" (hash "natural_key" 'pure "_is_pk_set" 'pure "get_deferred_fields" 'pure
-                 "refresh_from_db" 'db "delete" 'db "save" 'db "clean" 'pure
-                 "full_clean" 'pure "validate_unique" 'db)
+                 "refresh_from_db" 'sql "delete" 'sql "save" 'sql "clean" 'pure
+                 "full_clean" 'pure "validate_unique" 'sql)
    ;; django.db.backends.base.base.BaseDatabaseWrapper (external): the database
    ;; connection handle; schema_editor() is the entry to schema DDL.
-   "BaseDatabaseWrapper" (hash "schema_editor" 'db "cursor" 'db "close" 'io
-                               "commit" 'db "rollback" 'db "ensure_connection" 'db
-                               "constraint_checks_disabled" 'db
-                               "check_constraints" 'db "prepare_database" 'db
-                               "check" 'db "ensure_timezone" 'pure)
-   "BaseDatabaseSchemaEditor" (hash "create_model" 'db)
-   "DatabaseValidation" (hash "check" 'db)
+   "BaseDatabaseWrapper" (hash "schema_editor" 'sql "cursor" 'sql "close" 'sql
+                               "commit" 'sql "rollback" 'sql "ensure_connection" 'sql
+                               "constraint_checks_disabled" 'sql
+                               "check_constraints" 'sql "prepare_database" 'sql
+                               "check" 'sql "ensure_timezone" 'pure)
+   "BaseDatabaseSchemaEditor" (hash "create_model" 'sql)
+   "DatabaseValidation" (hash "check" 'sql)
    "DatabaseClient" (hash "runshell" 'process "executable_name" 'pure)
    ;; decimal.Decimal (stdlib): as_tuple() reads the in-memory triple.
    "Decimal" (hash "as_tuple" 'pure "as_integer_ratio" 'pure "is_finite" 'pure
@@ -431,7 +431,7 @@
                    "to_eng_string" 'pure "to_integral" 'pure "normalize" 'pure)
    ;; os.DirEntry (os.scandir yield): is_dir/is_file/is_symlink/stat touch the
    ;; filesystem (io); name/path/inode read the fetched entry (pure).
-   "DirEntry" (hash "is_dir" 'io "is_file" 'io "is_symlink" 'io "stat" 'io
+   "DirEntry" (hash "is_dir" 'fs "is_file" 'fs "is_symlink" 'fs "stat" 'fs
                     "name" 'pure "path" 'pure "inode" 'pure)
    ;; threading.Lock / RLock (in-process synchronization, no domain effect)
    "Lock" (hash "acquire" 'pure "release" 'pure "locked" 'pure
@@ -462,12 +462,12 @@
    ;; argparse surface (pure); run_tests executes the suite — building and
    ;; tearing down test databases (db) — and orchestrates the run (process).
    "DiscoverRunner" (hash "add_arguments" 'pure "run_tests" 'process
-                          "setup_databases" 'db "teardown_databases" 'db
-                          "build_suite" 'pure "run_checks" 'db)
+                          "setup_databases" 'sql "teardown_databases" 'sql
+                          "build_suite" 'pure "run_checks" 'sql)
    ;; django.db.migrations.loader.MigrationLoader (external): reading the
    ;; applied-migration recorder is db; conflict detection / prefix lookup /
    ;; state projection are in-memory graph reads.
-   "MigrationLoader" (hash "check_consistent_history" 'db
+   "MigrationLoader" (hash "check_consistent_history" 'sql
                            "detect_conflicts" 'pure
                            "get_migration" 'pure
                            "get_migration_by_prefix" 'pure
@@ -478,15 +478,15 @@
                         "leaf_nodes" 'pure)
    ;; django.db.migrations.recorder.MigrationRecorder (external): applied /
    ;; unapplied migration records are persisted to the DB.
-   "MigrationRecorder" (hash "record_unapplied" 'db "record_applied" 'db
-                             "applied_migrations" 'db)
+   "MigrationRecorder" (hash "record_unapplied" 'sql "record_applied" 'sql
+                             "applied_migrations" 'sql)
    ;; django.db.backends.base.operations.DatabaseOperations (external): SQL
    ;; generation for the connection's backend (db domain).
-   "DatabaseOperations" (hash "max_name_length" 'pure "sequence_reset_sql" 'db
-                              "sql_flush" 'db "quote_name" 'pure)
+   "DatabaseOperations" (hash "max_name_length" 'pure "sequence_reset_sql" 'sql
+                              "sql_flush" 'sql "quote_name" 'pure)
    ;; django.db.backends.base.introspection.DatabaseIntrospection (external):
    ;; table-name reads hit the DB; type-code mapping is in-memory.
-   "DatabaseIntrospection" (hash "table_names" 'db "django_table_names" 'db
+   "DatabaseIntrospection" (hash "table_names" 'sql "django_table_names" 'sql
                                  "get_field_type" 'pure "identifier_converter" 'pure)))
 
 ;; module-path -> (function-name -> result-type-name) for stdlib/framework
@@ -1039,15 +1039,15 @@
 (define declared-param-effect-rows
   (hash
    (cons "django.core.handlers.asgi" 'ASGIHandler.send_response)
-   (list (cons 'send 'io))
+   (list (cons 'send 'http))
    (cons "django.core.handlers.asgi" 'ASGIHandler.read_body)
-   (list (cons 'receive 'io))
+   (list (cons 'receive 'http))
    (cons "django.core.handlers.asgi" 'ASGIHandler.listen_for_disconnect)
-   (list (cons 'receive 'io))
+   (list (cons 'receive 'http))
    (cons "django.core.handlers.wsgi" 'WSGIHandler.__call__)
-   (list (cons 'start_response 'io))
+   (list (cons 'start_response 'http))
    (cons "django.core.servers.basehttp" 'run)
-   (list (cons 'on_bind 'io))))
+   (list (cons 'on_bind 'http))))
 
 ;; Declared FUNCTION effects: (module-path . qualified-name) -> effect-domain
 ;; symbol (or list of symbols). The reducer (LLM) fills this for functions the

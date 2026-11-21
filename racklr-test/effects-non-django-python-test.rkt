@@ -15,7 +15,7 @@
 ;;      `unknown`.
 ;;   3. The Network operation vocabulary types their capabilities: a
 ;;      `Session.get(...)` reached through receiver-type dataflow is
-;;      `network<Session>.read`, not the coarse `ops=()` entry.
+;;      `http<Session>.read`, not the coarse `ops=()` entry.
 ;;   4. Real source using the frameworks flows through the whole import/effect
 ;;      pipeline to the same typed rows (parse → lower → import graph →
 ;;      fixpoint), not just a hand-built environment.
@@ -106,57 +106,57 @@
 
 (define (test-framework-import-rules)
   ;; Flask: network lifecycle, io helpers/streams, pure registries.
-  (check-equal? (module-effect-tag "flask.app") 'network)
-  (check-equal? (module-effect-tag "flask.testing") 'network)
-  (check-equal? (module-effect-tag "flask.helpers") 'io)
-  (check-equal? (module-effect-tag "flask.templating") 'io)
+  (check-equal? (module-effect-tag "flask.app") 'http)
+  (check-equal? (module-effect-tag "flask.testing") 'http)
+  (check-equal? (module-effect-tag "flask.helpers") 'stdio)
+  (check-equal? (module-effect-tag "flask.templating") 'fs)
   (check-equal? (module-effect-tag "flask.sessions") 'pure)
   (check-equal? (module-effect-tag "flask.globals") 'pure)
   ;; Werkzeug: server/test client are network, stream plumbing io, data pure.
-  (check-equal? (module-effect-tag "werkzeug.serving") 'network)
-  (check-equal? (module-effect-tag "werkzeug.wsgi") 'io)
+  (check-equal? (module-effect-tag "werkzeug.serving") 'http)
+  (check-equal? (module-effect-tag "werkzeug.wsgi") 'stdio)
   (check-equal? (module-effect-tag "werkzeug.urls") 'pure)
   ;; Click: terminal output is io, decorators/parameter types pure.
-  (check-equal? (module-effect-tag "click.echo") 'io)
-  (check-equal? (module-effect-tag "click.secho") 'io)
+  (check-equal? (module-effect-tag "click.echo") 'stdio)
+  (check-equal? (module-effect-tag "click.secho") 'stdio)
   (check-equal? (module-effect-tag "click.decorators") 'pure)
   ;; Jinja2: template loading is io, the engine surface pure.
-  (check-equal? (module-effect-tag "jinja2.loaders") 'io)
-  (check-equal? (module-effect-tag "jinja2.Environment.get_template") 'io)
+  (check-equal? (module-effect-tag "jinja2.loaders") 'fs)
+  (check-equal? (module-effect-tag "jinja2.Environment.get_template") 'fs)
   (check-equal? (module-effect-tag "jinja2.runtime") 'pure)
   ;; Requests: transport modules network, in-memory structures pure, and the
   ;; mixed data-object module deliberately untagged (the receiver-TYPE table
   ;; types Response body parsing vs stream consumption precisely).
-  (check-equal? (module-effect-tag "requests.sessions") 'network)
-  (check-equal? (module-effect-tag "requests.adapters") 'network)
+  (check-equal? (module-effect-tag "requests.sessions") 'http)
+  (check-equal? (module-effect-tag "requests.adapters") 'http)
   (check-equal? (module-effect-tag "requests.cookies") 'pure)
   (check-equal? (module-effect-tag "requests.models") #f)
   ;; Requests' dependencies.
-  (check-equal? (module-effect-tag "urllib3.connectionpool") 'network)
+  (check-equal? (module-effect-tag "urllib3.connectionpool") 'http)
   (check-equal? (module-effect-tag "urllib3.util.retry") 'pure)
   (check-equal? (module-effect-tag "idna") 'pure)
   ;; The public re-export surface of a package that is not itself scanned:
   ;; `from flask import Flask` / `from requests import Session` resolve.
-  (check-equal? (module-effect-tag "flask.Flask") 'network)
-  (check-equal? (module-effect-tag "requests.Session") 'network))
+  (check-equal? (module-effect-tag "flask.Flask") 'http)
+  (check-equal? (module-effect-tag "requests.Session") 'http))
 
 ;; ── 3. typed network operations ─────────────────────────────────────
 
 (define (test-network-vocabulary-typed-ops)
   ;; The vocabulary is injected data, reachable through the lexicon.
-  (check-equal? (method-ops 'network "requests.sessions" "Session" "get")
-                '(network<Session>.read))
-  (check-equal? (method-ops 'network "requests.sessions" "Session" "post")
-                '(network<Session>.write))
-  (check-equal? (method-ops 'network "requests.sessions" "Session" "request")
-                '(network<Session>.request))
+  (check-equal? (method-ops 'http "requests.sessions" "Session" "get")
+                '(http<Session>.read))
+  (check-equal? (method-ops 'http "requests.sessions" "Session" "post")
+                '(http<Session>.write))
+  (check-equal? (method-ops 'http "requests.sessions" "Session" "request")
+                '(http<Session>.request))
   ;; A method with no vocabulary entry keeps the coarse capability.
-  (check-equal? (method-ops 'network "requests.sessions" "Session"
+  (check-equal? (method-ops 'http "requests.sessions" "Session"
                             "prepare_request")
                 '())
   ;; The JavaScript host supplies no network vocabulary, so the same call kind
   ;; stays coarse there (the injection seam is real, not Python-hardcoded).
-  (check-equal? (method-ops 'network "requests.sessions" "Session" "get"
+  (check-equal? (method-ops 'http "requests.sessions" "Session" "get"
                             javascript-lexicon)
                 '()))
 
@@ -184,12 +184,12 @@
                                         (cons "app.py" app))
                                   #:import-env env))
   (define r (hash-ref rows (cons "app.py" 'fetch)))
-  (check-equal? (row-names r) '(network))
-  (check-equal? (entry-ops (row-lookup r 'network)) '(network<Session>.read)))
+  (check-equal? (row-names r) '(http))
+  (check-equal? (entry-ops (row-lookup r 'http)) '(http<Session>.read)))
 
 (define (test-flask-typed-op)
   ;; Same dataflow through a Flask application object: the lifecycle method is
-  ;; typed `network<Flask>.wsgi_app` from the vocabulary, not a bare `network`.
+  ;; typed `http<Flask>.wsgi_app` from the vocabulary, not a bare `network`.
   (define flask-app
     (prog (py-class "Flask"
                     (list (py-method "wsgi_app" (uir-null))
@@ -206,8 +206,8 @@
                                                (cons "user.py" app))
                                          #:import-env env)
                       (cons "user.py" 'serve)))
-  (check-equal? (row-names r) '(network))
-  (check-equal? (entry-ops (row-lookup r 'network)) '(network<Flask>.wsgi_app)))
+  (check-equal? (row-names r) '(http))
+  (check-equal? (entry-ops (row-lookup r 'http)) '(http<Flask>.wsgi_app)))
 
 ;; ── 5. real source through the whole pipeline ───────────────────────
 
@@ -242,15 +242,15 @@
       "    session = Session()\n"
       "    return session.get('https://example.com')\n")))
   (check-equal? (row-names (hash-ref rows (cons "main.py" 'serve)))
-                '(network))
+                '(http))
   (check-equal? (entry-ops (row-lookup (hash-ref rows (cons "main.py" 'serve))
-                                       'network))
-                '(network<Flask>.run))
+                                       'http))
+                '(http<Flask>.run))
   (check-equal? (row-names (hash-ref rows (cons "main.py" 'fetch)))
-                '(network))
+                '(http))
   (check-equal? (entry-ops (row-lookup (hash-ref rows (cons "main.py" 'fetch))
-                                       'network))
-                '(network<Session>.read)))
+                                       'http))
+                '(http<Session>.read)))
 
 ;; ── 6. the shared Django path stays pinned ──────────────────────────
 ;;
