@@ -13,6 +13,7 @@ REDUCED_JSON = os.path.join(ROOT, "racklr", "effects",
 REDUCED_RKT = os.path.join(ROOT, "racklr", "effects",
                            "library-reduced-function-effects.rkt")
 FX_ROWS = os.path.join(HERE, "fx-rows.rkt")
+JS_FX_ROWS = os.path.join(HERE, "js-ts-fx-rows.rkt")
 CLASSIFY = os.path.join(HERE, "classify-functions.sh")
 
 
@@ -20,12 +21,32 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def detect_host(probe_dir):
+    """python or javascript, by the dominant source-file extension."""
+    js_exts = {".js", ".mjs", ".ts", ".tsx"}
+    py = js = 0
+    skip = {"node_modules", ".git", "dist", "build", "vendor", "__pycache__"}
+    for root, dirs, files in os.walk(probe_dir):
+        dirs[:] = [d for d in dirs if d not in skip]
+        for f in files:
+            ext = os.path.splitext(f)[1]
+            if ext == ".py":
+                py += 1
+            elif ext in js_exts:
+                js += 1
+            if py > 5 or js > 5:
+                break
+    return "javascript" if js > py else "python"
+
+
 def fx_rows(probe_dir):
+    host = detect_host(probe_dir)
+    script = JS_FX_ROWS if host == "javascript" else FX_ROWS
     env = dict(os.environ)
     env["PLTCOLLECTS"] = ROOT + ":" + os.path.join(ROOT, "effervesce") + ":"
-    res = run(["racket", FX_ROWS, probe_dir], env=env, cwd=ROOT, timeout=600)
+    res = run(["racket", script, probe_dir], env=env, cwd=ROOT, timeout=600)
     if res.returncode != 0:
-        raise SystemExit(f"fx-rows failed: {res.stderr[-200:]}")
+        raise SystemExit(f"fx-rows ({host}) failed: {res.stderr[-200:]}")
     return json.loads(res.stdout)
 
 
