@@ -494,6 +494,15 @@ and the `effervesce` pointer bumps. Also open, outside the phase increments:
 #76 (TS/TSX subscript lowering so emitted JS re-parses) and #78 (keyword-only
 and rest-arity parameter markers in Python `def` lowering).
 
+## Effect vocabulary widening + lemmatization (proposed, not started)
+
+New design doc `docs/effect-vocabulary-plan.md`: widen the effect vocabulary
+(umbrella categories + subtyping leaves such as `http`/`socket` <: `network`,
+`sql`/`nosql`/`vector` <: `db`, `fs` <: `io`), validate it on langchain/boto3/
+redis subsets, then extend the `formalize.sh` lemmatize loop to TS/JS. Awaiting
+operator sign-off on the vocabulary shape and the test-library slices before
+any code changes.
+
 ## Kernel-leaf verification (split landed, machine check landed, transitivity fixed)
 
 The grand vision now includes a machine-checked kernel leaf for the effect
