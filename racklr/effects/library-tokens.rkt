@@ -110,42 +110,48 @@
    (hash
     'llm (set "llm" "openai" "anthropic" "cohere" "ollama" "groq" "agno"
               "langgraph" "langchain" "llamaindex")
-    'db (set "db" "database" "sql" "sqlalchemy" "sqlmodel" "asyncpg" "psycopg"
-             "transaction")
-    'network (set "fetch" "axios" "httpx" "requests" "aiohttp" "urllib")
+    'sql (set "sql" "sqlalchemy" "sqlmodel" "asyncpg" "psycopg" "sqlite3"
+              "transaction")
+    'nosql (set "pymongo" "motor")
+    'vector (set "chromadb" "pinecone" "faiss" "pgvector")
+    'db (set "db" "database")
+    'http (set "httpx" "requests" "aiohttp" "urllib" "urllib3" "fetch" "axios"
+               "http")
+    'socket (set "socket" "ssl")
+    'websocket (set "websockets" "websocket")
     'cache (set "redis" "memcache" "cache")
     'env (set "dotenv")
     'rng (set "random" "secrets")
     'queue (set "kafka" "celery" "kombu" "pika" "rabbitmq" "pulsar"))
    ;; Root domains are tried in this order (the strongest root wins).
-   '(llm db network cache env rng queue)
+   '(llm sql nosql vector db http socket websocket cache env rng queue)
    ;; ── bare-name effects: a bare callee name that is an effect on its own ──
    (hash-union
     (hash
-    ;; network / cache client libraries called as bare names
-    "fetch" 'network
-    "axios" 'network
+    ;; http client libraries called as bare names
+    "fetch" 'http
+    "axios" 'http
     ;; NOTE: Next.js cache verbs (revalidatePath/revalidate_path/invalidate/
     ;; clearCache/purgeCache) are JS-host names, not Python; they were leaking
     ;; into the Python/Django default and mis-classifying cache off-corpus.
     ;; They belong in the JS lexicon, not here.
-    ;; bare builtins that perform console/file I/O, plus framework logging /
-    ;; deprecation-warning helpers imported bare
+    ;; bare builtins: filesystem I/O vs console/logging output, plus framework
+    ;; logging / deprecation-warning helpers imported bare
     ;; (`django.utils.log.log_response`).
-    "open" 'io
-    "print" 'io
-    "input" 'io
-    "warn_about_external_use" 'io
-    "log_response" 'io
-    "NamedTemporaryFile" 'io
-    "TemporaryFile" 'io
-    "TemporaryDirectory" 'io
-    "mkstemp" 'io
-    "mkdtemp" 'io
+    "open" 'fs
+    "print" 'stdio
+    "input" 'stdio
+    "warn_about_external_use" 'stdio
+    "log_response" 'stdio
+    "NamedTemporaryFile" 'fs
+    "TemporaryFile" 'fs
+    "TemporaryDirectory" 'fs
+    "mkstemp" 'fs
+    "mkdtemp" 'fs
     ;; netrc (reads ~/.netrc) and bare file-position ops (seek/tell).
-    "netrc" 'io
-    "seek" 'io
-    "tell" 'io
+    "netrc" 'fs
+    "seek" 'fs
+    "tell" 'fs
     ;; eval / exec run arbitrary code in-process (the Django shell command
     ;; feeds user input to exec); code execution is the process domain, the
     ;; same bucket as os.system / subprocess. compile is pure (see
@@ -153,24 +159,23 @@
     "eval" 'process
     "exec" 'process
     ;; asgiref.sync.sync_to_async: runs a sync callable on a thread-pool
-    ;; executor (the async bridge), so the scheduling is an io effect.
+    ;; executor (the async bridge), so the scheduling is an io (umbrella) effect.
     "sync_to_async" 'io
-    ;; method and bare names that perform a time effect regardless of receiver:
-    ;; `time.sleep` / `from time import sleep`, clock reads (`time.time`,
-    ;; `time.monotonic`), and Django's `now` / `tz_now` timezone clock reads.
-    "sleep" 'time
-    "time" 'time
-    "monotonic" 'time
-    "monotonic_ns" 'time
-    "perf_counter" 'time
-    "perf_counter_ns" 'time
-    "process_time" 'time
-    "thread_time" 'time
-    "time_ns" 'time
-    "tz_now" 'time
-    "now" 'time
-    "localtime" 'time
-    "gmtime" 'time
+    ;; sleep vs clock reads, as bare names (`time.sleep` / `from time import
+    ;; sleep`, clock reads `time.time`/`time.monotonic`, Django's now/tz_now).
+    "sleep" 'sleep
+    "time" 'clock
+    "monotonic" 'clock
+    "monotonic_ns" 'clock
+    "perf_counter" 'clock
+    "perf_counter_ns" 'clock
+    "process_time" 'clock
+    "thread_time" 'clock
+    "time_ns" 'clock
+    "tz_now" 'clock
+    "now" 'clock
+    "localtime" 'clock
+    "gmtime" 'clock
     ;; environment writes and nondeterminism, as bare names (reads stay pure)
     "putenv" 'env
     "uuid4" 'rng)
@@ -186,19 +191,19 @@
    ;; deliberately absent: it collides with `math.log`.
    (hash-union
     (hash
-    "open" 'io "read" 'io "readline" 'io "readlines" 'io "read1" 'io
-    "readinto" 'io "readinto1" 'io "write" 'io "writelines" 'io "flush" 'io
-    "seek" 'io "tell" 'io "truncate" 'io "fileno" 'io "debug" 'io "info" 'io
-    "warning" 'io "warn" 'io "error" 'io "critical" 'io "exception" 'io
+    "open" 'fs "read" 'fs "readline" 'fs "readlines" 'fs "read1" 'fs
+    "readinto" 'fs "readinto1" 'fs "write" 'fs "writelines" 'fs "flush" 'fs
+    "seek" 'fs "tell" 'fs "truncate" 'fs "fileno" 'fs "debug" 'stdio "info" 'stdio
+    "warning" 'stdio "warn" 'stdio "error" 'stdio "critical" 'stdio "exception" 'stdio
     ;; dotted methods that send email
     "send_mail" 'email "send_mass_mail" 'email "mail_admins" 'email
     "mail_managers" 'email
-    ;; clock reads / sleeps reached as dotted methods (`time.sleep`,
+    ;; sleep / clock reads reached as dotted methods (`time.sleep`,
     ;; `datetime.now`, Django `timezone.now`)
-    "sleep" 'time "time" 'time "monotonic" 'time "monotonic_ns" 'time
-    "perf_counter" 'time "perf_counter_ns" 'time "process_time" 'time
-    "thread_time" 'time "time_ns" 'time "tz_now" 'time "now" 'time
-    "localtime" 'time "gmtime" 'time)
+    "sleep" 'sleep "time" 'clock "monotonic" 'clock "monotonic_ns" 'clock
+    "perf_counter" 'clock "perf_counter_ns" 'clock "process_time" 'clock
+    "thread_time" 'clock "time_ns" 'clock "tz_now" 'clock "now" 'clock
+    "localtime" 'clock "gmtime" 'clock)
     ;; Racket clock reads, dotted like any other method name
     ;; (library-racket-tokens.rkt).
     (for/hash ([n (in-set racket-time-builtins)]) (values n 'time))
@@ -208,27 +213,27 @@
    ;; operations that classify name-only even when the receiver cannot be
    ;; resolved (`obj.prefetch_related`, `qs.values_list`).
    (hash
-    "prefetch_related" 'db "select_related" 'db "values_list" 'db
-    "get_or_create" 'db "bulk_create" 'db "refresh_from_db" 'db
-    "in_bulk" 'db "db_for_read" 'db "db_for_write" 'db
-    "create_deterministic_function" 'db)
+    "prefetch_related" 'sql "select_related" 'sql "values_list" 'sql
+    "get_or_create" 'sql "bulk_create" 'sql "refresh_from_db" 'sql
+    "in_bulk" 'sql "db_for_read" 'sql "db_for_write" 'sql
+    "create_deterministic_function" 'sql)
    ;; ── ambiguous-or-generic method fallback: gated by the flag ──
    ;; Generic-English ORM verbs: `get`/`update`/`filter`/`save`/... collide
    ;; with non-DB receivers, so they classify as db ONLY when the host enables
    ;; this table (the Django-ORM dialect flag, default #t) or with receiver
    ;; evidence, never name-only in a non-django corpus.
    (hash
-    "all" 'db "annotate" 'db "aggregate" 'db "alias" 'db "as_manager" 'db
-    "count" 'db "dates" 'db "datetimes" 'db "db_manager" 'db "defer" 'db
-    "difference" 'db "distinct" 'db "earliest" 'db "exclude" 'db
-    "exists" 'db "explain" 'db "extra" 'db "filter" 'db "first" 'db
-    "get" 'db "intersection" 'db "iterator" 'db "last" 'db "latest" 'db
-    "none" 'db "only" 'db "order_by" 'db "raw" 'db "reverse" 'db
-    "union" 'db "using" 'db "values" 'db "bulk_update" 'db "create" 'db
-    "delete" 'db "update" 'db "update_or_create" 'db "save" 'db
-    "execute" 'db "executemany" 'db "fetchone" 'db "fetchall" 'db
-    "fetchmany" 'db "commit" 'db "rollback" 'db "cursor" 'db
-    "create_function" 'db "create_aggregate" 'db)
+    "all" 'sql "annotate" 'sql "aggregate" 'sql "alias" 'sql "as_manager" 'sql
+    "count" 'sql "dates" 'sql "datetimes" 'sql "db_manager" 'sql "defer" 'sql
+    "difference" 'sql "distinct" 'sql "earliest" 'sql "exclude" 'sql
+    "exists" 'sql "explain" 'sql "extra" 'sql "filter" 'sql "first" 'sql
+    "get" 'sql "intersection" 'sql "iterator" 'sql "last" 'sql "latest" 'sql
+    "none" 'sql "only" 'sql "order_by" 'sql "raw" 'sql "reverse" 'sql
+    "union" 'sql "using" 'sql "values" 'sql "bulk_update" 'sql "create" 'sql
+    "delete" 'sql "update" 'sql "update_or_create" 'sql "save" 'sql
+    "execute" 'sql "executemany" 'sql "fetchone" 'sql "fetchall" 'sql
+    "fetchmany" 'sql "commit" 'sql "rollback" 'sql "cursor" 'sql
+    "create_function" 'sql "create_aggregate" 'sql)
    #t
    ;; ── root-qualified method effects ──
    ;; `root.method` → effect, where the effect depends on the method, not only
@@ -239,21 +244,21 @@
          ;; environment write (`os.putenv`); reads (`os.getenv`) stay pure
          "putenv" 'env
          ;; `os.*` filesystem operations
-         "remove" 'io "unlink" 'io "rename" 'io "renames" 'io "replace" 'io
-         "mkdir" 'io "makedirs" 'io "rmdir" 'io "removedirs" 'io "chdir" 'io
-         "chmod" 'io "chown" 'io "utime" 'io "link" 'io "symlink" 'io
-         "readlink" 'io "listdir" 'io "scandir" 'io "stat" 'io "lstat" 'io
-         "fsync" 'io "fdatasync" 'io
+         "remove" 'fs "unlink" 'fs "rename" 'fs "renames" 'fs "replace" 'fs
+         "mkdir" 'fs "makedirs" 'fs "rmdir" 'fs "removedirs" 'fs "chdir" 'fs
+         "chmod" 'fs "chown" 'fs "utime" 'fs "link" 'fs "symlink" 'fs
+         "readlink" 'fs "listdir" 'fs "scandir" 'fs "stat" 'fs "lstat" 'fs
+         "fsync" 'fs "fdatasync" 'fs
          ;; `os.*` filesystem metadata reads and fd (stream) operations
-         "exists" 'io "isfile" 'io "isdir" 'io "islink" 'io "lexists" 'io
-         "samefile" 'io "sameopenfile" 'io "samestat" 'io "getsize" 'io
-         "getmtime" 'io "getctime" 'io "getatime" 'io "access" 'io
-         "walk" 'io "fwalk" 'io "realpath" 'io "fstat" 'io "fstatvfs" 'io
-         "statvfs" 'io "getcwd" 'io "getcwdb" 'io
-         "close" 'io "fdopen" 'io "open" 'io "read" 'io "write" 'io
-         "dup" 'io "dup2" 'io "dup3" 'io "lseek" 'io "ftruncate" 'io
-         "fchmod" 'io "fchown" 'io "isatty" 'io "pipe" 'io "pipe2" 'io
-         "mkfifo" 'io
+         "exists" 'fs "isfile" 'fs "isdir" 'fs "islink" 'fs "lexists" 'fs
+         "samefile" 'fs "sameopenfile" 'fs "samestat" 'fs "getsize" 'fs
+         "getmtime" 'fs "getctime" 'fs "getatime" 'fs "access" 'fs
+         "walk" 'fs "fwalk" 'fs "realpath" 'fs "fstat" 'fs "fstatvfs" 'fs
+         "statvfs" 'fs "getcwd" 'fs "getcwdb" 'fs
+         "close" 'fs "fdopen" 'fs "open" 'fs "read" 'fs "write" 'fs
+         "dup" 'fs "dup2" 'fs "dup3" 'fs "lseek" 'fs "ftruncate" 'fs
+         "fchmod" 'fs "fchown" 'fs "isatty" 'fs "pipe" 'fs "pipe2" 'fs
+         "mkfifo" 'fs
          ;; `os.*` process-spawning / process-control operations
          "system" 'process "popen" 'process "popen2" 'process "popen3" 'process
          "popen4" 'process "spawnl" 'process "spawnle" 'process "spawnlp" 'process
@@ -264,13 +269,13 @@
          "killpg" 'process "startfile" 'process "posix_spawn" 'process
          "posix_spawnp" 'process "umask" 'process "_exit" 'process "abort" 'process)
     'sys (hash "exit" 'process)
-    'warnings (hash "warn" 'io)
-    'glob (hash "glob" 'io "iglob" 'io)
-    'traceback (hash "print_exc" 'io "print_exception" 'io "print_last" 'io)
+    'warnings (hash "warn" 'stdio)
+    'glob (hash "glob" 'fs "iglob" 'fs)
+    'traceback (hash "print_exc" 'stdio "print_exception" 'stdio "print_last" 'stdio)
     'mail (hash "send" 'email)
     ;; django.utils.timezone clock reads (make_aware/is_aware are pure datetime
     ;; arithmetic and live in pure-stdlib-methods below, not here)
-    'timezone (hash "now" 'time "localtime" 'time))
+    'timezone (hash "now" 'clock "localtime" 'clock))
    ;; ── roots whose method namespace makes the name-only fallback unsafe ──
    ;; builtin type roots whose method namespace collides with the fallback
    (set "dict" "list" "set" "str" "int" "float" "complex" "bool" "bytes"
@@ -291,13 +296,13 @@
    (hash-union
     (hash 'subprocess 'process
           'multiprocessing 'process
-          'shutil 'io
-          'tempfile 'io
-          'fileinput 'io
+          'shutil 'fs
+          'tempfile 'fs
+          'fileinput 'fs
           'smtplib 'email
-          'http 'network
-          'socket 'network
-          'urllib3 'network)
+          'http 'http
+          'socket 'socket
+          'urllib3 'http)
     ;; Racket process spawn/control names, e.g. (system "make") / (exit 0).
     racket-process-root-effects
     ;; both tables say 'process where they overlap (e.g. 'subprocess)

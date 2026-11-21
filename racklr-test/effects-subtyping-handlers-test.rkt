@@ -306,7 +306,7 @@
   ;; The verdicts are the expected ones, not merely self-consistent.
   (check-equal? (bridge-verdicts-by-subtyping bridge-spec
                                               (hash "Store" leaky) bridge-needs)
-                (list (list "Store" '(network) #f)))
+                (list (list "Store" '(http) #f)))
   (check-equal? (bridge-verdicts-by-subtyping bridge-spec
                                               (hash "Api" deferred) bridge-needs)
                 (list (list "Api" '() #t))))

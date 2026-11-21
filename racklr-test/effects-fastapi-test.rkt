@@ -44,8 +44,8 @@
 (check-equal? (row-names* 'get_db) '())
 (check-equal? (row-names* 'list_orders) '(db))
 (check-equal? (row-names* 'create_order) '(db llm))
-(check-equal? (row-names* 'lookup) '(network))
-(check-equal? (row-names* 'cached) '(cache network))
+(check-equal? (row-names* 'lookup) '(http))
+(check-equal? (row-names* 'cached) '(cache http))
 
 ;; The same five rows, but through the REAL pipeline: tokenize → lower →
 ;; module-spec → build-module-table → resolve-exports → derive-class-method-
@@ -74,7 +74,7 @@
 (check-equal? (pipeline-row-names 'get_db) '())
 (check-equal? (pipeline-row-names 'list_orders) '(db))
 (check-equal? (pipeline-row-names 'create_order) '(db llm))
-(check-equal? (pipeline-row-names 'lookup) '(network))
-(check-equal? (pipeline-row-names 'cached) '(cache network))
+(check-equal? (pipeline-row-names 'lookup) '(http))
+(check-equal? (pipeline-row-names 'cached) '(cache http))
 
 (displayln "All FastAPI infer tests passed.")

@@ -115,11 +115,11 @@
                       (uir-call (dot (dot (v "User") "objects") "filter")
                                 (list (uir-record '()))))))
   (define r (hash-ref (infer-effects p) 'q))
-  (check-equal? (modality r 'db) 'must))
+  (check-equal? (modality r 'sql) 'must))
 
 (define (test-direct-network)
   (define p (prog (fn "f" (uir-call (v "fetch") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'http) 'must))
 
 (define (test-direct-cache)
   (define p (prog (fn "r" (uir-call (v "revalidate_path") (list (uir-string "/p"))))))
@@ -216,11 +216,11 @@
 
 (define (test-httpx-network)
   (define p (prog (fn "f" (uir-call (dot (v "httpx") "get") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'http) 'must))
 
 (define (test-requests-network)
   (define p (prog (fn "f" (uir-call (dot (v "requests") "get") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'http) 'must))
 
 (define (test-redis-cache)
   (define p (prog (fn "f" (uir-call (dot (v "redis") "get") (list (uir-string "k"))))))
@@ -245,14 +245,14 @@
                       (uir-call (uir-get (uir-get (v "Order") (uir-string "objects"))
                                          (uir-string "all"))
                                 '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'sql) 'must))
 
 ;; ── JS/TS/JSX `dot`-encoded member access ───────────────────────────
 
 (define (test-js-dot-axios-network)
   (define p (prog (fn "f" (uir-call (jsdot (v "axios") "get")
                                     (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'http) 'must))
 
 (define (test-js-dot-db-db)
   (define p (prog (fn "f" (uir-call (jsdot (v "db") "query")
@@ -263,7 +263,7 @@
   (define p (prog (fn "q"
                       (uir-call (jsdot (jsdot (v "User") "objects") "filter")
                                 (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'sql) 'must))
 
 (define (test-js-dot-redis-cache)
   (define p (prog (fn "f" (uir-call (jsdot (v "redis") "get")
@@ -278,7 +278,7 @@
 (define (test-js-dot-bare-fetch-network)
   ;; A bare callee (non-dotted) still classifies: fetch(...) → network.
   (define p (prog (fn "f" (uir-call (v "fetch") (list (uir-string "/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'network) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'http) 'must))
 
 (define (test-handler-primitive-is-pure)
   ;; __handle is a runtime primitive: calling it adds no direct effect and no
@@ -418,8 +418,8 @@
   (define p (prog (fn "f" (uir-call (dot (v "warnings") "warn")
                                     (list (uir-string "deprecated"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'io) 'must)
-  (check-equal? (row-names r) '(io)))
+  (check-equal? (modality r 'stdio) 'must)
+  (check-equal? (row-names r) '(stdio)))
 
 (define (test-dunder-method-pure)
   ;; Protocol ("dunder") methods on an arbitrary receiver initialize / compare /
@@ -503,9 +503,9 @@
                   (fn "g" (uir-call (dot (v "connection") "commit") '()))
                   (fn "h" (uir-call (dot (v "router") "db_for_write") (list (v "model"))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'f) 'db) 'must)
-  (check-equal? (modality (hash-ref rows 'g) 'db) 'must)
-  (check-equal? (modality (hash-ref rows 'h) 'db) 'must))
+  (check-equal? (modality (hash-ref rows 'f) 'sql) 'must)
+  (check-equal? (modality (hash-ref rows 'g) 'sql) 'must)
+  (check-equal? (modality (hash-ref rows 'h) 'sql) 'must))
 
 (define (test-django-declarative-constructor-pure)
   ;; Model field + query expression constructors are pure class instantiation,
@@ -537,18 +537,18 @@
   ;; self.queryset.filter(...) → db (receiver is an arbitrary object chain).
   (define p (prog (fn "q" (uir-call (dot (dot (v "self") "queryset") "filter")
                                      (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'q) 'sql) 'must))
 
 (define (test-dotted-orm-save-db)
   ;; obj.save() → db (Model instance save).
   (define p (prog (fn "s" (uir-call (dot (v "obj") "save") '()))))
-  (check-equal? (modality (hash-ref (infer-effects p) 's) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 's) 'sql) 'must))
 
 (define (test-dotted-orm-values-list-db)
   ;; qs.values_list(...) → db.
   (define p (prog (fn "v" (uir-call (dot (v "qs") "values_list")
                                     (list (uir-string "id"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'v) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'v) 'sql) 'must))
 
 (define (test-bare-filter-is-pure-not-db)
   ;; A bare `filter(...)` is the Python builtin (pure), not an ORM call: the
@@ -562,8 +562,8 @@
   (define p (prog (fn "f" (uir-call (dot (v "requests") "get")
                                     (list (uir-string "/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'network) 'must)
-  (check-equal? (row-names r) '(network)))
+  (check-equal? (modality r 'http) 'must)
+  (check-equal? (row-names r) '(http)))
 
 
 ;; ── stdlib effect roots (io / process / time / email) ────────────────
@@ -573,22 +573,22 @@
 
 (define (test-bare-open-io)
   (define p (prog (fn "f" (uir-call (v "open") (list (uir-string "/tmp/x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'fs) 'must))
 
 (define (test-bare-print-io)
   (define p (prog (fn "f" (uir-call (v "print") (list (uir-string "x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'stdio) 'must))
 
 (define (test-os-makedirs-io)
   (define p (prog (fn "f" (uir-call (dot (v "os") "makedirs")
                                     (list (uir-string "/tmp/d"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'fs) 'must))
 
 (define (test-stream-write-io)
   ;; self.stdout.write(...) → io (dotted method name).
   (define p (prog (fn "f" (uir-call (dot (dot (v "self") "stdout") "write")
                                     (list (uir-string "x"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'io) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'fs) 'must))
 
 (define (test-subprocess-process)
   (define p (prog (fn "f" (uir-call (dot (v "subprocess") "run")
@@ -603,7 +603,7 @@
 (define (test-time-sleep-time)
   (define p (prog (fn "f" (uir-call (dot (v "time") "sleep")
                                     (list (uir-number "1"))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'time) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'sleep) 'must))
 
 (define (test-django-send-mail-email)
   ;; django.core.mail.send_mail(...) → email.
@@ -650,7 +650,7 @@
   ;; op-level time check runs before whole-module purity, so it is `time`.
   (define p (prog (fn "f" (uir-call (dot (v "datetime") "now") '()))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'time) 'must)
+  (check-equal? (modality r 'clock) 'must)
   (check-false (row-lookup r 'unknown)))
 
 (define (test-os-path-getsize-is-io)
@@ -659,7 +659,7 @@
   (define p (prog (fn "f" (uir-call (dot (dot (v "os") "path") "getsize")
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
-  (check-equal? (modality r 'io) 'must)
+  (check-equal? (modality r 'fs) 'must)
   (check-false (row-lookup r 'unknown)))
 
 ;; ── root-aware ORM heuristic ─────────────────────────────────────────
@@ -674,7 +674,7 @@
                                     (list (uir-string "/tmp/x"))))))
   (define r (hash-ref (infer-effects p) 'f))
   (check-false (row-lookup r 'db))
-  (check-equal? (modality r 'io) 'must))
+  (check-equal? (modality r 'fs) 'must))
 
 (define (test-dict-get-not-db)
   ;; dict.get collides with the QuerySet `get` op; the builtin-type root must win.
@@ -705,7 +705,7 @@
   ;; (non-stdlib, non-builtin) receiver root still resolves to db.
   (define p (prog (fn "f" (uir-call (dot (v "queryset") "filter")
                                     (list (uir-record '()))))))
-  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'db) 'must))
+  (check-equal? (modality (hash-ref (infer-effects p) 'f) 'sql) 'must))
 
 
 ;; ── Python intra-program method calls ───────────────────────────────
@@ -844,7 +844,7 @@
                   (py-class/super "A" (uir-get (v "models") (uir-string "Model"))
                                   (list (py-method "run" (uir-call (dot (v "self") "save") '()))))))
   (define rows (infer-effects p))
-  (check-equal? (modality (hash-ref rows 'A.run) 'db) 'must))
+  (check-equal? (modality (hash-ref rows 'A.run) 'sql) 'must))
 
 (define (test-super-call-resolution)
   ;; Derived.__init__ calls super().__init__(); Base.__init__ hits db. The
@@ -1198,15 +1198,15 @@
   ;; `posixpath` path munging → pure, bare constructors → pure or io.
   (define (row-of stmt)
     (hash-ref (infer-effects (prog (fn "f" stmt))) 'f))
-  (check-equal? (row-names (row-of (uir-call (dot (v "os") "exists") '()))) '(io))
-  (check-equal? (row-names (row-of (uir-call (dot (v "os") "close") '()))) '(io))
-  (check-equal? (row-names (row-of (uir-call (dot (v "os") "getcwd") '()))) '(io))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "exists") '()))) '(fs))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "close") '()))) '(fs))
+  (check-equal? (row-names (row-of (uir-call (dot (v "os") "getcwd") '()))) '(fs))
   (check-equal? (row-names (row-of (uir-call (dot (v "os") "_exit") '()))) '(process))
   (check-equal? (row-names (row-of (uir-call (dot (v "os") "getenv") '()))) '())
   (check-equal? (row-names (row-of (uir-call (dot (v "posixpath") "splitext") '()))) '())
   (check-equal? (row-names (row-of (uir-call (v "md5") '()))) '())
   (check-equal? (row-names (row-of (uir-call (v "Lock") '()))) '())
-  (check-equal? (row-names (row-of (uir-call (v "NamedTemporaryFile") '()))) '(io)))
+  (check-equal? (row-names (row-of (uir-call (v "NamedTemporaryFile") '()))) '(fs)))
 
 ;; ── receiver-type dataflow ──────────────────────────────────────────
 ;; `x = KnownClass(...)` / `self.attr = KnownClass(...)` tracks the receiver's
@@ -1713,7 +1713,7 @@
   (define r (hash-ref (infer-effects-all (list (cons "app.py" app))
                                          #:import-env env)
                       (cons "app.py" 'lookup)))
-  (check-equal? (row-names r) '(network))
+  (check-equal? (row-names r) '(http))
   (check-false (row-lookup r 'unknown)))
 
 (define (test-return-type-projection-cached-property)
@@ -1796,9 +1796,9 @@
     (define callee (uir-get (v (car pr)) (sym (cadr pr))))
     (check-equal? (classify-call callee (hash)) '(pure . #f)
                   (format "~a.~a is pure" (car pr) (cadr pr))))
-  ;; os.remove stays io: the effectful root wins over any pure container name
+  ;; os.remove is fs: the effectful root wins over any pure container name
   (check-equal? (classify-call (uir-get (v "os") (sym "remove")) (hash))
-                '(effect . io)))
+                '(effect . fs)))
 
 (define (test-annotate-writes-back)
   (define p (prog (fn "summarize"

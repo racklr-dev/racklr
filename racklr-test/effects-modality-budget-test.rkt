@@ -82,7 +82,7 @@
   (define loop (uir-while (uir-call (dot (v "time") "now") '())
                           (uir-null) (uir-null)))
   (define r (row-of (prog (fn "f" loop)) "f"))
-  (check-equal? (modality r 'time) 'must)
+  (check-equal? (modality r 'clock) 'must)
   (check-equal? (budget r 'time) #f))
 
 (define (test-short-circuit-right-operand-is-conditional)
@@ -173,20 +173,20 @@
   (define p (prog (uir-class (sym "User") '() '() '())
                   (fn "f" (uir-call (dot (dot (v "User") "objects") "filter") '()))))
   (define r (row-of p "f"))
-  (check-equal? (modality r 'db) 'must)
-  (check-equal? (scope r 'db) "reads=User"))
+  (check-equal? (modality r 'sql) 'must)
+  (check-equal? (scope r 'sql) "reads=User"))
 
 (define (test-db-save-grounds-write-scope)
   (define p (prog (uir-class (sym "User") '() '() '())
                   (fn "f" (uir-call (dot (v "User") "save") '()))))
   (define r (row-of p "f"))
-  (check-equal? (scope r 'db) "writes=User"))
+  (check-equal? (scope r 'sql) "writes=User"))
 
 (define (test-scope-propagates-through-callee)
   (define p (prog (uir-class (sym "User") '() '() '())
                   (fn "f" (uir-call (dot (dot (v "User") "objects") "filter") '()))
                   (fn "g" (uir-call (v "f") '()))))
-  (check-equal? (scope (row-of p "g") 'db) "reads=User"))
+  (check-equal? (scope (row-of p "g") 'sql) "reads=User"))
 
 (define (test-conflicting-resources-lose-scope)
   ;; Two different resources in one row: the single scope slot cannot

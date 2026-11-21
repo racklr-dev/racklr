@@ -127,7 +127,7 @@
   ;; guess and never `unknown`.
   (define py-row (hash-ref (infer-effects-all (list (cons "app.js" p)))
                            (cons "app.js" 'f)))
-  (check-equal? (row-names py-row) '(dynamic network))
+  (check-equal? (row-names py-row) '(dynamic http))
   ;; A tracked MODULE receiver (`x = fs` -> `x.readFile()`): the lexicon's
   ;; receiver-modules domain table resolves the method through the receiver
   ;; type, not through a name-only fallback.
