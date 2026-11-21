@@ -41,6 +41,7 @@
          lang-parser-token-type
          lang-parser-token-value
          lang-of
+         lower-js-ts-source
          full-statuses
          parse-only-statuses
          scan-result scan-result-file scan-result-status scan-result-detail
@@ -201,6 +202,16 @@
                                                 (lang-parser-token-value p))
                          (parsed-aux parsed)))]
     [else (error 'lower-parsed "no lower path for ~a" lang)]))
+
+;; Lower a JS/TS/TSX source string to UIR (parse + lower), or #f on any
+;; parse/lower failure. The effect-inference host dispatch reuses this so a
+;; .ts/.tsx/.js/.mjs corpus can be classified with the javascript-lexicon.
+(define (lower-js-ts-source lang parsers src)
+  (define parsed (attempt (λ () (parse-source lang parsers src))))
+  (and (car parsed)
+       (parsed-cst (cdr parsed))
+       (let ([lowered (attempt (λ () (lower-parsed lang parsers (cdr parsed))))])
+         (and (car lowered) (cdr lowered)))))
 
 (define (emit-uir lang uir)
   (case lang
