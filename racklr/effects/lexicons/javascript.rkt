@@ -14,7 +14,9 @@
 ;; a zero-width method receiver offset) + import-tag rules + the operation
 ;; vocabulary. None of these names appear in racklr/effects/*.rkt engine code.
 
-(require racklr/effects/lexicon-types
+(require racket/hash
+         racket/set
+         racklr/effects/lexicon-types
          racklr/effects/library-tokens
          racklr/effects/imports/effect-tag-types)
 
@@ -63,6 +65,24 @@
    ;; Short-circuit boolean operators: the right operand runs conditionally.
    (set "&&" "||" "??")))
 
+;; Operation-verb sets and the typed-op builder for the JS host's split
+;; domains (sql/fs/stdio/http/socket), mirroring library-config.rkt.
+(define js-db-read
+  (set "find" "findMany" "findFirst" "findUnique" "count" "aggregate"))
+(define js-db-write
+  (set "create" "createMany" "update" "updateMany" "upsert" "delete"
+       "deleteMany" "save"))
+(define js-io-read
+  (set "read" "readFile" "readFileSync" "readdir" "readdirSync"))
+(define js-io-write
+  (set "write" "writeFile" "writeFileSync" "appendFile" "appendFileSync"))
+(define js-io-other (set "close" "flush" "seek" "tell"))
+(define (js-typed-ops read write other)
+  (hash-union (for/hash ([v (in-set read)]) (values v "read"))
+              (for/hash ([v (in-set write)]) (values v "write"))
+              (for/hash ([v (in-set other)]) (values v v))
+              #:combine (λ (a b) a)))
+
 ;; ── token tables ────────────────────────────────────────────────────
 (define javascript-lexicon
   (lexicon
@@ -70,31 +90,40 @@
    (effect-tokens
     ;; effect roots: every call rooted at one of these is the domain
     (hash
-     'io (set "console" "process.stdout" "process.stderr")
-     'network (set "fetch" "axios" "XMLHttpRequest" "WebSocket")
+     'stdio (set "console" "process.stdout" "process.stderr")
+     'http (set "fetch" "axios" "XMLHttpRequest")
+     'websocket (set "WebSocket")
+     'socket (set "net" "dgram" "tls")
+     'fs (set "fs" "node:fs")
+     'sql (set "pg" "mysql2" "better-sqlite3" "sqlite3" "prisma")
+     'llm (set "openai" "anthropic" "langchain")
+     'email (set "nodemailer")
+     'rng (set "randomUUID")
+     'queue (set "amqplib" "kafkajs" "bullmq")
+     'cache (set "localStorage" "sessionStorage" "ioredis" "redis")
      'process (set "child_process")
-     'cache (set "localStorage" "sessionStorage")
-     'time (set "Date"))
-    '(io network cache process time)
+     'clock (set "Date"))
+    '(stdio http websocket socket fs sql llm email rng queue cache process clock)
     ;; bare-name effects: an effect on its own when called bare
     (hash
-     "fetch" 'network
+     "fetch" 'http
      "parseInt" 'pure
-     "setTimeout" 'time
-     "setInterval" 'time
-     "requestAnimationFrame" 'time
+     "setTimeout" 'timer
+     "setInterval" 'timer
+     "requestAnimationFrame" 'timer
      "structuredClone" 'pure
      ;; Next.js server-action cache helpers (JS-host names).
      "revalidatePath" 'cache "revalidateTag" 'cache "revalidate_path" 'cache
      "invalidate" 'cache "clearCache" 'cache "purgeCache" 'cache)
     ;; method effects: a dotted method name that is an effect on its own
     (hash
-     "log" 'io "info" 'io "warn" 'io "error" 'io "debug" 'io "trace" 'io
-     "readFile" 'io "readFileSync" 'io "writeFile" 'io "writeFileSync" 'io
-     "appendFile" 'io "appendFileSync" 'io "readdir" 'io "readdirSync" 'io
-     "mkdir" 'io "mkdirSync" 'io "rmdir" 'io "rmdirSync" 'io "unlink" 'io
-     "unlinkSync" 'io "stat" 'io "statSync" 'io
-     "now" 'time "today" 'time)
+     "log" 'stdio "info" 'stdio "warn" 'stdio "error" 'stdio "debug" 'stdio "trace" 'stdio
+     "readFile" 'fs "readFileSync" 'fs "writeFile" 'fs "writeFileSync" 'fs
+     "appendFile" 'fs "appendFileSync" 'fs "readdir" 'fs "readdirSync" 'fs
+     "mkdir" 'fs "mkdirSync" 'fs "rmdir" 'fs "rmdirSync" 'fs "unlink" 'fs
+     "unlinkSync" 'fs "stat" 'fs "statSync" 'fs
+     "random" 'rng "randomUUID" 'rng
+     "now" 'clock "today" 'clock)
     (hash)
     (hash)
     #f
@@ -107,8 +136,8 @@
     (set "fs" "path" "os" "crypto" "http" "https" "net" "url" "util" "events"
          "stream" "buffer" "process" "child_process")
     ;; whole-root effects
-    (hash 'fs 'io 'os 'io 'http 'network 'https 'network 'net 'network
-          'child_process 'process)
+    (hash 'fs 'fs 'os 'fs 'http 'http 'https 'http 'net 'socket 'dgram 'socket
+          'tls 'socket 'child_process 'process)
     ;; receiver-type → method → effect (result types of calls)
     (hash
      "fetch" (hash "json" 'pure "text" 'pure "arrayBuffer" 'pure
@@ -157,7 +186,7 @@
          "endsWith" "padStart" "padEnd" "repeat")
     (hash)
     ;; module receivers resolved to a domain by receiver-type dataflow
-    (hash "fs" 'io "axios" 'network "child_process" 'process)
+    (hash "fs" 'fs "axios" 'http "child_process" 'process)
     ;; module-qualified class references: none for the JS host yet
     (hash)
     ;; type-preserving call projections: none for the JS host yet
@@ -187,28 +216,39 @@
     javascript-dialect)
    ;; import-tag rules: module path prefix → domain
    (list
-    (effect-library "fs" (list (effect-rule "fs" 'io)))
-    (effect-library "node:fs" (list (effect-rule "node:fs" 'io)))
+    (effect-library "fs" (list (effect-rule "fs" 'fs)))
+    (effect-library "node:fs" (list (effect-rule "node:fs" 'fs)))
     (effect-library "path" (list (effect-rule "path" 'pure)))
     (effect-library "node:path" (list (effect-rule "node:path" 'pure)))
-    (effect-library "axios" (list (effect-rule "axios" 'network)))
-    (effect-library "node-fetch" (list (effect-rule "node-fetch" 'network)))
+    (effect-library "http" (list (effect-rule "http" 'http)))
+    (effect-library "node:http" (list (effect-rule "node:http" 'http)))
+    (effect-library "net" (list (effect-rule "net" 'socket)))
+    (effect-library "node:net" (list (effect-rule "node:net" 'socket)))
+    (effect-library "crypto" (list (effect-rule "crypto" 'rng)))
+    (effect-library "node:crypto" (list (effect-rule "node:crypto" 'rng)))
+    (effect-library "axios" (list (effect-rule "axios" 'http)))
+    (effect-library "node-fetch" (list (effect-rule "node-fetch" 'http)))
     (effect-library "child_process" (list (effect-rule "child_process" 'process)))
     (effect-library "react" (list (effect-rule "react" 'pure)))
     ;; A host application module: an imported application module's domain is
     ;; per-import-rule data, never an engine assumption.
     (effect-library "app" (list (effect-rule "app" 'io))))
    ;; db operation verbs
-   (set "find" "findMany" "findFirst" "findUnique" "count" "aggregate")
-   (set "create" "createMany" "update" "updateMany" "upsert" "delete"
-        "deleteMany" "save")
-   ;; io operation verbs
-   (set "read" "readFile" "readFileSync" "readdir" "readdirSync")
-   (set "write" "writeFile" "writeFileSync" "appendFile" "appendFileSync")
-   (set "close" "flush" "seek" "tell")
-   ;; other-domain operation vocabulary: the JS host types only io/network
-   ;; roots by name for now, so it supplies no method→op tables
-   (hash)
+   js-db-read
+   js-db-write
+   js-io-read
+   js-io-write
+   js-io-other
+   ;; typed operations for the split domains (sql/fs/stdio/http/socket)
+   (hash 'sql    (js-typed-ops js-db-read js-db-write (set))
+         'fs     (js-typed-ops js-io-read js-io-write js-io-other)
+         'stdio  (js-typed-ops js-io-read js-io-write js-io-other)
+         'http   (js-typed-ops (set "get" "post" "put" "patch" "delete")
+                               (set "post" "put" "patch" "delete")
+                               (set "request" "head" "options"))
+         'socket (js-typed-ops (set "on" "read" "data")
+                               (set "write" "send")
+                               (set "connect" "listen" "close")))
    ;; builtin receiver method tables
    (hash
     "Array" (set "push" "pop" "shift" "unshift" "slice" "splice" "concat"

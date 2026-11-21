@@ -80,7 +80,7 @@
   ;; because `math.log` collides), so it stays unknown.
   (check-equal? (classify-call (jsdot (v "console") "log") (hash)
                                #:lexicon javascript-lexicon)
-                '(effect . io))
+                '(effect . stdio))
   (check-equal? (classify-call (jsdot (v "console") "log") (hash))
                 '(unknown . #f))
   ;; `JSON.parse(...)` is a pure whole-module root in the JS lexicon.
@@ -92,7 +92,7 @@
   ;; A dotted JS method-name effect (`fs.readFile`).
   (check-equal? (classify-call (jsdot (v "fs") "readFile") (hash)
                                #:lexicon javascript-lexicon)
-                '(effect . io))
+                '(effect . fs))
   (check-equal? (classify-call (jsdot (v "fs") "readFile") (hash))
                 '(unknown . #f)))
 
@@ -101,12 +101,12 @@
 (define (test-infer-effects-honors-injected-lexicon)
   (define p (prog (fn "f" (js-call "console" "log"))))
   (check-equal? (row-names (hash-ref (infer-effects p #:lexicon javascript-lexicon) 'f))
-                '(io))
+                '(stdio))
   (check-equal? (row-names (hash-ref (infer-effects p) 'f)) '(unknown))
   ;; Cross-file fixpoint, same program as a component.
   (define rows (infer-effects-all (list (cons "app.js" p))
                                   #:lexicon javascript-lexicon))
-  (check-equal? (row-names (hash-ref rows (cons "app.js" 'f))) '(io))
+  (check-equal? (row-names (hash-ref rows (cons "app.js" 'f))) '(stdio))
   (define python-rows (infer-effects-all (list (cons "app.js" p))))
   (check-equal? (row-names (hash-ref python-rows (cons "app.js" 'f))) '(unknown)))
 
@@ -121,7 +121,7 @@
   (define js-row (hash-ref (infer-effects-all (list (cons "app.js" p))
                                               #:lexicon javascript-lexicon)
                            (cons "app.js" 'f)))
-  (check-equal? (row-names js-row) '(network))
+  (check-equal? (row-names js-row) '(http))
   ;; The Python lexicon has no `fetch` receiver type, so the call-result
   ;; receiver is runtime-dispatched: tracked as `dynamic`, never a name-only
   ;; guess and never `unknown`.
@@ -136,7 +136,7 @@
   (define js-row2 (hash-ref (infer-effects-all (list (cons "app.js" q))
                                                #:lexicon javascript-lexicon)
                             (cons "app.js" 'g)))
-  (check-equal? (row-names js-row2) '(io))
+  (check-equal? (row-names js-row2) '(fs))
   (define py-row2 (hash-ref (infer-effects-all (list (cons "app.js" q)))
                             (cons "app.js" 'g)))
   (check-not-false (row-lookup py-row2 'unknown)))
@@ -177,7 +177,7 @@
                     (list (method-of "helper" (js-call "console" "log"))
                           (method-of "run" (uir-call (dot (v "this") "helper") '()))))))
   (define js-rows (infer-effects p #:lexicon javascript-lexicon))
-  (check-equal? (row-names (hash-ref js-rows 'Client.run)) '(io))
+  (check-equal? (row-names (hash-ref js-rows 'Client.run)) '(stdio))
   (define python-rows (infer-effects p))
   (check-not-false (row-lookup (hash-ref python-rows 'Client.run) 'unknown))
   (check-false (row-lookup (hash-ref js-rows 'Client.run) 'unknown)))

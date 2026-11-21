@@ -48,7 +48,7 @@
       "class Service { m() { console.log(\"x\"); } }
        function run() { const s = new Service(); s?.m(); }")
      'run))
-  (check-equal? (row-names row) '(io))
+  (check-equal? (row-names row) '(stdio))
   (check-false (row-lookup row 'unknown)))
 
 (define (test-optional-chain-this)
@@ -60,7 +60,7 @@
      (ts->uir
       "class Svc { m() { console.log(\"x\"); } run() { this?.m(); } }")
      'Svc.run))
-  (check-equal? (row-names row) '(io))
+  (check-equal? (row-names row) '(stdio))
   (check-false (row-lookup row 'unknown)))
 
 (define (test-optional-chain-call-in-method)
@@ -72,7 +72,7 @@
       "class Service { m() { console.log(\"x\"); } }
        function run() { const s = new Service(); s.m(); }")
      'run))
-  (check-equal? (row-names row) '(io)))
+  (check-equal? (row-names row) '(stdio)))
 
 (define (test-this-attr-assignment)
   ;; `this.cache = new Cache(); this.cache.m();` — the JS assignment encoding
@@ -85,7 +85,7 @@
       "class Cache { m() { console.log(\"x\"); } }
        class Svc { run() { this.cache = new Cache(); this.cache.m(); } }")
      'Svc.run))
-  (check-equal? (row-names row) '(io))
+  (check-equal? (row-names row) '(stdio))
   (check-false (row-lookup row 'unknown)))
 
 ;; ── runner ──────────────────────────────────────────────────────────
