@@ -10,6 +10,7 @@
 (require json
          racket/string
          racklr/uir
+         racklr/effects/domain-lattice
          effervesce/load
          effervesce/check/bridge
          effervesce/check/host-python)
@@ -33,12 +34,15 @@
   (define spec (load-effervesce (file->string spec-file)))
   (define in (call-with-input-file hostcode-file read-json))
   (define comps (hash-ref in 'components))
-  ;; normalize JSON interp to check-bridge's shape: capability-name-string ->
-  ;; (listof effect-symbol).
+  ;; The domain lattice is the DEFAULT interpretation: a coarse capability
+  ;; (Network/Db/Io/Time) covers its leaves, so a fine host effect satisfies a
+  ;; coarse declared `needs`. hostcode.json interpretations overlay it and win
+  ;; on overlap (a user may deliberately narrow a capability).
   (define interp
-    (for/hash ([(k v) (in-hash (hash-ref in 'interpretations))])
-      (values (if (symbol? k) (symbol->string k) k)
-              (for/list ([e (in-list v)]) (string->symbol e)))))
+    (for/fold ([h (domain-capability-interpretation)])
+              ([(k v) (in-hash (hash-ref in 'interpretations))])
+      (hash-set h (if (symbol? k) (symbol->string k) k)
+                (for/list ([e (in-list v)]) (string->symbol e)))))
   (define host-code
     (for/hash ([(k v) (in-hash comps)])
       (values (if (symbol? k) (symbol->string k) k)

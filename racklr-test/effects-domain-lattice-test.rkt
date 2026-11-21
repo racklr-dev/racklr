@@ -1,15 +1,16 @@
 #lang racket
 
 ;; effects-domain-lattice-test.rkt — pin the effect-domain lattice: the poset
-;; laws (reflexivity, transitivity, antisymmetry), the umbrella edges, and the
-;; interpretation helper (`effect-name-subtypes`) the bridge consumes so a fine
-;; host effect satisfies a coarse declared `needs`. Uses the text-ui runner so
-;; a failure gives a real non-zero exit.
+;; laws (reflexivity, transitivity, antisymmetry), the umbrella edges, the
+;; interpretation helper (`effect-name-subtypes`) and the capability
+;; interpretation (`domain-capability-interpretation`) the bridge consumes so a
+;; fine host effect satisfies a coarse declared `needs`. Uses the text-ui
+;; runner so a failure gives a real non-zero exit.
 ;;
 ;; Note: the lattice deliberately does NOT thread into the kernel's
 ;; `effect-subtype?` (name-equality): a leaf matching different umbrellas breaks
-;; transitivity and join-lub there (pinned by trans-check.rkt, a<=b, b<=c but
-;; a!<=c). Umbrella+subtyping lives in the interpretation layer instead.
+;; transitivity and join-lub there. Umbrella+subtyping lives in the
+;; interpretation layer instead.
 
 (require rackunit
          (rename-in rackunit/text-ui [run-tests run-test-suite])
@@ -91,6 +92,16 @@
     (check-equal? (effect-name-subtypes 'io) '(fs stdio io))
     (check-equal? (effect-name-subtypes 'time) '(clock sleep timer time))
     (check-equal? (effect-name-subtypes 'http) '(http))
-    (check-equal? (effect-name-subtypes 'cache) '(cache)))))
+    (check-equal? (effect-name-subtypes 'cache) '(cache)))
+
+   (test-case
+    "capability interpretation: titlecased capability covers its leaves"
+    (define interp (domain-capability-interpretation))
+    (check-equal? (hash-ref interp "Network") '(http socket websocket network))
+    (check-equal? (hash-ref interp "Db") '(sql nosql vector db))
+    (check-equal? (hash-ref interp "Io") '(fs stdio io))
+    (check-equal? (hash-ref interp "Time") '(clock sleep timer time))
+    (check-equal? (hash-ref interp "Http") '(http))
+    (check-equal? (hash-ref interp "Cache") '(cache)))))
 
 (exit (run-test-suite suite))

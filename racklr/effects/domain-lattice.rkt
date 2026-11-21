@@ -19,6 +19,8 @@
 ;; the vocabulary is one edit here plus token-table entries, never an engine
 ;; rewrite.
 
+(require racket/string)
+
 (provide
   effect-domain?
   effect-domains
@@ -26,6 +28,7 @@
   effect-name-subtype?     ; a <= b : a is b or a finer leaf under b
   effect-name-ancestors    ; name -> (listof umbrella) nearest-first
   effect-name-subtypes     ; name -> all domains <= name (name + its leaves)
+  domain-capability-interpretation  ; capability-name -> covered host names
   effect-name-lub)         ; least upper bound, or #f when incomparable
 
 ;; leaf -> immediate umbrella (the one-level subtyping edge).
@@ -78,6 +81,16 @@
 ;; coarse declared `needs` without touching the kernel's name-equality subtyping.
 (define (effect-name-subtypes name)
   (filter (λ (d) (effect-name-subtype? d name)) effect-domains))
+
+;; The capability interpretation the bridge consumes: capability name
+;; (titlecased domain, matching emit-fizz's `domain-cap-name`) -> the host
+;; effect names that capability covers (itself plus every leaf beneath it, as
+;; strings). A hand-written `component needs Network` therefore accepts a host
+;; `http`/`socket`/`websocket` effect without the kernel subtyping changing.
+(define (domain-capability-interpretation)
+  (for/hash ([d (in-list effect-domains)])
+    (values (string-titlecase (symbol->string d))
+            (effect-name-subtypes d))))
 
 ;; Least upper bound in the forest, or #f when the two names are incomparable.
 (define (effect-name-lub a b)
