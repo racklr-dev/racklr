@@ -197,6 +197,7 @@
 ;; code: data tables (the lexicon itself) and per-host front-end hooks.
 (define effects-exempt-files
   '("library-tokens.rkt"         ; Python/Django token tables (DATA)
+    "domain-lattice.rkt"         ; effect-domain vocabulary + subtyping order (DATA)
     "library-pure-names.rkt"     ; Python/Django pure-name tables (DATA)
     "library-stdlib-types.rkt"   ; receiver-type domain tables (DATA)
     "library-dialect.rkt"        ; host naming/encoding conventions (DATA)

@@ -113,9 +113,12 @@
     'db (set "db" "database" "sql" "sqlalchemy" "sqlmodel" "asyncpg" "psycopg"
              "transaction")
     'network (set "fetch" "axios" "httpx" "requests" "aiohttp" "urllib")
-    'cache (set "redis" "memcache" "cache"))
+    'cache (set "redis" "memcache" "cache")
+    'env (set "dotenv")
+    'rng (set "random" "secrets")
+    'queue (set "kafka" "celery" "kombu" "pika" "rabbitmq" "pulsar"))
    ;; Root domains are tried in this order (the strongest root wins).
-   '(llm db network cache)
+   '(llm db network cache env rng queue)
    ;; ── bare-name effects: a bare callee name that is an effect on its own ──
    (hash-union
     (hash
@@ -167,7 +170,10 @@
     "tz_now" 'time
     "now" 'time
     "localtime" 'time
-    "gmtime" 'time)
+    "gmtime" 'time
+    ;; environment writes and nondeterminism, as bare names (reads stay pure)
+    "putenv" 'env
+    "uuid4" 'rng)
     ;; Racket standard-library I/O / time / network names
     ;; (library-racket-tokens.rkt); the shared bare-name table.
     (for/hash ([n (in-set racket-io-builtins)]) (values n 'io))
@@ -230,6 +236,8 @@
    ;; process, `warnings.warn` → io).
    (hash
     'os (hash
+         ;; environment write (`os.putenv`); reads (`os.getenv`) stay pure
+         "putenv" 'env
          ;; `os.*` filesystem operations
          "remove" 'io "unlink" 'io "rename" 'io "renames" 'io "replace" 'io
          "mkdir" 'io "makedirs" 'io "rmdir" 'io "removedirs" 'io "chdir" 'io
